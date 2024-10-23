@@ -93,11 +93,17 @@ def step(
             Leaves have shape (N, M, ...).
     """
     num_particles = outer_state.weights.shape[0]
-    particles = outer_state.particles
 
-    # 1. TODO: Resample the outer particles.
+    # 1. Resample the outer particles.
+    key, sub_key = random.split(rng_key)
+    resampling_idx = random.choice(
+        sub_key, num_particles, shape=(num_particles,), p=outer_state.weights
+    )
+    particles = jax.tree_map(lambda x: x[resampling_idx], outer_state.particles)
+    inner_state = jax.tree_map(lambda x: x[resampling_idx], inner_state)
+
     # 2. Resample the inner particles.
-    keys = random.split(rng_key, num_particles + 1)
+    keys = random.split(key, num_particles + 1)
     inner_state = jax.vmap(resample_inner)(keys[1:], inner_state)
 
     # 3. Propagate the inner particles.
