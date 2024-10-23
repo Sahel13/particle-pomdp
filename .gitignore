@@ -1,3 +1,4 @@
 .idea/
 ppomdp.egg-info/
 ppomdp/__pycache__/
+tests/__pycache__/
