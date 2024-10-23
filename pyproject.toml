@@ -9,3 +9,6 @@ authors = [
   {name = "Hany Abdulsamad", email = "hany@robot-learning.de"},
   {name = "Sahel Iqbal", email = "sahel13miqbal@proton.me"},
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
