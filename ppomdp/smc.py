@@ -86,6 +86,7 @@ def sample_marginal_obs(
     $y_t^n \sim \sum_{m=1}^M W_{x,t}^{nm} h(y_t \mid x_t^{nm})$.
 
     Args:
+        rng_key: PRNGKey
         obs_model: ObservationModel
         state: InnerState
             The inner state associated with the n-th outer trajectory.
@@ -112,6 +113,8 @@ def step(
             The transition model for the state, $f(x_t \mid x_{t-1}, u_{t-1})$.
         obs_model: ObservationModel
             The observation model, $g(y_t \mid x_t)$.
+        policy: Policy
+            The stochastic policy, $\pi_\phi$.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
