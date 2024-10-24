@@ -3,7 +3,13 @@ import jax.numpy as jnp
 from chex import PRNGKey
 from jax import Array, random
 
-from ppomdp.core import InnerState, ObservationModel, OuterState, TransitionModel
+from ppomdp.core import (
+    InnerState,
+    ObservationModel,
+    OuterState,
+    Policy,
+    TransitionModel,
+)
 
 
 def resample_inner(rng_key: PRNGKey, state: InnerState) -> InnerState:
@@ -72,10 +78,29 @@ def reweight_inner(
     return state._replace(log_weights=log_weights, weights=weights)
 
 
+def sample_marginal_obs(
+    rng_key: PRNGKey, obs_model: ObservationModel, state: InnerState
+) -> Array:
+    r"""Sample from the marginal observation distribution.
+
+    $y_t^n \sim \sum_{m=1}^M W_{x,t}^{nm} h(y_t \mid x_t^{nm})$.
+
+    Args:
+        obs_model: ObservationModel
+        state: InnerState
+            The inner state associated with the n-th outer trajectory.
+            Leaves have shape (M, ...).
+    """
+    key1, key2 = random.split(rng_key)
+    x = random.choice(key1, state.particles, p=state.weights)
+    return obs_model.sample(key2, x)
+
+
 def step(
     rng_key: PRNGKey,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
+    policy: Policy,
     outer_state: OuterState,
     inner_state: InnerState,
 ) -> tuple[OuterState, InnerState]:
@@ -113,7 +138,15 @@ def step(
     )
     inner_state = inner_state._replace(particles=inner_particles)
 
-    # 4. TODO: Propagate the outer particles.
+    # 4. Propagate the outer particles.
+    keys = random.split(keys[0], 2 * num_particles)
+    observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
+        keys[:num_particles], obs_model, inner_state
+    )
+    # TODO: The policy is independent of everything at the moment.
+    actions = jax.vmap(policy.sample)(keys[num_particles:])
+    particles = (observations, actions)
+
     # 5. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
         obs_model, inner_state, particles[0]

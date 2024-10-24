@@ -42,11 +42,12 @@ class ObservationModel(NamedTuple):
 class Policy(NamedTuple):
     r"""The stochastic policy $\pi_\phi$.
 
-    TODO: The functions signatures are not correct for an LSTM.
+    TODO: This is just for uniform policies at the moment (or any policy
+          that samples independently from the history).
     """
 
-    sample: Callable[[PRNGKey, Array], Array]
-    log_prob: Callable[[Array, Array], Array]
+    sample: Callable[[PRNGKey], Array]
+    log_prob: Callable[[Array], Array]
 
 
 class OuterState(NamedTuple):
