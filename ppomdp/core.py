@@ -50,6 +50,11 @@ class Policy(NamedTuple):
     log_prob: Callable[[Array], Array]
 
 
+class RewardFn(Protocol):
+    def __call__(self, x: Array, u: Array) -> Array:
+        r"""The  reward function $r(x_t, u_t)$."""
+
+
 class OuterState(NamedTuple):
     r"""State of the outer particle filter.
 

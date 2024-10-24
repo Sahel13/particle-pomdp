@@ -8,6 +8,7 @@ from ppomdp.core import (
     ObservationModel,
     OuterState,
     Policy,
+    RewardFn,
     TransitionModel,
 )
 
@@ -97,13 +98,41 @@ def sample_marginal_obs(
     return obs_model.sample(key2, x)
 
 
+def log_potential(
+    reward_fn: RewardFn,
+    particle: tuple[Array, Array],
+    inner_state: InnerState,
+    tempering: float,
+) -> Array:
+    r"""Estimate the log potential function.
+
+    The estimate for the log potential function is given by
+    .. math::
+    \log g_t^n = \eta * \sum_{m=1}^M W_{x,t}^{nm} r_t(x_t^{nm}, u_t^n).
+
+    Args:
+        reward_fn: RewardFn
+        particle: tuple[Array, Array]
+            One outer particle $(y_t^n, u_t^n)$.
+        inner_state: InnerState
+            The inner state associated with the n-th outer trajectory.
+            Leaves have shape (M, ...).
+        tempering: float
+            The tempering parameter
+    """
+    rewards = jax.vmap(reward_fn, in_axes=(0, None))(inner_state.particles, particle[1])
+    return tempering * jnp.sum(rewards * inner_state.weights)
+
+
 def step(
     rng_key: PRNGKey,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     policy: Policy,
+    reward_fn: RewardFn,
     outer_state: OuterState,
     inner_state: InnerState,
+    tempering: float,
 ) -> tuple[OuterState, InnerState]:
     r"""A single step of the nested SMC algorithm.
 
@@ -115,10 +144,14 @@ def step(
             The observation model, $g(y_t \mid x_t)$.
         policy: Policy
             The stochastic policy, $\pi_\phi$.
+        reward_fn: RewardFn
+            The reward function, $r(x_t, u_t)$.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
             Leaves have shape (N, M, ...).
+        tempering: float
+            The tempering parameter, $\eta$.
     """
     num_particles = outer_state.weights.shape[0]
 
@@ -155,5 +188,14 @@ def step(
         obs_model, inner_state, particles[0]
     )
 
-    # 6. TODO: Reweight the outer particles.
+    # 6. Reweight the outer particles.
+    log_weights = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
+        reward_fn, particles, inner_state, tempering
+    )
+    logsum_weights = jax.nn.logsumexp(log_weights)
+    weights = jnp.exp(log_weights - logsum_weights)
+    outer_state = OuterState(
+        particles=particles, weights=weights, resampling_indices=resampling_idx
+    )
+
     return outer_state, inner_state
