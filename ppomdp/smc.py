@@ -160,8 +160,8 @@ def step(
     resampling_idx = random.choice(
         sub_key, num_particles, shape=(num_particles,), p=outer_state.weights
     )
-    particles = jax.tree_map(lambda x: x[resampling_idx], outer_state.particles)
-    inner_state = jax.tree_map(lambda x: x[resampling_idx], inner_state)
+    particles = jax.tree.map(lambda x: x[resampling_idx], outer_state.particles)
+    inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
 
     # 2. Resample the inner particles.
     keys = random.split(key, num_particles + 1)
