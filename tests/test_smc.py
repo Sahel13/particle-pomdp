@@ -1,8 +1,9 @@
+import chex
 import jax
 import jax.numpy as jnp
 import pytest
 from chex import PRNGKey
-from jax import Array, random
+from jax import random
 
 from ppomdp.core import (
     InnerState,
@@ -14,28 +15,35 @@ from ppomdp.core import (
 from ppomdp.smc import init, propagate_inner, resample_inner, reweight_inner, step
 
 
+def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
+    key1, key2 = random.split(key)
+    num_particles = shape[0]
+    particles = random.normal(key1, shape)
+    log_weights = random.uniform(key2, (num_particles,))
+    return InnerState(
+        particles=particles,
+        log_weights=log_weights,
+        weights=jnp.exp(log_weights - jax.nn.logsumexp(log_weights)),
+        resampling_indices=jnp.arange(num_particles, dtype=jnp.int32),
+    )
+
+
 @pytest.mark.parametrize("seed", [0, 123])
 def test_resample_inner(seed):
     rng_key = random.PRNGKey(seed)
-    key1, key2, key3 = random.split(rng_key, 3)
+    key1, key2 = random.split(rng_key, 2)
     num_particles = 20
     particle_dim = 3
-    particles = random.normal(key1, (num_particles, particle_dim))
-    weights = random.uniform(key2, (num_particles,))
-    weights /= jnp.sum(weights)
-    state = InnerState(
-        particles=particles,
-        log_weights=jnp.log(weights),
-        weights=weights,
-        resampling_indices=jnp.arange(num_particles, dtype=jnp.int32),
-    )
-    new_state = resample_inner(key3, state)
+    state = get_inner_state(key1, (num_particles, particle_dim))
+    new_state = resample_inner(key2, state)
 
     resampling_idx = new_state.resampling_indices
-    assert jnp.allclose(new_state.particles, particles[resampling_idx])
-    assert jnp.all(jnp.equal(new_state.weights, jnp.ones_like(weights) / num_particles))
-    assert jnp.all(jnp.equal(new_state.log_weights, jnp.zeros_like(weights)))
+    assert jnp.all(jnp.equal(new_state.particles, state.particles[resampling_idx]))
     assert jnp.all(resampling_idx >= 0) and jnp.all(resampling_idx <= num_particles - 1)
+    assert jnp.all(
+        jnp.equal(new_state.weights, jnp.ones_like(state.weights) / num_particles)
+    )
+    assert jnp.all(jnp.equal(new_state.log_weights, jnp.zeros_like(state.log_weights)))
 
 
 @pytest.mark.parametrize("seed", [0, 123])
@@ -66,14 +74,8 @@ def test_reweight_inner(seed):
 
     obs_model = ObservationModel(sample=sample, log_prob=log_prob)
     key = random.PRNGKey(seed)
-
     key1, key2 = random.split(key)
-    state = InnerState(
-        particles=random.normal(key1, (10, 3)),
-        log_weights=jnp.zeros(10),
-        weights=jnp.ones(10) / 10,
-        resampling_indices=jnp.arange(10, dtype=jnp.int32),
-    )
+    state = get_inner_state(key1, (10, 3))
     obs = random.normal(key2, (3,))
     new_state = reweight_inner(obs_model, state, obs)
 
@@ -83,21 +85,34 @@ def test_reweight_inner(seed):
 
 
 def test_nested_smc():
-    """Test the nested SMC algorithm."""
+    """Test the nested SMC algorithm.
+
+    This tests two things:
+    1. The shapes of the leaves of the `OuterState` and `InnerState` objects.
+    2. The number of times the `sample` and `log_prob` functions are traced for
+    the transition and observation models.
+    """
     obs_matrix = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
+    # TODO: `init` causes an additional trace. Find out why.
+    @chex.assert_max_traces(2)
     def sample_obs(rng_key, x):
-        mean = obs_matrix @ x
-        return mean + random.normal(rng_key, (2,))
+        return obs_matrix @ x + random.normal(rng_key, (2,))
 
+    @chex.assert_max_traces(1)
     def log_prob_obs(y, x):
         return -0.5 * jnp.sum(jnp.square(y - obs_matrix @ x))
 
+    @chex.assert_max_traces(1)
     def sample_trans(rng_key, x, u):
         return x + u + random.normal(rng_key, x.shape)
 
+    # This is not used by the filter.
+    @chex.assert_max_traces(0)
     def log_prob_trans(xn, x, u):
         return -0.5 * jnp.sum(jnp.square(xn - x - u))
+
+    chex.clear_trace_counter()
 
     trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
