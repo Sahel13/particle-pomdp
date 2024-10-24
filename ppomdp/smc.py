@@ -124,6 +124,54 @@ def log_potential(
     return tempering * jnp.sum(rewards * inner_state.weights)
 
 
+def init(
+    rng_key: PRNGKey,
+    inner_particles: Array,
+    obs_model: ObservationModel,
+    policy: Policy,
+) -> tuple[OuterState, InnerState]:
+    r"""Initialize the outer and inner states for the nested SMC algorithm.
+
+    This samples from
+    .. math::
+      \begin{align}
+        y_1^n &\sim \sum_{m=1}^M W_{x,1}^{nm} h(y_1 \mid x_1^{nm}), \\
+        u_1^n &\sim \pi_\phi(y_1^n),
+      \end{align}
+
+    for all $n \in \{1, \dots, N\}$.
+
+    Args:
+        rng_key: PRNGKey
+        inner_particles: Array
+            The initial state particles $x_1^{nm}$. Has shape (N, M, ...).
+        obs_model: ObservationModel
+        policy: Policy
+    """
+    num_outer_particles, num_inner_particles = inner_particles.shape[:2]
+    inner_state = InnerState(
+        particles=inner_particles,
+        log_weights=jnp.zeros(inner_particles.shape[:2]),
+        weights=jnp.ones(inner_particles.shape[:2]) / num_inner_particles,
+        resampling_indices=jnp.zeros(inner_particles.shape[:2], dtype=jnp.int32),
+    )
+
+    keys = random.split(rng_key, 2 * num_outer_particles)
+    observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
+        keys[:num_outer_particles], obs_model, inner_state
+    )
+    # TODO: The policy is independent of everything at the moment.
+    actions = jax.vmap(policy.sample)(keys[num_outer_particles:])
+    outer_particles = (observations, actions)
+    outer_state = OuterState(
+        particles=outer_particles,
+        weights=jnp.ones(num_outer_particles) / num_outer_particles,
+        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int32),
+    )
+
+    return outer_state, inner_state
+
+
 def step(
     rng_key: PRNGKey,
     trans_model: TransitionModel,
