@@ -6,34 +6,34 @@ from jax import Array
 
 
 class SampleTransition(Protocol):
-    def __call__(self, rng_key: PRNGKey, x: Array, u: Array) -> Array:
-        r"""Sample from $f(x_t \mid x_{t-1}, u_{t-1})$."""
+    def __call__(self, rng_key: PRNGKey, s: Array, a: Array) -> Array:
+        r"""Sample from $f(s_t \mid s_{t-1}, a_{t-1})$."""
 
 
 class LogProbTransition(Protocol):
-    def __call__(self, xn: Array, x: Array, u: Array) -> Array:
-        r"""Compute the log density of $f(x_t \mid x_{t-1}, u_{t-1})$."""
+    def __call__(self, sn: Array, s: Array, a: Array) -> Array:
+        r"""Compute the log density of $f(s_t \mid s_{t-1}, a_{t-1})$."""
 
 
 class TransitionModel(NamedTuple):
-    r"""The transition kernel $f(x_t \mid x_{t-1}, u_{t-1})$."""
+    r"""The transition kernel $f(s_t \mid s_{t-1}, a_{t-1})$."""
 
     sample: SampleTransition
     log_prob: LogProbTransition
 
 
 class SampleObservation(Protocol):
-    def __call__(self, rng_key: PRNGKey, x: Array) -> Array:
-        r"""Sample from $h(y_t \mid x_t)$."""
+    def __call__(self, rng_key: PRNGKey, s: Array) -> Array:
+        r"""Sample from $h(z_t \mid s_t)$."""
 
 
 class LogProbObservation(Protocol):
-    def __call__(self, y: Array, x: Array) -> Array:
-        r"""Compute the log density of $h(y_t \mid x_t)$."""
+    def __call__(self, z: Array, s: Array) -> Array:
+        r"""Compute the log density of $h(z_t \mid s_t)$."""
 
 
 class ObservationModel(NamedTuple):
-    r"""The observation model $h(y_t \mid x_t)$."""
+    r"""The observation model $h(z_t \mid s_t)$."""
 
     sample: SampleObservation
     log_prob: LogProbObservation
@@ -53,7 +53,7 @@ class OuterState(NamedTuple):
     r"""State of the outer particle filter.
 
     particles: tuple[Array, Array]
-        Tuple of the observations and actions $(y_t^{1:N}, u_t^{1:N})$.
+        Tuple of the observations and actions $(z_t^{1:N}, a_t^{1:N})$.
     """
 
     particles: tuple[Array, Array]
@@ -65,7 +65,7 @@ class InnerState(NamedTuple):
     """State of the inner particle filter.
 
     particles: Array
-        The state particles $x_t^{nm}$.
+        The state particles $s_t^{nm}$.
     """
 
     particles: Array
