@@ -1,4 +1,4 @@
-from typing import Dict, NamedTuple, Protocol, Callable
+from typing import Dict, NamedTuple, Protocol
 
 from chex import PRNGKey
 from jax import Array
@@ -72,6 +72,11 @@ class RecurrentPolicy(NamedTuple):
 
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
+
+
+class RewardFn(Protocol):
+    def __call__(self, x: Array, u: Array) -> Array:
+        r"""The  reward function $r(x_t, u_t)$."""
 
 
 class OuterState(NamedTuple):
