@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "jax", "flax", "distrax"]
+requires = ["setuptools", "jax", "flax", "distrax", "optax"]
 build-backend = "setuptools.build_meta"
 
 [project]
