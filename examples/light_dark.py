@@ -16,7 +16,8 @@ from distrax import Chain, ScalarAffine
 
 import optax
 
-from ppomdp.utils import GaussianLSTM, initialize_carry, policy_distribution
+from ppomdp.utils import StochasticLSTM, LSTMCarry
+from ppomdp.utils import initialize_carry, lstm_distribution
 
 
 def transition_mean(s: Array, a: Array) -> Array:
@@ -81,7 +82,7 @@ def unit_features(s: Array) -> Array:
     return s
 
 
-policy = GaussianLSTM(
+policy = StochasticLSTM(
     dim=1,
     feature_fn=unit_features,
     encoder_size=[256, 256],
@@ -94,18 +95,18 @@ bijector = Chain([
 ])
 
 
-def policy_sample(rng_key: PRNGKey, s: Array, params: Dict) -> Array:
-    dist = policy_distribution(s, policy, params, bijector)
+def policy_sample(rng_key: PRNGKey, s: Array, params: Dict, carry: LSTMCarry) -> Array:
+    dist = lstm_distribution(s, policy, params, carry, bijector)
     return dist.sample(seed=rng_key)
 
 
-def policy_logpdf(a: Array, s: Array, params: Dict) -> float:
-    dist = policy_distribution(s, policy, params, bijector)
+def policy_logpdf(a: Array, s: Array, params: Dict, carry: LSTMCarry) -> float:
+    dist = lstm_distribution(s, policy, params, carry, bijector)
     return dist.log_prob(a)
 
 
 def create_train_state(
-    rng_key: PRNGKey, module: GaussianLSTM, optimizer: Callable, learning_rate: float
+    rng_key: PRNGKey, module: StochasticLSTM, optimizer: Callable, learning_rate: float
 ) -> TrainState:
     init_key, param_key = random.split(rng_key)
     init_data = random.normal(init_key, (1,))
@@ -116,7 +117,7 @@ def create_train_state(
 
 
 @partial(jax.jit, static_argnums=1)
-def train_step(state: TrainState, module: GaussianLSTM, data: tuple[Array, Array]):
+def train_step(state: TrainState, module: StochasticLSTM, data: tuple[Array, Array]):
     def loss_fn(params):
         apply_fn = partial(state.apply_fn, {"params": params})
         init_carry = initialize_carry(module, (1,))
