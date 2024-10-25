@@ -1,7 +1,10 @@
 from typing import Dict, Callable, Sequence
+from functools import partial
 
 from jax import Array
+from jax import lax
 import jax.numpy as jnp
+
 
 from flax import linen as nn
 from distrax import MultivariateNormalDiag
@@ -11,7 +14,7 @@ from distrax import Transformed, Block, Chain
 LSTMCarry = tuple[Array, Array]
 
 
-class GaussianMLP(nn.Module):
+class StochasticMLP(nn.Module):
     dim: int
     layer_size: Sequence[int]
     feature_fn: Callable
@@ -30,7 +33,22 @@ class GaussianMLP(nn.Module):
         return a
 
 
-class GaussianLSTM(nn.Module):
+def mlp_distribution(
+    s: Array, policy: nn.Module, params: Dict, bijector: Chain
+) -> Transformed:
+    a = policy.apply({'params': params}, s)
+
+    raw_dist = MultivariateNormalDiag(
+        loc=a, scale_diag=jnp.exp(params['log_std'])
+    )
+    squashed_dist = Transformed(
+        distribution=raw_dist,
+        bijector=Block(bijector, ndims=1)
+    )
+    return squashed_dist
+
+
+class StochasticLSTM(nn.Module):
     """An LSTM policy with a dense input and output layers."""
     dim: int
     feature_fn: Callable
@@ -63,16 +81,17 @@ class GaussianLSTM(nn.Module):
         return carry, a
 
 
-def initialize_carry(model: GaussianLSTM, input_shape: tuple[int, ...]) -> LSTMCarry:
+def initialize_carry(model: StochasticLSTM, input_shape: tuple[int, ...]) -> LSTMCarry:
     batch_dims = input_shape[:-1]
     mem_shape = batch_dims + (model.lstm_size,) + (model.lstm_size,)  # accounts for 2 cells
     return jnp.zeros(mem_shape), jnp.zeros(mem_shape)
 
 
-def policy_distribution(
-    s: Array, policy: nn.Module, params: Dict, bijector: Chain
+def lstm_distribution(
+    s: Array, policy: nn.Module, params: Dict, carry: LSTMCarry, bijector: Chain
 ) -> Transformed:
-    a = policy.apply({'params': params}, s)
+    apply_fn = partial(policy.apply_fn, {"params": params})
+    _, a = lax.scan(apply_fn, carry, s)
 
     raw_dist = MultivariateNormalDiag(
         loc=a, scale_diag=jnp.exp(params['log_std'])
