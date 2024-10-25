@@ -1,8 +1,9 @@
-from collections.abc import Callable
-from typing import NamedTuple, Protocol
+from typing import Dict, NamedTuple, Protocol, Callable
 
 from chex import PRNGKey
 from jax import Array
+
+from ppomdp.utils import LSTMCarry
 
 
 class SampleTransition(Protocol):
@@ -11,7 +12,7 @@ class SampleTransition(Protocol):
 
 
 class LogProbTransition(Protocol):
-    def __call__(self, sn: Array, s: Array, a: Array) -> Array:
+    def __call__(self, sn: Array, s: Array, a: Array) -> float:
         r"""Compute the log density of $f(s_t \mid s_{t-1}, a_{t-1})$."""
 
 
@@ -28,7 +29,7 @@ class SampleObservation(Protocol):
 
 
 class LogProbObservation(Protocol):
-    def __call__(self, z: Array, s: Array) -> Array:
+    def __call__(self, z: Array, s: Array) -> float:
         r"""Compute the log density of $h(z_t \mid s_t)$."""
 
 
@@ -39,14 +40,38 @@ class ObservationModel(NamedTuple):
     log_prob: LogProbObservation
 
 
+class SamplePolicy(Protocol):
+    def __call__(self, rng_key: PRNGKey, s: Array, params: Dict) -> Array:
+        r"""Sample from $\pi_\phi(a_t \mid s_t)$."""
+
+
+class LogProbPolicy(Protocol):
+    def __call__(self, a: Array, s: Array, params: Dict) -> float:
+        r"""Compute the log density of $\pi_\phi(a_t \mid s_t)$."""
+
+
 class Policy(NamedTuple):
-    r"""The stochastic policy $\pi_\phi$.
+    r"""The stochastic recurrent policy $\pi_\phi$."""
 
-    TODO: The functions signatures are not correct for an LSTM.
-    """
+    sample: SamplePolicy
+    log_prob: LogProbPolicy
 
-    sample: Callable[[PRNGKey, Array], Array]
-    log_prob: Callable[[Array, Array], Array]
+
+class SampleRecurrentPolicy(Protocol):
+    def __call__(self, rng_key: PRNGKey, s: Array, params: Dict, carry: LSTMCarry) -> Array:
+        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
+
+
+class LogProbRecurrentPolicy(Protocol):
+    def __call__(self, a: Array, s: Array, params: Dict, carry: LSTMCarry) -> float:
+        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
+
+
+class RecurrentPolicy(NamedTuple):
+    r"""The stochastic recurrent policy $\pi_\phi$."""
+
+    sample: SampleRecurrentPolicy
+    log_prob: LogProbRecurrentPolicy
 
 
 class OuterState(NamedTuple):
