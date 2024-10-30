@@ -9,10 +9,13 @@ from ppomdp.core import (
     InnerState,
     ObservationModel,
     OuterState,
-    Policy,
+    RecurrentPolicy,
     TransitionModel,
 )
 from ppomdp.smc import init, propagate_inner, resample_inner, reweight_inner, step
+from ppomdp.utils import LSTM, initialize_carry, lstm_distribution
+
+from distrax import Chain, ScalarAffine
 
 
 def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
@@ -114,13 +117,26 @@ def test_nested_smc():
 
     chex.clear_trace_counter()
 
+    lstm = LSTM(
+        dim=3,
+        feature_fn=lambda x: x,
+        encoder_size=[256, 256],
+        recurr_size=[64, 64],
+        output_size=[256, 256],
+    )
+    bijector = Chain([ScalarAffine(0.0, 1.0)])
+
+    def sample_policy(rng_key, x, carry, params):
+        carry, dist = lstm_distribution(x, carry, lstm, params, bijector)
+        return carry, dist.sample(seed=rng_key)
+
+    def log_prob_policy(u, x, carry, params):
+        _, dist = lstm_distribution(x, carry, lstm, params, bijector)
+        return dist.log_prob(u)
+
     trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
-
-    policy = Policy(
-        sample=(lambda rng_key: random.normal(rng_key, (3,))),
-        log_prob=(lambda x: -0.5 * jnp.sum(x**2)),
-    )
+    policy = RecurrentPolicy(sample=sample_policy, log_prob=log_prob_policy)
 
     def reward_fn(x, u):
         return -0.1 * jnp.sum(x**2 + u**2)
@@ -131,9 +147,17 @@ def test_nested_smc():
     key, sub_key = random.split(key)
     init_inner_particles = random.normal(sub_key, (N, M, 3))
 
+    key, init_key, param_key = random.split(key, 3)
+    init_actions = jnp.zeros((N, 3))
+    init_carry = initialize_carry(lstm, N)
+    init_data = random.normal(init_key, (N, 2))
+    init_params = lstm.init(sub_key, init_carry, init_data)["params"]
+
     # The nested SMC algorithm.
     key, sub_key = random.split(key)
-    outer_state, inner_state = init(sub_key, init_inner_particles, obs_model, policy)
+    outer_state, inner_state = init(
+        sub_key, init_inner_particles, obs_model, init_actions, init_carry
+    )
 
     def body(carry: tuple[OuterState, InnerState], rng_key: PRNGKey):
         outer_state, inner_state = carry
@@ -143,6 +167,7 @@ def test_nested_smc():
             trans_model=trans_model,
             obs_model=obs_model,
             policy=policy,
+            params=init_params,
             reward_fn=reward_fn,
             outer_state=outer_state,
             inner_state=inner_state,
@@ -165,6 +190,13 @@ def test_nested_smc():
     # Check the shapes of the leaves of `outer_states`.
     assert outer_states.particles[0].shape == (T + 1, N, 2)
     assert outer_states.particles[1].shape == (T + 1, N, 3)
+
+    assert isinstance(outer_states.particles[2], list)
+    assert outer_states.particles[2][0][0].shape == (T + 1, N, 64)  # [carry][LSTMCell][memory]
+    assert outer_states.particles[2][0][1].shape == (T + 1, N, 64)  # [carry][LSTMCell][output]
+    assert outer_states.particles[2][1][0].shape == (T + 1, N, 64)  # [carry][LSTMCell][memory]
+    assert outer_states.particles[2][1][1].shape == (T + 1, N, 64)  # [carry][LSTMCell][output]
+
     assert outer_states.weights.shape == (T + 1, N)
     assert outer_states.resampling_indices.shape == (T + 1, N)
 
