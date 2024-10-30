@@ -1,15 +1,19 @@
+from typing import Dict
+
 import jax
 import jax.numpy as jnp
-from chex import PRNGKey
 from jax import Array, random
 
+from chex import PRNGKey
+
 from ppomdp.core import (
+    LSTMCarry,
     InnerState,
-    ObservationModel,
     OuterState,
-    Policy,
-    RewardFn,
     TransitionModel,
+    ObservationModel,
+    RecurrentPolicy,
+    RewardFn,
 )
 
 
@@ -48,10 +52,10 @@ def propagate_inner(
         model: TransitionModel
             The transition model for the state.
         particles: Array
-            The state particles $\{x_{t-1}^{nm}\}_{m=1}^M$ associated with
+            The state particles $\{s_{t-1}^{nm}\}_{m=1}^M$ associated with
             the n-th outer trajectory. Has shape (M, ...).
         action: Array
-            The action $u_{t-1}^n$.
+            The action $a_{t-1}^n$.
     """
     num_particles = particles.shape[0]
     rng_keys = random.split(rng_key, num_particles)
@@ -70,7 +74,7 @@ def reweight_inner(
             The inner state associated with the n-th outer trajectory.
             Leaves have shape (M, ...).
         obs: Array.
-            The observation $y_t^n$.
+            The observation $z_t^n$.
     """
     log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(obs, state.particles)
     log_weights += state.log_weights
@@ -84,7 +88,7 @@ def sample_marginal_obs(
 ) -> Array:
     r"""Sample from the marginal observation distribution.
 
-    $y_t^n \sim \sum_{m=1}^M W_{x,t}^{nm} h(y_t \mid x_t^{nm})$.
+    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$.
 
     Args:
         rng_key: PRNGKey
@@ -108,12 +112,12 @@ def log_potential(
 
     The estimate for the log potential function is given by
     .. math::
-    \log g_t^n = \eta * \sum_{m=1}^M W_{x,t}^{nm} r_t(x_t^{nm}, u_t^n).
+    \log g_t^n = \eta * \sum_{m=1}^M W_{s,t}^{nm} r_t(s_t^{nm}, a_t^n).
 
     Args:
         reward_fn: RewardFn
         particle: tuple[Array, Array]
-            One outer particle $(y_t^n, u_t^n)$.
+            One outer particle $(z_t^n, a_t^n)$.
         inner_state: InnerState
             The inner state associated with the n-th outer trajectory.
             Leaves have shape (M, ...).
@@ -128,15 +132,15 @@ def init(
     rng_key: PRNGKey,
     inner_particles: Array,
     obs_model: ObservationModel,
-    policy: Policy,
+    init_actions: Array,
+    init_carry: list[LSTMCarry],
 ) -> tuple[OuterState, InnerState]:
     r"""Initialize the outer and inner states for the nested SMC algorithm.
 
     This samples from
     .. math::
       \begin{align}
-        y_1^n &\sim \sum_{m=1}^M W_{x,1}^{nm} h(y_1 \mid x_1^{nm}), \\
-        u_1^n &\sim \pi_\phi(y_1^n),
+        z_0^n &\sim \sum_{m=1}^M W_{s,0}^{nm} h(z_0 \mid s_0^{nm}), \\
       \end{align}
 
     for all $n \in \{1, \dots, N\}$.
@@ -144,9 +148,12 @@ def init(
     Args:
         rng_key: PRNGKey
         inner_particles: Array
-            The initial state particles $x_1^{nm}$. Has shape (N, M, ...).
-        obs_model: ObservationModel
-        policy: Policy
+            The initial state particles $s_0^{nm}$. Has shape (N, M, ...).
+        obs_model: ObservationModel,
+        init_actions: Array
+            Init action particles $a_0^n$. Has shape (N, ...).
+        init_carry: list[LSTMCarry]
+            Init list of carry of the recurrent policy.
     """
     num_outer_particles, num_inner_particles = inner_particles.shape[:2]
     inner_state = InnerState(
@@ -156,13 +163,12 @@ def init(
         resampling_indices=jnp.zeros(inner_particles.shape[:2], dtype=jnp.int32),
     )
 
-    keys = random.split(rng_key, 2 * num_outer_particles)
+    keys = random.split(rng_key, num_outer_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys[:num_outer_particles], obs_model, inner_state
+        keys, obs_model, inner_state
     )
-    # TODO: The policy is independent of everything at the moment.
-    actions = jax.vmap(policy.sample)(keys[num_outer_particles:])
-    outer_particles = (observations, actions)
+
+    outer_particles = (observations, init_actions, init_carry)
     outer_state = OuterState(
         particles=outer_particles,
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
@@ -176,7 +182,8 @@ def step(
     rng_key: PRNGKey,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
-    policy: Policy,
+    policy: RecurrentPolicy,
+    params: Dict,
     reward_fn: RewardFn,
     outer_state: OuterState,
     inner_state: InnerState,
@@ -187,13 +194,15 @@ def step(
     Args:
         rng_key: PRNGKey
         trans_model: TransitionModel
-            The transition model for the state, $f(x_t \mid x_{t-1}, u_{t-1})$.
+            The transition model for the state, $f(s_t \mid s_{t-1}, a_{t-1})$.
         obs_model: ObservationModel
-            The observation model, $g(y_t \mid x_t)$.
-        policy: Policy
+            The observation model, $g(z_t \mid s_t)$.
+        policy: RecurrentPolicy
             The stochastic policy, $\pi_\phi$.
+        params: Dict
+            Parameters of recurrent policy $\phi$.
         reward_fn: RewardFn
-            The reward function, $r(x_t, u_t)$.
+            The reward function, $r(s_t, a_t)$.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
@@ -203,8 +212,14 @@ def step(
     """
     num_particles = outer_state.weights.shape[0]
 
-    # 1. Resample the outer particles.
+    # 0. Sample action from policy.
     key, sub_key = random.split(rng_key)
+    carry, actions = policy.sample(
+        sub_key, outer_state.particles[0], outer_state.particles[2], params
+    )
+
+    # 1. Resample the outer particles.
+    key, sub_key = random.split(key)
     resampling_idx = random.choice(
         sub_key, num_particles, shape=(num_particles,), p=outer_state.weights
     )
@@ -223,13 +238,11 @@ def step(
     inner_state = inner_state._replace(particles=inner_particles)
 
     # 4. Propagate the outer particles.
-    keys = random.split(keys[0], 2 * num_particles)
+    keys = random.split(keys[0], num_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys[:num_particles], obs_model, inner_state
+        keys, obs_model, inner_state
     )
-    # TODO: The policy is independent of everything at the moment.
-    actions = jax.vmap(policy.sample)(keys[num_particles:])
-    particles = (observations, actions)
+    particles = (observations, actions, carry)
 
     # 5. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
@@ -238,12 +251,44 @@ def step(
 
     # 6. Reweight the outer particles.
     log_weights = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
-        reward_fn, particles, inner_state, tempering
+        reward_fn, (particles[0], particles[1]), inner_state, tempering
     )
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jnp.exp(log_weights - logsum_weights)
     outer_state = OuterState(
-        particles=particles, weights=weights, resampling_indices=resampling_idx
+        particles=particles,
+        weights=weights,
+        resampling_indices=resampling_idx,
     )
 
     return outer_state, inner_state
+
+
+def genealogy_tracing(
+    rng_key: Array,
+    outer_state: OuterState,
+):
+    num_steps, num_particles = outer_state.weights.shape
+
+    # starting at the last time step
+    last_state = jax.tree.map(lambda x: x[-1], outer_state.particles)
+
+    def tracing_fn(carry, args):
+        idx = carry
+        particles, resampling_indices = args
+        a = resampling_indices[idx]
+        ancestors = jax.tree.map(lambda x: x[a], particles)
+        return a, ancestors
+
+    _, states = jax.lax.scan(
+        tracing_fn,
+        jnp.arange(num_particles),
+        (
+            jax.tree.map(lambda x: x[:-1], outer_state.particles),
+            outer_state.resampling_indices
+        ),
+        reverse=True
+    )
+
+    states = jax.tree.map(lambda x, y: jnp.vstack((x, y)), states, last_state)
+    return states
