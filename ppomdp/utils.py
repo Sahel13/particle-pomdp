@@ -1,20 +1,16 @@
 from typing import Dict, Callable, Sequence
-from functools import partial
 
 from jax import Array
-from jax import lax
 import jax.numpy as jnp
-
 
 from flax import linen as nn
 from distrax import MultivariateNormalDiag
 from distrax import Transformed, Block, Chain
 
+from ppomdp.core import LSTMCarry
 
-LSTMCarry = tuple[Array, Array]
 
-
-class StochasticMLP(nn.Module):
+class MLP(nn.Module):
     dim: int
     layer_size: Sequence[int]
     feature_fn: Callable
@@ -36,7 +32,7 @@ class StochasticMLP(nn.Module):
 def mlp_distribution(
     s: Array, policy: nn.Module, params: Dict, bijector: Chain
 ) -> Transformed:
-    a = policy.apply({'params': params}, s)
+    a = policy.apply(params, s)
 
     raw_dist = MultivariateNormalDiag(
         loc=a, scale_diag=jnp.exp(params['log_std'])
@@ -48,7 +44,7 @@ def mlp_distribution(
     return squashed_dist
 
 
-class StochasticLSTM(nn.Module):
+class LSTM(nn.Module):
     """An LSTM policy with a dense input and output layers."""
     dim: int
     feature_fn: Callable
@@ -59,7 +55,7 @@ class StochasticLSTM(nn.Module):
     init_kernel: Callable = nn.initializers.he_uniform()
 
     @nn.compact
-    def __call__(self, carry: LSTMCarry, s: Array) -> tuple[LSTMCarry, Array]:
+    def __call__(self, carry: list[LSTMCarry], s: Array) -> tuple[list[LSTMCarry], Array]:
         log_std = self.param('log_std', self.init_log_std, self.dim)
 
         # pass inputs through features layer
@@ -71,8 +67,8 @@ class StochasticLSTM(nn.Module):
         y = nn.Dense(self.recurr_size[0])(y)
 
         # pass encodings through recurrent layers
-        for _size in self.recurr_size:
-            carry, y = nn.LSTMCell(_size)(carry, y)
+        for k, _size in enumerate(self.recurr_size):
+            carry[k], y = nn.LSTMCell(_size)(carry[k], y)
 
         # pass result through output layers
         for _size in self.output_size:
@@ -81,23 +77,25 @@ class StochasticLSTM(nn.Module):
         return carry, a
 
 
-def initialize_carry(model: StochasticLSTM, input_shape: tuple[int, ...]) -> LSTMCarry:
-    batch_dims = input_shape[:-1]
-    mem_shape = batch_dims + (model.lstm_size,) + (model.lstm_size,)  # accounts for 2 cells
-    return jnp.zeros(mem_shape), jnp.zeros(mem_shape)
+def initialize_carry(module: LSTM, batch_size: int) -> list[LSTMCarry]:
+    carry = []
+    for _size in module.recurr_size:
+        mem_shape = (batch_size, _size)
+        c, h = jnp.zeros(mem_shape), jnp.zeros(mem_shape)  # LSTMCarry
+        carry.append((c, h))
+    return carry
 
 
 def lstm_distribution(
-    s: Array, policy: nn.Module, params: Dict, carry: LSTMCarry, bijector: Chain
-) -> Transformed:
-    apply_fn = partial(policy.apply_fn, {"params": params})
-    _, a = lax.scan(apply_fn, carry, s)
+    s: Array, carry: list[LSTMCarry], policy: nn.Module, params: Dict, bijector: Chain
+) -> tuple[list[LSTMCarry], Transformed]:
+    carry, a = policy.apply({"params": params}, carry, s)
 
     raw_dist = MultivariateNormalDiag(
-        loc=a, scale_diag=jnp.exp(params['log_std'])
+        loc=a, scale_diag=jnp.exp(params["log_std"])
     )
     squashed_dist = Transformed(
         distribution=raw_dist,
         bijector=Block(bijector, ndims=1)
     )
-    return squashed_dist
+    return carry, squashed_dist
