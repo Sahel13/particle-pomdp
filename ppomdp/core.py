@@ -3,7 +3,8 @@ from typing import Dict, NamedTuple, Protocol
 from chex import PRNGKey
 from jax import Array
 
-from ppomdp.utils import LSTMCarry
+
+LSTMCarry = tuple[Array, Array]
 
 
 class SampleTransition(Protocol):
@@ -58,12 +59,12 @@ class Policy(NamedTuple):
 
 
 class SampleRecurrentPolicy(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array, params: Dict, carry: LSTMCarry) -> Array:
+    def __call__(self, rng_key: PRNGKey, s: Array, carry: list[LSTMCarry], params: Dict) -> Array:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
-    def __call__(self, a: Array, s: Array, params: Dict, carry: LSTMCarry) -> float:
+    def __call__(self, a: Array, s: Array, carry: list[LSTMCarry], params: Dict) -> float:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
@@ -75,18 +76,22 @@ class RecurrentPolicy(NamedTuple):
 
 
 class RewardFn(Protocol):
-    def __call__(self, x: Array, u: Array) -> Array:
-        r"""The  reward function $r(x_t, u_t)$."""
+    def __call__(self, s: Array, a: Array) -> Array:
+        r"""The  reward function $r(s_t, a_t)$."""
 
 
 class OuterState(NamedTuple):
     r"""State of the outer particle filter.
 
     particles: tuple[Array, Array]
-        Tuple of the observations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        Tuple of the observations and actions $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
+    weights: Array
+        Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+    resampling_indecies: Array
+        Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
     """
 
-    particles: tuple[Array, Array]
+    particles: tuple[Array, Array, list[LSTMCarry]]
     weights: Array
     resampling_indices: Array
 
@@ -96,6 +101,12 @@ class InnerState(NamedTuple):
 
     particles: Array
         The state particles $s_t^{nm}$.
+    log_weights: Array
+        Log weights of paticles $s_t^{nm}$.
+    weights: Array
+        Weights of particles $s_t^{nm}$.
+    resampling_indices: Array
+        Resampling indices of particles $s_t^{nm}$.
     """
 
     particles: Array
