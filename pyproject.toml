@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "jax", "flax", "distrax", "optax"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,13 @@ version = "0.0.1"
 authors = [
   {name = "Hany Abdulsamad", email = "hany@robot-learning.de"},
   {name = "Sahel Iqbal", email = "sahel13miqbal@proton.me"},
+]
+dependencies = [
+  "jax",
+  "flax",
+  "chex",
+  "distrax",
+  "optax",
 ]
 
 [project.optional-dependencies]

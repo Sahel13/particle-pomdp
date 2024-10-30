@@ -97,7 +97,7 @@ def test_nested_smc():
     """
     obs_matrix = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
-    # TODO: `init` causes an additional trace. Find out why.
+    # `init` causes an additional trace.
     @chex.assert_max_traces(2)
     def sample_obs(rng_key, x):
         return obs_matrix @ x + random.normal(rng_key, (2,))
