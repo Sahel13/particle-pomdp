@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from jax import Array, random
 
 from chex import PRNGKey
+from distrax import Distribution
 
 from ppomdp.core import (
     LSTMCarry,
@@ -128,12 +129,13 @@ def log_potential(
     return tempering * jnp.sum(rewards * inner_state.weights)
 
 
-def init(
+def smc_init(
     rng_key: PRNGKey,
-    inner_particles: Array,
+    num_outer_particles: int,
+    num_inner_particles: int,
+    prior_dist: Distribution,
     obs_model: ObservationModel,
-    init_actions: Array,
-    init_carry: list[LSTMCarry],
+    policy: RecurrentPolicy,
 ) -> tuple[OuterState, InnerState]:
     r"""Initialize the outer and inner states for the nested SMC algorithm.
 
@@ -147,27 +149,37 @@ def init(
 
     Args:
         rng_key: PRNGKey
-        inner_particles: Array
-            The initial state particles $s_0^{nm}$. Has shape (N, M, ...).
-        obs_model: ObservationModel,
-        init_actions: Array
-            Init action particles $a_0^n$. Has shape (N, ...).
-        init_carry: list[LSTMCarry]
-            Init list of carry of the recurrent policy.
+        num_outer_particles: int
+            The number of outer particles $N$.
+        num_inner_particles: int
+            The number of inner particles $M$.
+        prior_dist: distrax.Distribution
+            The prior distribution for the initial state particles.
+        obs_model: ObservationModel
+            The observation model.
+        policy: RecurrentPolicy
+            The recurrent policy.
     """
-    num_outer_particles, num_inner_particles = inner_particles.shape[:2]
+    key, sub_key = random.split(rng_key)
+    inner_particles = prior_dist.sample(
+        seed=sub_key,
+        sample_shape=(num_outer_particles, num_inner_particles,)
+    )
+
     inner_state = InnerState(
         particles=inner_particles,
         log_weights=jnp.zeros(inner_particles.shape[:2]),
-        weights=jnp.ones(inner_particles.shape[:2]) / num_inner_particles,
-        resampling_indices=jnp.zeros(inner_particles.shape[:2], dtype=jnp.int32),
+        weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
+        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int32),
     )
 
-    keys = random.split(rng_key, num_outer_particles)
+    keys = random.split(key, num_outer_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         keys, obs_model, inner_state
     )
 
+    init_carry = policy.reset(num_outer_particles)
+    init_actions = jnp.zeros((num_outer_particles, policy.dim))
     outer_particles = (observations, init_actions, init_carry)
     outer_state = OuterState(
         particles=outer_particles,
@@ -178,16 +190,16 @@ def init(
     return outer_state, inner_state
 
 
-def step(
+def smc_step(
     rng_key: PRNGKey,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
     params: Dict,
     reward_fn: RewardFn,
-    outer_state: OuterState,
-    inner_state: InnerState,
     tempering: float,
+    outer_state: OuterState,
+    inner_state: InnerState
 ) -> tuple[OuterState, InnerState]:
     r"""A single step of the nested SMC algorithm.
 
@@ -203,12 +215,12 @@ def step(
             Parameters of recurrent policy $\phi$.
         reward_fn: RewardFn
             The reward function, $r(s_t, a_t)$.
+        tempering: float
+            The tempering parameter, $\eta$.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
             Leaves have shape (N, M, ...).
-        tempering: float
-            The tempering parameter, $\eta$.
     """
     num_particles = outer_state.weights.shape[0]
 
@@ -264,14 +276,116 @@ def step(
     return outer_state, inner_state
 
 
-def genealogy_tracing(
+def smc(
+    rng_key: PRNGKey,
+    num_outer_particles: int,
+    num_inner_particles: int,
+    num_time_steps: int,
+    prior_dist: Distribution,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+) -> tuple[OuterState, InnerState]:
+    """
+    Perform the Sequential Monte Carlo (SMC) algorithm.
+
+    Args:
+        rng_key: PRNGKey
+            The random key for sampling.
+        num_outer_particles: int
+            The number of outer particles.
+        num_inner_particles: int
+            The number of inner particles.
+        num_time_steps: int
+            The number of time steps for the SMC algorithm.
+        prior_dist: Distribution
+            The prior distribution for the initial state particles.
+        trans_model: TransitionModel
+            The transition model for the state.
+        obs_model: ObservationModel
+            The observation model.
+        policy: RecurrentPolicy
+            The recurrent policy.
+        params: Dict
+            Parameters of the recurrent policy.
+        reward_fn: RewardFn
+            The reward function.
+        tempering: float
+            The tempering parameter.
+
+    Returns:
+        tuple[OuterState, InnerState]
+            The final outer and inner states after running the SMC algorithm.
+    """
+    def step_fn(carry: tuple[OuterState, InnerState], rng_key: PRNGKey):
+        outer_state, inner_state = carry
+
+        outer_state, inner_state = smc_step(
+            rng_key,
+            trans_model,
+            obs_model,
+            policy,
+            params,
+            reward_fn,
+            tempering,
+            outer_state,
+            inner_state
+        )
+
+        return (outer_state, inner_state), (outer_state, inner_state)
+
+    key, init_key, step_key = random.split(rng_key, 3)
+    init_outer_state, init_inner_state = smc_init(
+        init_key,
+        num_outer_particles,
+        num_inner_particles,
+        prior_dist,
+        obs_model,
+        policy
+    )
+    _, (outer_states, inner_states) = jax.lax.scan(
+        step_fn,
+        (init_outer_state, init_inner_state),
+        random.split(step_key, num_time_steps)
+    )
+
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
+
+    outer_states = concat_trees(init_outer_state, outer_states)
+    inner_states = concat_trees(init_inner_state, inner_states)
+    return outer_states, inner_states
+
+
+def backward_tracing(
     rng_key: Array,
     outer_state: OuterState,
-):
+) -> tuple[Array, Array, list[LSTMCarry]]:
+    """
+    Perform backward tracing to trace the ancestors of the outer states.
+
+    Args:
+        rng_key: Array
+            The random key for sampling.
+        outer_state: OuterState
+            The outer state containing particles and weights.
+
+    Returns:
+        tuple[Array, Array, list[LSTMCarry]
+            The traced observations, actions and carry.
+    """
     num_steps, num_particles = outer_state.weights.shape
 
-    # starting at the last time step
-    last_state = jax.tree.map(lambda x: x[-1], outer_state.particles)
+    # resample according to last weights
+    resampling_idx = random.choice(
+        rng_key, num_particles,
+        shape=(num_particles,),
+        p=outer_state.weights[-1]
+    )
+    last_state = jax.tree.map(lambda x: x[-1, resampling_idx], outer_state.particles)
 
     def tracing_fn(carry, args):
         idx = carry
@@ -280,15 +394,18 @@ def genealogy_tracing(
         ancestors = jax.tree.map(lambda x: x[a], particles)
         return a, ancestors
 
-    _, states = jax.lax.scan(
+    _, traced_states = jax.lax.scan(
         tracing_fn,
         jnp.arange(num_particles),
         (
             jax.tree.map(lambda x: x[:-1], outer_state.particles),
-            outer_state.resampling_indices
+            outer_state.resampling_indices[1:]
         ),
         reverse=True
     )
 
-    states = jax.tree.map(lambda x, y: jnp.vstack((x, y)), states, last_state)
-    return states
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
+
+    traced_states = concat_trees(traced_states, last_state)
+    return traced_states
