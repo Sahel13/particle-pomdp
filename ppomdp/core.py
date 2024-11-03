@@ -13,7 +13,7 @@ class SampleTransition(Protocol):
 
 
 class LogProbTransition(Protocol):
-    def __call__(self, sn: Array, s: Array, a: Array) -> float:
+    def __call__(self, sn: Array, s: Array, a: Array) -> Array:
         r"""Compute the log density of $f(s_t \mid s_{t-1}, a_{t-1})$."""
 
 
@@ -30,7 +30,7 @@ class SampleObservation(Protocol):
 
 
 class LogProbObservation(Protocol):
-    def __call__(self, z: Array, s: Array) -> float:
+    def __call__(self, z: Array, s: Array) -> Array:
         r"""Compute the log density of $h(z_t \mid s_t)$."""
 
 
@@ -47,7 +47,7 @@ class SamplePolicy(Protocol):
 
 
 class LogProbPolicy(Protocol):
-    def __call__(self, a: Array, s: Array, params: Dict) -> float:
+    def __call__(self, a: Array, s: Array, params: Dict) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t)$."""
 
 
