@@ -1,21 +1,34 @@
-import chex
+import distrax
+import pytest
+
 import jax
 import jax.numpy as jnp
-import pytest
+from jax import Array, random
+
+import chex
 from chex import PRNGKey
-from jax import random
+
+from distrax import (
+    MultivariateNormalDiag,
+    Chain,
+    Transformed,
+    Block,
+    ScalarAffine
+)
 
 from ppomdp.core import (
     InnerState,
-    ObservationModel,
-    OuterState,
-    RecurrentPolicy,
     TransitionModel,
+    ObservationModel,
+    RecurrentPolicy,
 )
-from ppomdp.smc import init, propagate_inner, resample_inner, reweight_inner, step
-from ppomdp.utils import LSTM, initialize_carry, lstm_distribution
-
-from distrax import Chain, ScalarAffine
+from ppomdp.smc import (
+    resample_inner,
+    propagate_inner,
+    reweight_inner,
+    smc,
+)
+from ppomdp.policy import LSTM
 
 
 def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
@@ -95,6 +108,14 @@ def test_nested_smc():
     2. The number of times the `sample` and `log_prob` functions are traced for
     the transition and observation models.
     """
+    dim_state = 3
+    dim_action = 3
+    dim_obs = 2
+
+    num_outer_particles = 128
+    num_inner_particles = 64
+    num_time_steps = 50
+
     obs_matrix = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
     # `init` causes an additional trace.
@@ -118,7 +139,7 @@ def test_nested_smc():
     chex.clear_trace_counter()
 
     lstm = LSTM(
-        dim=3,
+        dim=dim_action,
         feature_fn=lambda x: x,
         encoder_size=[256, 256],
         recurr_size=[64, 64],
@@ -126,85 +147,81 @@ def test_nested_smc():
     )
     bijector = Chain([ScalarAffine(0.0, 1.0)])
 
-    def sample_policy(rng_key, x, carry, params):
-        carry, dist = lstm_distribution(x, carry, lstm, params, bijector)
+    def reset_policy(batch_size):
+        carry = []
+        for _size in lstm.recurr_size:
+            mem_shape = (batch_size, _size)
+            c, h = jnp.zeros(mem_shape), jnp.zeros(mem_shape)  # LSTMCarry
+            carry.append((c, h))
+        return carry
+
+    def squash_policy(a, log_std):
+        raw = MultivariateNormalDiag(
+            loc=a, scale_diag=jnp.exp(log_std)
+        )
+        squashed = Transformed(
+            distribution=raw,
+            bijector=Block(bijector, ndims=1)
+        )
+        return squashed
+
+    def sample_policy(rng_key, s, carry, params):
+        carry, a = lstm.apply({"params": params}, carry, s)
+        dist = squash_policy(a, params["log_std"])
         return carry, dist.sample(seed=rng_key)
 
-    def log_prob_policy(u, x, carry, params):
-        _, dist = lstm_distribution(x, carry, lstm, params, bijector)
-        return dist.log_prob(u)
+    def log_prob_policy(a, s, carry, params):
+        carry, a = lstm.apply({"params": params}, carry, s)
+        dist = squash_policy(a, params["log_std"])
+        return dist.log_prob(a)
 
+    prior_dist = distrax.MultivariateNormalDiag(loc=jnp.zeros((dim_state,)), scale_diag=jnp.ones((dim_state,)))
     trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
-    policy = RecurrentPolicy(sample=sample_policy, log_prob=log_prob_policy)
+    policy = RecurrentPolicy(dim=dim_action, reset=reset_policy, sample=sample_policy, log_prob=log_prob_policy)
 
     def reward_fn(x, u):
         return -0.1 * jnp.sum(x**2 + u**2)
 
-    M = 64
-    N = 128
-    key = random.PRNGKey(0)
+    rng_key = random.PRNGKey(0)
+    key, obs_key, param_key = random.split(rng_key, 3)
+    init_carry = policy.reset(num_outer_particles)
+    init_obs = random.normal(obs_key, (num_outer_particles, dim_obs))
+    init_params = lstm.init(param_key, init_carry, init_obs)["params"]
+
     key, sub_key = random.split(key)
-    init_inner_particles = random.normal(sub_key, (N, M, 3))
-
-    key, init_key, param_key = random.split(key, 3)
-    init_actions = jnp.zeros((N, 3))
-    init_carry = initialize_carry(lstm, N)
-    init_data = random.normal(init_key, (N, 2))
-    init_params = lstm.init(sub_key, init_carry, init_data)["params"]
-
-    # The nested SMC algorithm.
-    key, sub_key = random.split(key)
-    outer_state, inner_state = init(
-        sub_key, init_inner_particles, obs_model, init_actions, init_carry
+    outer_states, inner_states = smc(
+        sub_key,
+        num_outer_particles,
+        num_inner_particles,
+        num_time_steps,
+        prior_dist,
+        trans_model,
+        obs_model,
+        policy,
+        init_params,
+        reward_fn,
+        tempering=0.5,
     )
-
-    def body(carry: tuple[OuterState, InnerState], rng_key: PRNGKey):
-        outer_state, inner_state = carry
-
-        outer_state, inner_state = step(
-            rng_key=rng_key,
-            trans_model=trans_model,
-            obs_model=obs_model,
-            policy=policy,
-            params=init_params,
-            reward_fn=reward_fn,
-            outer_state=outer_state,
-            inner_state=inner_state,
-            tempering=1.0,
-        )
-
-        return (outer_state, inner_state), (outer_state, inner_state)
-
-    T = 20
-    _, (outer_states, inner_states) = jax.lax.scan(
-        body, (outer_state, inner_state), random.split(key, T)
-    )
-
-    def concat_trees(x, y):
-        return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
-
-    outer_states = concat_trees(outer_state, outer_states)
-    inner_states = concat_trees(inner_state, inner_states)
 
     # Check the shapes of the leaves of `outer_states`.
-    assert outer_states.particles[0].shape == (T + 1, N, 2)
-    assert outer_states.particles[1].shape == (T + 1, N, 3)
+    assert outer_states.particles[0].shape == (num_time_steps + 1, num_outer_particles, dim_obs)
+    assert outer_states.particles[1].shape == (num_time_steps + 1, num_outer_particles, dim_action)
 
     assert isinstance(outer_states.particles[2], list)
-    assert outer_states.particles[2][0][0].shape == (T + 1, N, 64)  # [carry][LSTMCell][memory]
-    assert outer_states.particles[2][0][1].shape == (T + 1, N, 64)  # [carry][LSTMCell][output]
-    assert outer_states.particles[2][1][0].shape == (T + 1, N, 64)  # [carry][LSTMCell][memory]
-    assert outer_states.particles[2][1][1].shape == (T + 1, N, 64)  # [carry][LSTMCell][output]
+    assert outer_states.particles[2][0][0].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][memory]
+    assert outer_states.particles[2][0][1].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][output]
+    assert outer_states.particles[2][1][0].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][memory]
+    assert outer_states.particles[2][1][1].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][output]
 
-    assert outer_states.weights.shape == (T + 1, N)
-    assert outer_states.resampling_indices.shape == (T + 1, N)
+    assert outer_states.weights.shape == (num_time_steps + 1, num_outer_particles)
+    assert outer_states.resampling_indices.shape == (num_time_steps + 1, num_outer_particles)
 
     # Check the shapes of the leaves of `inner_states`.
-    assert inner_states.particles.shape == (T + 1, N, M, 3)
-    assert inner_states.log_weights.shape == (T + 1, N, M)
-    assert inner_states.weights.shape == (T + 1, N, M)
-    assert inner_states.resampling_indices.shape == (T + 1, N, M)
+    assert inner_states.particles.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles, 3)
+    assert inner_states.log_weights.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles)
+    assert inner_states.weights.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles)
+    assert inner_states.resampling_indices.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles)
 
     # Check that the log weights and weights are finite.
     assert jnp.all(jnp.isfinite(outer_states.weights))
