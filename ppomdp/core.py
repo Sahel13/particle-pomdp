@@ -1,4 +1,4 @@
-from typing import Dict, NamedTuple, Protocol
+from typing import Callable, Dict, NamedTuple, Protocol
 
 from chex import PRNGKey
 from jax import Array
@@ -58,19 +58,29 @@ class Policy(NamedTuple):
     log_prob: LogProbPolicy
 
 
+class ResetRecurrentPolicy(Protocol):
+    def __call__(self, batch_size: int) -> list[LSTMCarry]:
+        r"""Reset the recurrent state of the policy."""
+
+
 class SampleRecurrentPolicy(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array, carry: list[LSTMCarry], params: Dict) -> Array:
+    def __call__(
+        self, rng_key: PRNGKey, s: Array, carry: list[LSTMCarry], params: Dict
+    ) -> tuple[list[LSTMCarry], Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
-    def __call__(self, a: Array, s: Array, carry: list[LSTMCarry], params: Dict) -> float:
+    def __call__(
+        self, a: Array, s: Array, carry: list[LSTMCarry], params: Dict
+    ) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
 class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
-
+    dim: int
+    reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
 
