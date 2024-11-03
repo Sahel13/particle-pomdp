@@ -1,51 +1,23 @@
 from typing import Dict, Callable, Sequence
 
 from jax import Array
-import jax.numpy as jnp
-
 from flax import linen as nn
-from distrax import MultivariateNormalDiag
-from distrax import Transformed, Block, Chain
-
 from ppomdp.core import LSTMCarry
 
 
-class MLP(nn.Module):
-    dim: int
-    layer_size: Sequence[int]
-    feature_fn: Callable
-    activation: Callable
-    init_log_std: Callable = nn.initializers.ones
-    init_kernel: Callable = nn.initializers.he_uniform()
-
-    @nn.compact
-    def __call__(self, s):
-        log_std = self.param('log_std', self.init_log_std, self.dim)
-
-        y = self.feature_fn(s)
-        for s in self.layer_size:
-            y = self.activation(nn.Dense(s, self.init_kernel)(y))
-        a = nn.Dense(self.dim)(y)
-        return a
-
-
-def mlp_distribution(
-    s: Array, policy: nn.Module, params: Dict, bijector: Chain
-) -> Transformed:
-    a = policy.apply(params, s)
-
-    raw_dist = MultivariateNormalDiag(
-        loc=a, scale_diag=jnp.exp(params['log_std'])
-    )
-    squashed_dist = Transformed(
-        distribution=raw_dist,
-        bijector=Block(bijector, ndims=1)
-    )
-    return squashed_dist
-
-
 class LSTM(nn.Module):
-    """An LSTM policy with a dense input and output layers."""
+    """
+    LSTM module for processing sequences with optional feature extraction and encoding layers.
+
+    Attributes:
+        dim (int): Dimensionality of the output.
+        feature_fn (Callable): Function to extract features from the input sequence.
+        encoder_size (Sequence[int]): Sizes of the encoding layers.
+        recurr_size (Sequence[int]): Sizes of the recurrent layers.
+        output_size (Sequence[int]): Sizes of the output layers.
+        init_log_std (Callable): Initializer for the log standard deviation parameter.
+        init_kernel (Callable): Initializer for the kernel weights.
+    """
     dim: int
     feature_fn: Callable
     encoder_size: Sequence[int]
@@ -75,27 +47,3 @@ class LSTM(nn.Module):
             y = nn.relu(nn.Dense(_size, self.init_kernel)(y))
         a = nn.Dense(self.dim)(y)
         return carry, a
-
-
-def initialize_carry(module: LSTM, batch_size: int) -> list[LSTMCarry]:
-    carry = []
-    for _size in module.recurr_size:
-        mem_shape = (batch_size, _size)
-        c, h = jnp.zeros(mem_shape), jnp.zeros(mem_shape)  # LSTMCarry
-        carry.append((c, h))
-    return carry
-
-
-def lstm_distribution(
-    s: Array, carry: list[LSTMCarry], policy: nn.Module, params: Dict, bijector: Chain
-) -> tuple[list[LSTMCarry], Transformed]:
-    carry, a = policy.apply({"params": params}, carry, s)
-
-    raw_dist = MultivariateNormalDiag(
-        loc=a, scale_diag=jnp.exp(params["log_std"])
-    )
-    squashed_dist = Transformed(
-        distribution=raw_dist,
-        bijector=Block(bijector, ndims=1)
-    )
-    return carry, squashed_dist
