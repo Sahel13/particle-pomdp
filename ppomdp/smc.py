@@ -256,6 +256,7 @@ def smc_step(
     carry, actions = policy.sample(
         sub_key, outer_state.particles[0], outer_state.particles[2], params
     )
+    particles = (outer_state.particles[0], actions, carry)  # (y_{t-1}, a_{t-1}, c_{t-1})
 
     # 1. Resample the outer particles.
     key, sub_key = random.split(key)
@@ -266,7 +267,7 @@ def smc_step(
         operand=None
     )
 
-    particles = jax.tree.map(lambda x: x[resampling_idx], outer_state.particles)
+    particles = jax.tree.map(lambda x: x[resampling_idx], particles)
     inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
 
     # 2. Resample the inner particles.
@@ -285,21 +286,20 @@ def smc_step(
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         keys, obs_model, inner_state
     )
-    particles = (observations, actions, carry)
 
     # 5. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
-        obs_model, inner_state, particles[0]
+        obs_model, inner_state, observations
     )
 
     # 6. Reweight the outer particles.
     log_weights, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
-        reward_fn, (particles[0], particles[1]), inner_state, tempering
+        reward_fn, (observations, particles[1]), inner_state, tempering
     )
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jnp.exp(log_weights - logsum_weights)
     outer_state = OuterState(
-        particles=particles,
+        particles=(observations, particles[1], particles[2]),
         weights=weights,
         rewards=rewards,
         resampling_indices=resampling_idx,
