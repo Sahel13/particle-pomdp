@@ -103,12 +103,35 @@ def sample_marginal_obs(
     return obs_model.sample(key2, x)
 
 
+def expected_reward(
+    reward_fn: RewardFn,
+    particle: tuple[Array, Array],
+    inner_state: InnerState,
+) -> Array:
+    """
+    Calculate the expected reward for a given particle and inner state.
+
+    Args:
+        reward_fn: RewardFn
+            The reward function, r(s_{t], a_{t-1}).
+        particle: tuple[Array, Array]
+            A tuple containing the observation and action for the particle.
+        inner_state: InnerState
+            The inner state containing particles and weights.
+
+    Returns:
+        Array: The cumulative return for the given particle and inner state.
+    """
+    rewards = jax.vmap(reward_fn, in_axes=(0, None))(inner_state.particles, particle[1])
+    return jnp.sum(rewards * inner_state.weights)
+
+
 def log_potential(
     reward_fn: RewardFn,
     particle: tuple[Array, Array],
     inner_state: InnerState,
     tempering: float,
-) -> Array:
+) -> tuple[Array, Array]:
     r"""Estimate the log potential function.
 
     The estimate for the log potential function is given by
@@ -125,8 +148,8 @@ def log_potential(
         tempering: float
             The tempering parameter
     """
-    rewards = jax.vmap(reward_fn, in_axes=(0, None))(inner_state.particles, particle[1])
-    return tempering * jnp.sum(rewards * inner_state.weights)
+    rewards = expected_reward(reward_fn, particle, inner_state)
+    return tempering * rewards, rewards
 
 
 def smc_init(
@@ -170,7 +193,7 @@ def smc_init(
         particles=inner_particles,
         log_weights=jnp.zeros(inner_particles.shape[:2]),
         weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
-        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int32),
+        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
     )
 
     keys = random.split(key, num_outer_particles)
@@ -184,7 +207,8 @@ def smc_init(
     outer_state = OuterState(
         particles=outer_particles,
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
-        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int32),
+        rewards=jnp.zeros(num_outer_particles),
+        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int_),
     )
 
     return outer_state, inner_state
@@ -198,8 +222,9 @@ def smc_step(
     params: Dict,
     reward_fn: RewardFn,
     tempering: float,
+    resample: bool,
     outer_state: OuterState,
-    inner_state: InnerState
+    inner_state: InnerState,
 ) -> tuple[OuterState, InnerState]:
     r"""A single step of the nested SMC algorithm.
 
@@ -217,6 +242,8 @@ def smc_step(
             The reward function, $r(s_t, a_t)$.
         tempering: float
             The tempering parameter, $\eta$.
+        resample: bool
+            If True, resample, otherwise do not resample.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
@@ -232,9 +259,13 @@ def smc_step(
 
     # 1. Resample the outer particles.
     key, sub_key = random.split(key)
-    resampling_idx = random.choice(
-        sub_key, num_particles, shape=(num_particles,), p=outer_state.weights
+    resampling_idx = jax.lax.cond(
+        resample,
+        lambda _: random.choice(sub_key, num_particles, shape=(num_particles,), p=outer_state.weights),
+        lambda _: jnp.arange(num_particles),
+        operand=None
     )
+
     particles = jax.tree.map(lambda x: x[resampling_idx], outer_state.particles)
     inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
 
@@ -262,7 +293,7 @@ def smc_step(
     )
 
     # 6. Reweight the outer particles.
-    log_weights = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
+    log_weights, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
         reward_fn, (particles[0], particles[1]), inner_state, tempering
     )
     logsum_weights = jax.nn.logsumexp(log_weights)
@@ -270,6 +301,7 @@ def smc_step(
     outer_state = OuterState(
         particles=particles,
         weights=weights,
+        rewards=rewards,
         resampling_indices=resampling_idx,
     )
 
@@ -288,6 +320,7 @@ def smc(
     params: Dict,
     reward_fn: RewardFn,
     tempering: float,
+    resample: bool = True,
 ) -> tuple[OuterState, InnerState]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -315,12 +348,14 @@ def smc(
             The reward function.
         tempering: float
             The tempering parameter.
+        resample: bool
+            If True, resample, otherwise do not resample.
 
     Returns:
         tuple[OuterState, InnerState]
             The final outer and inner states after running the SMC algorithm.
     """
-    def step_fn(carry: tuple[OuterState, InnerState], rng_key: PRNGKey):
+    def smc_loop(carry: tuple[OuterState, InnerState], rng_key: PRNGKey):
         outer_state, inner_state = carry
 
         outer_state, inner_state = smc_step(
@@ -331,8 +366,9 @@ def smc(
             params,
             reward_fn,
             tempering,
+            resample,
             outer_state,
-            inner_state
+            inner_state,
         )
 
         return (outer_state, inner_state), (outer_state, inner_state)
@@ -347,7 +383,7 @@ def smc(
         policy
     )
     _, (outer_states, inner_states) = jax.lax.scan(
-        step_fn,
+        smc_loop,
         (init_outer_state, init_inner_state),
         random.split(step_key, num_time_steps)
     )
