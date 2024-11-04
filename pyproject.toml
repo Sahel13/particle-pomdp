@@ -15,6 +15,7 @@ dependencies = [
   "chex",
   "distrax",
   "optax",
+  "matplotlib"
 ]
 
 [project.optional-dependencies]
