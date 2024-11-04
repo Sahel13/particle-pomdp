@@ -1,12 +1,14 @@
 from typing import Dict, Callable
 
 import jax
-from jax import random
-from jax import Array
+from jax import Array, random
 import jax.numpy as jnp
-from chex import PRNGKey
 
+from chex import PRNGKey
 from flax.training.train_state import TrainState
+from flax.linen.initializers import constant
+
+import optax
 
 import distrax
 from distrax import (
@@ -16,9 +18,6 @@ from distrax import (
     Block,
     Chain
 )
-
-import optax
-
 from ppomdp.core import (
     LSTMCarry,
     RecurrentPolicy,
@@ -30,7 +29,12 @@ from ppomdp.smc import (
     backward_tracing
 )
 from ppomdp.policy import LSTM
+from ppomdp.bijector import Tanh
+from ppomdp.utils import batch_data
 
+jax.config.update("jax_platform_name", "cpu")
+jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_disable_jit", True)
 
 num_outer_particles = 128
 num_inner_particles = 64
@@ -42,11 +46,11 @@ dim_obs = 1
 
 
 def mean_trans(s: Array, a: Array) -> Array:
-    return s + 0.1 * a
+    return s + 0.2 * a
 
 
 def stddev_trans(s: Array, a: Array) -> Array:
-    return jnp.array([0.1])
+    return jnp.array([0.0001])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -70,8 +74,8 @@ def mean_obs(s: Array) -> Array:
 
 
 def stddev_obs(s: Array) -> Array:
-    b = jnp.array([5.0])  # beacon position
-    return 0.5 * (b - s)**2 + 1e-4
+    b = jnp.array([1.0])  # beacon position
+    return jnp.array([1e-4])  # + 0.1 * (b - s)**2
 
 
 def sample_obs(rng_key: Array, s: Array) -> Array:
@@ -92,7 +96,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 def reward_fn(s: Array, a: Array) -> Array:
     Q = jnp.eye(1) * 10.0  # state weights
-    R = jnp.eye(1) * 1e-2  # action weights
+    R = jnp.eye(1) * 0.01  # action weights
     reward = - 0.5 * s.T @ Q @ s - 0.5 * a.T @ R @ a
     return jnp.squeeze(reward)
 
@@ -103,10 +107,11 @@ lstm = LSTM(
     encoder_size=[256, 256],
     recurr_size=[64, 64],
     output_size=[256, 256],
+    init_log_std=constant(2.3)
 )
 
 bijector = Chain([
-    ScalarAffine(0.0, 1.0),
+    ScalarAffine(0.0, 1.0),  # Tanh()
 ])
 
 
@@ -150,8 +155,8 @@ def log_prob_policy(
 
 
 prior_dist = distrax.MultivariateNormalDiag(
-    loc=jnp.ones((dim_state,)),
-    scale_diag=jnp.ones((dim_state,))
+    loc=-1.0 * jnp.ones((dim_state,)),
+    scale_diag=jnp.sqrt(5.0) * jnp.ones((dim_state,))
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
@@ -199,14 +204,38 @@ def step_training(
     return train_state, loss
 
 
+from copy import deepcopy
+
 key = random.PRNGKey(0)
 key, sub_key = random.split(key)
-train_state = init_training(sub_key, optax.adam, 1e-3)
+train_state = init_training(sub_key, optax.adam, 5e-4)
 
-for _ in range(25):
+batch_size = 32
+for i in range(25):
+    # evaluate mean policy
+    eval_state = deepcopy(train_state)
+    eval_state.params["log_std"] = -20.0 * jnp.ones((dim_action,))
+
+    key, sub_key = random.split(key)
+    outer_states, _ = smc(
+        sub_key,
+        num_outer_particles,
+        num_inner_particles,
+        num_time_steps,
+        prior_dist,
+        trans_model,
+        obs_model,
+        policy,
+        eval_state.params,
+        reward_fn,
+        tempering=0.0,
+        resample=False,
+    )
+    cumulative_return = jnp.mean(jnp.sum(outer_states.rewards, axis=0))
+
     # run interleaved smc
     key, sub_key = random.split(key)
-    outer_states, inner_states = smc(
+    outer_states, _ = smc(
         sub_key,
         num_outer_particles,
         num_inner_particles,
@@ -225,4 +254,68 @@ for _ in range(25):
     traced_outer_states = backward_tracing(sub_key, outer_states)
 
     # update policy parameters
-    train_state, loss = step_training(train_state, traced_outer_states)
+    loss = 0.0
+    key, sub_key = random.split(key)
+    batch_indicies = batch_data(sub_key, num_outer_particles, batch_size)
+    for batch_idx in batch_indicies:
+        outer_states_batch = jax.tree.map(lambda x: x[batch_idx], traced_outer_states)
+        train_state, batch_loss = step_training(train_state, outer_states_batch)
+        loss += batch_loss
+
+    print(f"Iter: {i}, Loss: {loss}, Return: {cumulative_return}")
+
+
+train_state.params["log_std"] = -20.0 * jnp.ones((1,))
+
+states = []
+actions = []
+observations = []
+
+key = random.PRNGKey(0)
+key, state_key, obs_key = random.split(key, 3)
+state = jnp.array([[-1.0]])  # prior_dist.sample(seed=state_key, sample_shape=(1,))
+obs = sample_obs(obs_key, state)
+carry = policy.reset(1)
+
+states.append(state)
+observations.append(obs)
+
+for _ in range(1000):
+    key, state_key, obs_key, action_key = random.split(key, 4)
+
+    carry, action = policy.sample(action_key, obs, carry, train_state.params)
+    state = sample_trans(state_key, state, action)
+    obs = sample_obs(obs_key, state)
+
+    states.append(state)
+    actions.append(action)
+    observations.append(obs)
+
+
+from matplotlib import pyplot as plt
+
+# Convert lists to arrays for plotting
+states = jnp.squeeze(jnp.array(states))
+actions = jnp.squeeze(jnp.array(actions))
+observations = jnp.squeeze(jnp.array(observations))
+
+# Plotting
+fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+
+axs[0].plot(states)
+axs[0].set_title('State over Time')
+axs[0].set_xlabel('Time Step')
+axs[0].set_ylabel('State')
+
+axs[1].plot(actions)
+axs[1].set_title('Action over Time')
+axs[1].set_xlabel('Time Step')
+axs[1].set_ylabel('Action')
+
+axs[2].plot(observations)
+axs[2].set_title('Observation over Time')
+axs[2].set_xlabel('Time Step')
+axs[2].set_ylabel('Observation')
+
+plt.tight_layout()
+plt.show()
