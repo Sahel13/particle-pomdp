@@ -97,12 +97,15 @@ class OuterState(NamedTuple):
         Tuple of the observations and actions $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
     weights: Array
         Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+    rewards: Array
+        Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
     resampling_indecies: Array
         Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
     """
 
     particles: tuple[Array, Array, list[LSTMCarry]]
     weights: Array
+    rewards: Array
     resampling_indices: Array
 
 
