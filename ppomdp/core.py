@@ -1,4 +1,4 @@
-from typing import Callable, Dict, NamedTuple, Protocol
+from typing import Dict, NamedTuple, Protocol
 
 from chex import PRNGKey
 from jax import Array
@@ -90,11 +90,17 @@ class RewardFn(Protocol):
         r"""The  reward function $r(s_t, a_t)$."""
 
 
+class OuterParticles(NamedTuple):
+    observations: Array
+    actions: Array
+    carry: list[LSTMCarry]
+
+
 class OuterState(NamedTuple):
     r"""State of the outer particle filter.
 
-    particles: tuple[Array, Array]
-        Tuple of the observations and actions $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
+    particles: OuterParticles
+        NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
     weights: Array
         Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
     rewards: Array
@@ -103,7 +109,7 @@ class OuterState(NamedTuple):
         Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
     """
 
-    particles: tuple[Array, Array, list[LSTMCarry]]
+    particles: OuterParticles
     weights: Array
     rewards: Array
     resampling_indices: Array
