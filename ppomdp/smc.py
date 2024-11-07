@@ -408,7 +408,7 @@ def backward_tracing(
     rng_key: Array,
     outer_states: OuterState,
     inner_states: InnerState
-) -> tuple[OuterParticles, InnerState]:
+) -> tuple[OuterState, InnerState]:
     """
     Perform backward tracing to trace the ancestors of the outer states.
 
@@ -432,21 +432,21 @@ def backward_tracing(
         shape=(num_particles,),
         p=outer_states.weights[-1]
     )
-    last_outer = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states.particles)
+    last_outer = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
     last_inner = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
 
     def tracing_fn(carry, args):
         idx = carry
-        particles, resampling_indices = args
+        states, resampling_indices = args
         a = resampling_indices[idx]
-        ancestors = jax.tree.map(lambda x: x[a], particles)
+        ancestors = jax.tree.map(lambda x: x[a], states)
         return a, (a, ancestors)
 
     _, (traced_indices, traced_outer) = jax.lax.scan(
         tracing_fn,
         resampling_idx,
         (
-            jax.tree.map(lambda x: x[:-1], outer_states.particles),
+            jax.tree.map(lambda x: x[:-1], outer_states),
             outer_states.resampling_indices[1:]
         ),
         reverse=True
