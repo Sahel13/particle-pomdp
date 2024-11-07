@@ -65,14 +65,14 @@ class ResetRecurrentPolicy(Protocol):
 
 class SampleRecurrentPolicy(Protocol):
     def __call__(
-        self, rng_key: PRNGKey, s: Array, carry: list[LSTMCarry], params: Dict
+        self, rng_key: PRNGKey, observations: Array, carry: list[LSTMCarry], params: Dict
     ) -> tuple[list[LSTMCarry], Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
     def __call__(
-        self, a: Array, s: Array, carry: list[LSTMCarry], params: Dict
+        self, actions: Array, observations: Array, carry: list[LSTMCarry], params: Dict
     ) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
 
