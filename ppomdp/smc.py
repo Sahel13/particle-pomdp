@@ -237,7 +237,7 @@ def smc_step(
     resample: bool,
     outer_state: OuterState,
     inner_state: InnerState,
-) -> tuple[OuterState, InnerState]:
+) -> tuple[OuterState, InnerState, Array]:
     r"""A single step of the nested SMC algorithm.
 
     Args:
@@ -312,7 +312,9 @@ def smc_step(
         resampling_indices=resampling_idx,
     )
 
-    return outer_state, inner_state
+    # 7. Compute the normalizing constant increment.
+    norm_const = logsum_weights - jnp.log(num_particles)
+    return outer_state, inner_state, norm_const
 
 
 def smc(
@@ -328,7 +330,7 @@ def smc(
     reward_fn: RewardFn,
     tempering: float,
     resample: bool = True,
-) -> tuple[OuterState, InnerState]:
+) -> tuple[OuterState, InnerState, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
 
@@ -359,13 +361,14 @@ def smc(
             If True, resample, otherwise do not resample.
 
     Returns:
-        tuple[OuterState, InnerState]
-            The final outer and inner states after running the SMC algorithm.
+        tuple[OuterState, InnerState, Array]
+            All outer and inner states after running the SMC algorithm along
+            with the normalizing constant estimate.
     """
-    def smc_loop(carry: tuple[OuterState, InnerState], rng_key: PRNGKey):
-        outer_state, inner_state = carry
+    def smc_loop(carry: tuple[OuterState, InnerState, Array], rng_key: PRNGKey):
+        outer_state, inner_state, norm_const = carry
 
-        outer_state, inner_state = smc_step(
+        outer_state, inner_state, norm_const_incr = smc_step(
             rng_key,
             trans_model,
             obs_model,
@@ -378,9 +381,10 @@ def smc(
             inner_state,
         )
 
-        return (outer_state, inner_state), (outer_state, inner_state)
+        norm_const += norm_const_incr
+        return (outer_state, inner_state, norm_const), (outer_state, inner_state)
 
-    key, init_key, loop_key = random.split(rng_key, 3)
+    init_key, loop_key = random.split(rng_key, 2)
     init_outer_state, init_inner_state = smc_init(
         init_key,
         num_outer_particles,
@@ -392,8 +396,8 @@ def smc(
     )
 
     keys = random.split(loop_key, num_time_steps)
-    _, (outer_states, inner_states) = jax.lax.scan(
-        smc_loop, (init_outer_state, init_inner_state), keys
+    (_, _, norm_const), (outer_states, inner_states) = jax.lax.scan(
+        smc_loop, (init_outer_state, init_inner_state, jnp.array(0.0)), keys
     )
 
     def concat_trees(x, y):
@@ -401,7 +405,7 @@ def smc(
 
     outer_states = concat_trees(init_outer_state, outer_states)
     inner_states = concat_trees(init_inner_state, inner_states)
-    return outer_states, inner_states
+    return outer_states, inner_states, norm_const
 
 
 def backward_tracing(
