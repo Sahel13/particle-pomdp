@@ -218,6 +218,7 @@ def smc_init(
     outer_particles = OuterParticles(observations, actions, carry)
     outer_state = OuterState(
         particles=outer_particles,
+        log_weights=jnp.zeros(num_outer_particles),
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
         rewards=jnp.zeros(num_outer_particles),
         resampling_indices=jnp.arange(num_outer_particles),
@@ -307,6 +308,7 @@ def smc_step(
     outer_particles = OuterParticles(observations, actions, carry)
     outer_state = OuterState(
         particles=outer_particles,
+        log_weights=log_weights,
         weights=weights,
         rewards=rewards,
         resampling_indices=resampling_idx,

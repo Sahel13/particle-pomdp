@@ -99,17 +99,16 @@ class OuterParticles(NamedTuple):
 class OuterState(NamedTuple):
     r"""State of the outer particle filter.
 
-    particles: OuterParticles
-        NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
-    weights: Array
-        Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
-    rewards: Array
-        Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
-    resampling_indecies: Array
-        Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+    Attributes:
+        particles: NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
+        log_weights: Log weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        weights: Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        rewards: Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
+        resampling_indecies: Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
     """
 
     particles: OuterParticles
+    log_weights: Array
     weights: Array
     rewards: Array
     resampling_indices: Array
@@ -118,14 +117,11 @@ class OuterState(NamedTuple):
 class InnerState(NamedTuple):
     """State of the inner particle filter.
 
-    particles: Array
-        The state particles $s_t^{nm}$.
-    log_weights: Array
-        Log weights of paticles $s_t^{nm}$.
-    weights: Array
-        Weights of particles $s_t^{nm}$.
-    resampling_indices: Array
-        Resampling indices of particles $s_t^{nm}$.
+    Attributes:
+        particles: The state particles $s_t^{nm}$.
+        log_weights: Log weights of paticles $s_t^{nm}$.
+        weights: Weights of particles $s_t^{nm}$.
+        resampling_indices: Resampling indices of particles $s_t^{nm}$.
     """
 
     particles: Array
