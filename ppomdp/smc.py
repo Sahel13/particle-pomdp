@@ -411,34 +411,37 @@ def smc(
 def backward_tracing(
     rng_key: Array,
     outer_states: OuterState,
-    inner_states: InnerState
+    inner_states: InnerState,
+    sample: bool = True
 ) -> tuple[OuterState, InnerState]:
-    """
-    Perform backward tracing to trace the ancestors of the outer states.
+    """Genealogy tracking to get the smoothed trajectories.
 
     Args:
-        rng_key: Array
-            The random key for sampling.
-        outer_states: OuterState
-            The outer state containing particles and weights.
-        inner_states
-            The inner states re-arranged according to the outer states.
+        rng_key: The random number generator key.
+        outer_states: The outer states from the output of the SMC algorithm.
+        inner_states: The inner states from the output of the SMC algorithm.
+        sample: If True, sample the genealogy, otherwise trace back all final
+          particles.
 
     Returns:
-        OuterParticle
-            The traced outer particles: observations, actions and carry.
+        The traced outer and inner states.
     """
     num_steps, num_particles = outer_states.weights.shape
 
-    # resample according to last weights
-    resampling_idx = random.choice(
-        rng_key, num_particles,
-        shape=(num_particles,),
-        p=outer_states.weights[-1]
+    # Sample the states at the final time step.
+    resampling_idx = jax.lax.cond(
+        sample,
+        lambda _: random.choice(
+            rng_key, num_particles, shape=(num_particles,), p=outer_states.weights[-1]
+        ),
+        lambda _: jnp.arange(num_particles),
+        None,
     )
+
     last_outer = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
     last_inner = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
 
+    # Trace the genealogy for the outer states.
     def tracing_fn(carry, args):
         idx = carry
         states, resampling_indices = args
@@ -456,13 +459,14 @@ def backward_tracing(
         reverse=True
     )
 
-    get_traced_inner = lambda idx, state: jax.tree.map(lambda x: x[idx], state)
+    # Trace the inner states.
+    def get_traced_inner(idx, state):
+        return jax.tree.map(lambda x: x[idx], state)
+
     traced_inner = jax.vmap(get_traced_inner, in_axes=(0, 0))(
         traced_indices,
         jax.tree.map(lambda x: x[:-1], inner_states),
     )
-
-    # traced_inner = jax.tree.map(lambda x: x[:-1][traced_indices], inner_states)
 
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
