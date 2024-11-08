@@ -33,3 +33,17 @@ def batch_data(
 
     batch_idx = jnp.array_split(batch_idx, num_batches)
     return batch_idx
+
+
+def ess(weights: Array) -> Array:
+    """Compute the effective sample size."""
+    return 1.0 / jnp.sum(jnp.square(weights))
+
+
+def systematic_resampling(rng_key: Array, weights: Array, num_samples: int) -> Array:
+    n = weights.shape[0]
+    u = random.uniform(rng_key)
+    cum_sum = jnp.cumsum(weights)
+    sorted_uniforms = (jnp.arange(num_samples) + u) / num_samples
+    idx = jnp.searchsorted(cum_sum, sorted_uniforms)
+    return jnp.clip(idx, 0, n - 1).astype(jnp.int_)

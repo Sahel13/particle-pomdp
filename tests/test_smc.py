@@ -35,7 +35,7 @@ def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
     key1, key2 = random.split(key)
     num_particles = shape[0]
     particles = random.normal(key1, shape)
-    log_weights = random.uniform(key2, (num_particles,))
+    log_weights = random.normal(key2, (num_particles,))
     return InnerState(
         particles=particles,
         log_weights=log_weights,
@@ -45,21 +45,24 @@ def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
 
 
 @pytest.mark.parametrize("seed", [0, 123])
-def test_resample_inner(seed):
+@pytest.mark.parametrize("num_particles", [1, 10])
+def test_resample_inner(seed, num_particles):
     rng_key = random.PRNGKey(seed)
     key1, key2 = random.split(rng_key, 2)
     num_particles = 20
     particle_dim = 3
     state = get_inner_state(key1, (num_particles, particle_dim))
-    new_state = resample_inner(key2, state)
+    resampled_state = resample_inner(key2, state)
 
-    resampling_idx = new_state.resampling_indices
-    assert jnp.all(jnp.equal(new_state.particles, state.particles[resampling_idx]))
+    resampling_idx = resampled_state.resampling_indices
+    assert jnp.all(jnp.equal(resampled_state.particles, state.particles[resampling_idx]))
     assert jnp.all(resampling_idx >= 0) and jnp.all(resampling_idx <= num_particles - 1)
     assert jnp.all(
-        jnp.equal(new_state.weights, jnp.ones_like(state.weights) / num_particles)
-    )
-    assert jnp.all(jnp.equal(new_state.log_weights, jnp.zeros_like(state.log_weights)))
+        jnp.equal(resampled_state.weights, jnp.ones_like(state.weights) / num_particles)
+    ) or jnp.all(jnp.equal(resampled_state.weights, state.weights))
+    assert jnp.all(
+        jnp.equal(resampled_state.log_weights, jnp.zeros_like(state.log_weights))
+    ) or jnp.all(jnp.equal(resampled_state.log_weights, state.log_weights))
 
 
 @pytest.mark.parametrize("seed", [0, 123])

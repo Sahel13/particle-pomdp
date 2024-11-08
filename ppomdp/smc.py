@@ -16,28 +16,41 @@ from ppomdp.core import (
     RecurrentPolicy,
     RewardFn,
 )
+from ppomdp.utils import ess, systematic_resampling
 
 
-def resample_inner(rng_key: PRNGKey, state: InnerState) -> InnerState:
-    """Resample the inner particles for a single trajectory.
+def resample_inner(rng_key: PRNGKey, inner_state: InnerState) -> InnerState:
+    """Resample the inner particles for a single outer trajectory.
+
+    Only resamples if the effective sample size is below 75% of the number of particles.
 
     Args:
-        rng_key: PRNGKey
-        state: InnerState
-            The state associated with a single outer trajectory.
+        rng_key: The random number generator key.
+        state: The state associated with a single outer trajectory.
             Leaves have shape (M, ...).
     """
-    num_particles = state.particles.shape[0]
-    resampling_idx = random.choice(
-        rng_key, num_particles, shape=(num_particles,), p=state.weights
+    num_particles = inner_state.particles.shape[0]
+
+    def true_fn(state: InnerState) -> InnerState:
+        resampling_idx = systematic_resampling(rng_key, state.weights, num_particles)
+        return InnerState(
+            particles=state.particles[resampling_idx],
+            log_weights=jnp.zeros(num_particles),
+            weights=jnp.ones(num_particles) / num_particles,
+            resampling_indices=resampling_idx,
+        )
+
+    def false_fn(state: InnerState) -> InnerState:
+        resampling_idx = jnp.arange(num_particles)
+        return state._replace(resampling_indices=resampling_idx)
+
+    resampled_state = jax.lax.cond(
+        ess(inner_state.weights) < 0.75 * num_particles,
+        lambda x: true_fn(x),
+        lambda x: false_fn(x),
+        inner_state
     )
-    inner_state = InnerState(
-        particles=state.particles[resampling_idx],
-        log_weights=jnp.zeros(num_particles),
-        weights=jnp.ones(num_particles) / num_particles,
-        resampling_indices=resampling_idx,
-    )
-    return inner_state
+    return resampled_state
 
 
 def propagate_inner(
