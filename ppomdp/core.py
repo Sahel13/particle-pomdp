@@ -3,7 +3,6 @@ from typing import Dict, NamedTuple, Protocol
 from chex import PRNGKey
 from jax import Array
 
-
 LSTMCarry = tuple[Array, Array]
 
 
@@ -65,24 +64,41 @@ class ResetRecurrentPolicy(Protocol):
 
 class SampleRecurrentPolicy(Protocol):
     def __call__(
-        self, rng_key: PRNGKey, s: Array, carry: list[LSTMCarry], params: Dict
+        self,
+        rng_key: PRNGKey,
+        observations: Array,
+        carry: list[LSTMCarry],
+        params: Dict,
     ) -> tuple[list[LSTMCarry], Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
     def __call__(
-        self, a: Array, s: Array, carry: list[LSTMCarry], params: Dict
+        self, actions: Array, observations: Array, carry: list[LSTMCarry], params: Dict
     ) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
+class SampleAndLogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        observations: Array,
+        carry: list[LSTMCarry],
+        params: Dict,
+    ) -> tuple[list[LSTMCarry], Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
+
+
 class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
+
     dim: int
     reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
+    sample_and_log_prob: SampleAndLogProbRecurrentPolicy
 
 
 class RewardFn(Protocol):
@@ -94,38 +110,35 @@ class OuterParticles(NamedTuple):
     observations: Array
     actions: Array
     carry: list[LSTMCarry]
+    log_probs: Array
 
 
 class OuterState(NamedTuple):
     r"""State of the outer particle filter.
 
-    particles: OuterParticles
-        NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
-    weights: Array
-        Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
-    rewards: Array
-        Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
-    resampling_indecies: Array
-        Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+    Attributes:
+        particles: NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
+        log_weights: Log weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        weights: Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        resampling_indecies: Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        rewards: Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
     """
 
     particles: OuterParticles
+    log_weights: Array
     weights: Array
-    rewards: Array
     resampling_indices: Array
+    rewards: Array
 
 
 class InnerState(NamedTuple):
     """State of the inner particle filter.
 
-    particles: Array
-        The state particles $s_t^{nm}$.
-    log_weights: Array
-        Log weights of paticles $s_t^{nm}$.
-    weights: Array
-        Weights of particles $s_t^{nm}$.
-    resampling_indices: Array
-        Resampling indices of particles $s_t^{nm}$.
+    Attributes:
+        particles: The state particles $s_t^{nm}$.
+        log_weights: Log weights of paticles $s_t^{nm}$.
+        weights: Weights of particles $s_t^{nm}$.
+        resampling_indices: Resampling indices of particles $s_t^{nm}$.
     """
 
     particles: Array
