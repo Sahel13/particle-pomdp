@@ -1,9 +1,8 @@
 import math
 
+from chex import PRNGKey
 from jax import Array, random
 from jax import numpy as jnp
-
-from chex import PRNGKey
 
 
 def ess(weights: Array) -> Array:
@@ -11,9 +10,7 @@ def ess(weights: Array) -> Array:
     return 1.0 / jnp.sum(jnp.square(weights))
 
 
-def systematic_resampling(
-    rng_key: PRNGKey, weights: Array, num_samples: int
-) -> Array:
+def systematic_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
     """
     Perform systematic resampling of particles based on their weights.
 
@@ -30,12 +27,10 @@ def systematic_resampling(
     cumsum = jnp.cumsum(weights)
     linspace = (jnp.arange(num_samples, dtype=weights.dtype) + u) / num_samples
     idx = jnp.searchsorted(cumsum, linspace)
-    return jnp.asarray(jnp.clip(idx, 0, n - 1), dtype=jnp.int_)
+    return jnp.clip(idx, 0, n - 1).astype(jnp.int_)
 
 
-def multinomial_resampling(
-    rng_key: PRNGKey, weights: Array, num_samples: int
-) -> Array:
+def multinomial_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
     """
     Perform multinomial resampling of particles based on their weights.
 
@@ -47,12 +42,7 @@ def multinomial_resampling(
     Returns:
         Array: The indices of the resampled particles.
     """
-    n = weights.shape[0]
-    idx = random.choice(
-        rng_key, num_samples,
-        shape=(num_samples,),
-        p=weights
-    )
+    idx = random.choice(rng_key, num_samples, shape=(num_samples,), p=weights)
     return idx
 
 
@@ -70,7 +60,7 @@ def batch_data(
         batch_size (int): The size of each batch.
         skip_last (bool, optional): If True, skips the last incomplete batch. Defaults to False.
 
-    Yields:
+    Returns:
         list[Array]: A list of batched indices.
     """
     batch_idx = random.permutation(rng_key, data_size)

@@ -36,13 +36,15 @@ def outer_states():
             ),
         )
     ]
-    outer_particles = OuterParticles(observations, actions, carry)
+    dummy_log_probs = jnp.zeros((num_time_steps + 1, num_outer_particles))
+    outer_particles = OuterParticles(observations, actions, carry, dummy_log_probs)
 
     resampling_indices = random.randint(
         key, (num_time_steps + 1, num_outer_particles), 0, num_outer_particles
     )
     return OuterState(
         particles=outer_particles,
+        log_weights=jnp.zeros((num_time_steps + 1, num_outer_particles)),
         weights=jnp.ones((num_time_steps + 1, num_outer_particles))
         / num_outer_particles,
         rewards=jnp.zeros((num_time_steps + 1, num_outer_particles)),

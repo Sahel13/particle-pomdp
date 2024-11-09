@@ -2,19 +2,18 @@ from typing import Dict
 
 import jax
 import jax.numpy as jnp
-from jax import Array, random
-
 from chex import PRNGKey
 from distrax import Distribution
+from jax import Array, random
 
 from ppomdp.core import (
-    OuterParticles,
     InnerState,
-    OuterState,
-    TransitionModel,
     ObservationModel,
+    OuterParticles,
+    OuterState,
     RecurrentPolicy,
     RewardFn,
+    TransitionModel,
 )
 from ppomdp.utils import ess, systematic_resampling
 
@@ -225,14 +224,20 @@ def smc_init(
     key, sub_key = random.split(rng_key)
     inner_particles = prior_dist.sample(
         seed=sub_key,
-        sample_shape=(num_outer_particles, num_inner_particles,)
+        sample_shape=(
+            num_outer_particles,
+            num_inner_particles,
+        ),
     )
 
     inner_state = InnerState(
         particles=inner_particles,
         log_weights=jnp.zeros((num_outer_particles, num_inner_particles)),
-        weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
-        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
+        weights=jnp.ones((num_outer_particles, num_inner_particles))
+        / num_inner_particles,
+        resampling_indices=jnp.zeros(
+            (num_outer_particles, num_inner_particles), dtype=jnp.int_
+        ),
     )
 
     # sample marginal observations
@@ -249,7 +254,9 @@ def smc_init(
     # sample actions from policy
     key, sub_key = random.split(keys[0])
     init_carry = policy.reset(num_outer_particles)
-    carry, actions, log_probs = policy.sample_and_log_prob(sub_key, observations, init_carry, params)
+    carry, actions, log_probs = policy.sample_and_log_prob(
+        sub_key, observations, init_carry, params
+    )
 
     outer_particles = OuterParticles(observations, actions, carry, log_probs)
     outer_state = OuterState(
@@ -409,6 +416,7 @@ def smc(
             All outer and inner states after running the SMC algorithm along
             with the normalizing constant estimate.
     """
+
     def smc_loop(carry: tuple[OuterState, InnerState, Array], rng_key: PRNGKey):
         outer_state, inner_state, log_marginal = carry
 
@@ -457,7 +465,7 @@ def backward_tracing(
     rng_key: Array,
     outer_states: OuterState,
     inner_states: InnerState,
-    sample: bool = True
+    sample: bool = True,
 ) -> tuple[OuterState, InnerState]:
     """Genealogy tracking to get the smoothed trajectories.
 
@@ -499,9 +507,9 @@ def backward_tracing(
         resampling_idx,
         (
             jax.tree.map(lambda x: x[:-1], outer_states),
-            outer_states.resampling_indices[1:]
+            outer_states.resampling_indices[1:],
         ),
-        reverse=True
+        reverse=True,
     )
 
     # Trace the inner states.

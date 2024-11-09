@@ -9,7 +9,7 @@ from flax import linen as nn
 from flax.training.train_state import TrainState
 from jax import Array
 
-from ppomdp.core import LSTMCarry, RecurrentPolicy, OuterParticles
+from ppomdp.core import LSTMCarry, OuterParticles, RecurrentPolicy
 
 
 class LSTM(nn.Module):
@@ -66,9 +66,7 @@ def reset_policy(batch_size: int, lstm: LSTM) -> list[LSTMCarry]:
     return carry
 
 
-def squash_policy(
-    mean: Array, log_std: Array, bijector: Chain
-) -> Transformed:
+def squash_policy(mean: Array, log_std: Array, bijector: Chain) -> Transformed:
     dist = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
     return Transformed(distribution=dist, bijector=Block(bijector, ndims=1))
 
@@ -119,14 +117,14 @@ def get_recurrent_policy(lstm: LSTM, bijector: Chain):
         reset=partial(reset_policy, lstm=lstm),
         sample=partial(sample_policy, lstm=lstm, bijector=bijector),
         log_prob=partial(log_prob_policy, lstm=lstm, bijector=bijector),
-        sample_and_log_prob=partial(sample_and_log_prob_policy, lstm=lstm, bijector=bijector),
+        sample_and_log_prob=partial(
+            sample_and_log_prob_policy, lstm=lstm, bijector=bijector
+        ),
     )
 
 
 def log_prob_policy_pathwise(
-    policy: RecurrentPolicy,
-    params: Dict,
-    particles: OuterParticles
+    policy: RecurrentPolicy, params: Dict, particles: OuterParticles
 ):
     def body(log_prob, t):
         actions = particles.actions[t]
@@ -143,9 +141,7 @@ def log_prob_policy_pathwise(
     init_log_prob = policy.log_prob(init_actions, init_observations, init_carry, params)
 
     _, log_prob_inc = jax.lax.scan(
-        body,
-        init_log_prob,
-        jnp.arange(1, num_time_steps - 1)
+        body, init_log_prob, jnp.arange(1, num_time_steps - 1)
     )
     return jnp.vstack((init_log_prob, log_prob_inc))
 
@@ -156,7 +152,6 @@ def train_step(
     train_state: TrainState,
     particles: OuterParticles,
 ) -> tuple[TrainState, Array]:
-
     def loss_fn(params):
         log_probs = log_prob_policy_pathwise(policy, params, particles)
         return -1.0 * jnp.mean(jnp.sum(log_probs, axis=0))

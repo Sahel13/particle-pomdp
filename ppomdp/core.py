@@ -3,7 +3,6 @@ from typing import Dict, NamedTuple, Protocol
 from chex import PRNGKey
 from jax import Array
 
-
 LSTMCarry = tuple[Array, Array]
 
 
@@ -65,7 +64,11 @@ class ResetRecurrentPolicy(Protocol):
 
 class SampleRecurrentPolicy(Protocol):
     def __call__(
-        self, rng_key: PRNGKey, observations: Array, carry: list[LSTMCarry], params: Dict
+        self,
+        rng_key: PRNGKey,
+        observations: Array,
+        carry: list[LSTMCarry],
+        params: Dict,
     ) -> tuple[list[LSTMCarry], Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
 
@@ -79,13 +82,18 @@ class LogProbRecurrentPolicy(Protocol):
 
 class SampleAndLogProbRecurrentPolicy(Protocol):
     def __call__(
-        self, rng_key: PRNGKey, observations: Array, carry: list[LSTMCarry], params: Dict
+        self,
+        rng_key: PRNGKey,
+        observations: Array,
+        carry: list[LSTMCarry],
+        params: Dict,
     ) -> tuple[list[LSTMCarry], Array, Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
 
 
 class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
+
     dim: int
     reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
