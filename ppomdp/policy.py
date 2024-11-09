@@ -42,17 +42,17 @@ class LSTM(nn.Module):
         y = self.feature_fn(s)
 
         # pass features through encoding layers
-        for _size in self.encoder_size:
-            y = nn.relu(nn.Dense(_size)(y))
+        for size in self.encoder_size:
+            y = nn.relu(nn.Dense(size)(y))
         y = nn.Dense(self.recurr_size[0])(y)
 
         # pass encodings through recurrent layers
-        for k, _size in enumerate(self.recurr_size):
-            carry[k], y = nn.LSTMCell(_size)(carry[k], y)
+        for k, size in enumerate(self.recurr_size):
+            carry[k], y = nn.LSTMCell(size)(carry[k], y)
 
         # pass result through output layers
-        for _size in self.output_size:
-            y = nn.relu(nn.Dense(_size)(y))
+        for size in self.output_size:
+            y = nn.relu(nn.Dense(size)(y))
         a = nn.Dense(self.dim)(y)
         return carry, a
 
