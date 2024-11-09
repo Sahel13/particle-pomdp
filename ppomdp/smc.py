@@ -45,10 +45,7 @@ def resample_inner(rng_key: PRNGKey, inner_state: InnerState) -> InnerState:
         return state._replace(resampling_indices=resampling_idx)
 
     resampled_state = jax.lax.cond(
-        ess(inner_state.weights) < 0.75 * num_particles,
-        lambda x: true_fn(x),
-        lambda x: false_fn(x),
-        inner_state
+        ess(inner_state.weights) < 0.75 * num_particles, true_fn, false_fn, inner_state
     )
     return resampled_state
 
@@ -187,9 +184,7 @@ def resample_outer(
         return state._replace(resampling_indices=resampling_idx)
 
     predicate = resample and ess(outer_state.weights) < 0.75 * num_particles
-    resampled_state = jax.lax.cond(
-        predicate, lambda x: true_fn(x), lambda x: false_fn(x), outer_state
-    )
+    resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
     return resampled_state, predicate
 
 
