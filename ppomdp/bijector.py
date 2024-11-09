@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import jax
 from jax import Array
 from jax import numpy as jnp
@@ -18,7 +16,7 @@ class Tanh(Bijector):
         return jnp.tanh(x), self.forward_log_det_jacobian(x)
 
     def inverse(self, y):
-        x = jnp.clip(y, -0.99999997, 0.99999997)  # 0.99997 for float32
+        x = jnp.clip(y, -0.99995, 0.99995)
         return jnp.arctanh(x)
 
     def inverse_and_log_det(self, y: Array) -> tuple[Array, Array]:
@@ -40,7 +38,7 @@ class Sigmoid(Bijector):
         return _more_stable_sigmoid(x), self.forward_log_det_jacobian(x)
 
     def inverse_and_log_det(self, y: Array) -> tuple[Array, Array]:
-        x = jnp.clip(y, -0.99999997, 0.99999997)  # 0.99997 for float32
+        x = jnp.clip(y, -0.99995, 0.99995)
         z = jnp.log(x) - jnp.log1p(-x)
         return z, -self.forward_log_det_jacobian(z)
 
