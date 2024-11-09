@@ -3,12 +3,59 @@ import math
 from jax import Array, random
 from jax import numpy as jnp
 
+from chex import PRNGKey
+
+
+def systematic_resampling(
+    rng_key: PRNGKey, weights: Array, num_samples: int
+) -> Array:
+    """
+    Perform systematic resampling of particles based on their weights.
+
+    Args:
+        rng_key (PRNGKey): The random key for sampling.
+        weights (Array): The weights of the particles.
+        num_samples (int): The number of samples to draw.
+
+    Returns:
+        Array: The indices of the resampled particles.
+    """
+    n = weights.shape[0]
+    u = random.uniform(rng_key, ())
+    cumsum = jnp.cumsum(weights)
+    linspace = (jnp.arange(num_samples, dtype=weights.dtype) + u) / num_samples
+    idx = jnp.searchsorted(cumsum, linspace)
+    return jnp.asarray(jnp.clip(idx, 0, n - 1), dtype=jnp.int_)
+
+
+def multinomial_resampling(
+    rng_key: PRNGKey, weights: Array, num_samples: int
+) -> Array:
+    """
+    Perform multinomial resampling of particles based on their weights.
+
+    Args:
+        rng_key (PRNGKey): The random key for sampling.
+        weights (Array): The weights of the particles.
+        num_samples (int): The number of samples to draw.
+
+    Returns:
+        Array: The indices of the resampled particles.
+    """
+    n = weights.shape[0]
+    idx = random.choice(
+        rng_key, num_samples,
+        shape=(num_samples,),
+        p=weights
+    )
+    return idx
+
 
 def batch_data(
     rng_key: Array,
     data_size: int,
     batch_size: int,
-    skip_last: bool = False,
+    skip_last: bool = True,
 ) -> list[Array]:
     """Generates batched indices.
 
@@ -33,3 +80,5 @@ def batch_data(
 
     batch_idx = jnp.array_split(batch_idx, num_batches)
     return batch_idx
+
+

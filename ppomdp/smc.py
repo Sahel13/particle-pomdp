@@ -16,6 +16,7 @@ from ppomdp.core import (
     RecurrentPolicy,
     RewardFn,
 )
+from ppomdp.utils import systematic_resampling
 
 
 def resample_inner(rng_key: PRNGKey, state: InnerState) -> InnerState:
@@ -28,9 +29,11 @@ def resample_inner(rng_key: PRNGKey, state: InnerState) -> InnerState:
             Leaves have shape (M, ...).
     """
     num_particles = state.particles.shape[0]
-    resampling_idx = random.choice(
-        rng_key, num_particles, shape=(num_particles,), p=state.weights
-    )
+
+    resampling_idx = systematic_resampling(rng_key, state.weights, num_particles)
+    # resampling_idx = random.choice(
+    #     rng_key, num_particles, shape=(num_particles,), p=state.weights
+    # )
     inner_state = InnerState(
         particles=state.particles[resampling_idx],
         log_weights=jnp.zeros(num_particles),
@@ -235,6 +238,7 @@ def smc_step(
     reward_fn: RewardFn,
     tempering: float,
     resample: bool,
+    resample_fn: callable,
     outer_state: OuterState,
     inner_state: InnerState,
 ) -> tuple[OuterState, InnerState, Array]:
@@ -256,6 +260,8 @@ def smc_step(
             The tempering parameter, $\eta$.
         resample: bool
             If True, resample, otherwise do not resample.
+        resample_fn: callable
+            The resampling function.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
@@ -267,7 +273,7 @@ def smc_step(
     key, sub_key = random.split(rng_key)
     resampling_idx = jax.lax.cond(
         resample,
-        lambda _: random.choice(sub_key, num_particles, shape=(num_particles,), p=outer_state.weights),
+        lambda _: resample_fn(sub_key, outer_state.weights, num_particles),
         lambda _: jnp.arange(num_particles),
         operand=None,
     )
@@ -330,6 +336,7 @@ def smc(
     reward_fn: RewardFn,
     tempering: float,
     resample: bool = True,
+    resample_fn: callable = systematic_resampling,
 ) -> tuple[OuterState, InnerState, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -359,6 +366,8 @@ def smc(
             The tempering parameter.
         resample: bool
             If True, resample, otherwise do not resample.
+        resample_fn: callable
+            The resampling function.
 
     Returns:
         tuple[OuterState, InnerState, Array]
@@ -366,9 +375,9 @@ def smc(
             with the normalizing constant estimate.
     """
     def smc_loop(carry: tuple[OuterState, InnerState, Array], rng_key: PRNGKey):
-        outer_state, inner_state, norm_const = carry
+        outer_state, inner_state, log_marginal = carry
 
-        outer_state, inner_state, norm_const_incr = smc_step(
+        outer_state, inner_state, log_marginal_incr = smc_step(
             rng_key,
             trans_model,
             obs_model,
@@ -377,12 +386,13 @@ def smc(
             reward_fn,
             tempering,
             resample,
+            resample_fn,
             outer_state,
             inner_state,
         )
 
-        norm_const += norm_const_incr
-        return (outer_state, inner_state, norm_const), (outer_state, inner_state)
+        log_marginal += log_marginal_incr
+        return (outer_state, inner_state, log_marginal), (outer_state, inner_state)
 
     init_key, loop_key = random.split(rng_key, 2)
     init_outer_state, init_inner_state = smc_init(
@@ -396,7 +406,7 @@ def smc(
     )
 
     keys = random.split(loop_key, num_time_steps)
-    (_, _, norm_const), (outer_states, inner_states) = jax.lax.scan(
+    (_, _, log_marginal), (outer_states, inner_states) = jax.lax.scan(
         smc_loop, (init_outer_state, init_inner_state, jnp.array(0.0)), keys
     )
 
@@ -405,7 +415,7 @@ def smc(
 
     outer_states = concat_trees(init_outer_state, outer_states)
     inner_states = concat_trees(init_inner_state, inner_states)
-    return outer_states, inner_states, norm_const
+    return outer_states, inner_states, log_marginal
 
 
 def backward_tracing(
@@ -430,12 +440,7 @@ def backward_tracing(
     """
     num_steps, num_particles = outer_states.weights.shape
 
-    # resample according to last weights
-    resampling_idx = random.choice(
-        rng_key, num_particles,
-        shape=(num_particles,),
-        p=outer_states.weights[-1]
-    )
+    resampling_idx = systematic_resampling(rng_key, outer_states.weights[-1], num_particles)
     last_outer = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
     last_inner = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
 
@@ -461,8 +466,6 @@ def backward_tracing(
         traced_indices,
         jax.tree.map(lambda x: x[:-1], inner_states),
     )
-
-    # traced_inner = jax.tree.map(lambda x: x[:-1][traced_indices], inner_states)
 
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
