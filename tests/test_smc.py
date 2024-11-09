@@ -201,3 +201,81 @@ def test_nested_smc():
     assert jnp.all(jnp.isfinite(outer_states.weights))
     assert jnp.all(jnp.isfinite(inner_states.log_weights))
     assert jnp.all(jnp.isfinite(inner_states.weights))
+
+
+@pytest.mark.parametrize("seed", [13, 42])
+def test_policy_log_prob(seed):
+    """Test the policy log probability objective."""
+
+    # For bijectors with aggresive clipping this test will fail
+    # either reduce clipping or make sure the bijector is not returning nans.
+
+    state_dim = 3
+    action_dim = 3
+    obs_dim = 2
+
+    num_outer_particles = 128
+    num_inner_particles = 64
+    num_time_steps = 50
+
+    obs_matrix = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+    def sample_obs(rng_key, x):
+        return obs_matrix @ x + random.normal(rng_key, (2,))
+
+    def log_prob_obs(y, x):
+        return -0.5 * jnp.sum(jnp.square(y - obs_matrix @ x))
+
+    def sample_trans(rng_key, x, u):
+        return x + u + random.normal(rng_key, x.shape)
+
+    def log_prob_trans(xn, x, u):
+        return -0.5 * jnp.sum(jnp.square(xn - x - u))
+
+    lstm = LSTM(
+        dim=action_dim,
+        feature_fn=lambda x: x,
+        encoder_size=[256, 256],
+        recurr_size=[64, 64],
+        output_size=[256, 256],
+    )
+    bijector = Chain([ScalarAffine(0.0, 1.0)])
+    # bijector = Chain([ScalarAffine(0.0, 1.0), Tanh()])
+
+    prior_dist = distrax.MultivariateNormalDiag(loc=jnp.zeros((state_dim,)), scale_diag=jnp.ones((state_dim,)))
+    trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
+    obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
+    policy = get_recurrent_policy(lstm, bijector)
+
+    def reward_fn(x, u):
+        return -0.1 * jnp.sum(x**2 + u**2)
+
+    rng_key = random.PRNGKey(seed)
+    key, obs_key, param_key = random.split(rng_key, 3)
+    init_carry = policy.reset(num_outer_particles)
+    init_obs = random.normal(obs_key, (num_outer_particles, obs_dim))
+    init_params = lstm.init(param_key, init_carry, init_obs)["params"]
+
+    # Run SMC and plot smoothed trajectories.
+    key, sub_key = random.split(rng_key)
+    outer_states, inner_states, _ = smc(
+        sub_key,
+        num_outer_particles,
+        num_inner_particles,
+        num_time_steps,
+        prior_dist,
+        trans_model,
+        obs_model,
+        policy,
+        init_params,
+        reward_fn,
+        tempering=0.1,
+    )
+
+    key, sub_key = random.split(key)
+    traced_outer, _ = backward_tracing(sub_key, outer_states, inner_states)
+
+    smc_log_probs = traced_outer.particles.log_probs[:-1, :]
+    acc_log_probs = accumulate_policy_log_prob(policy, init_params, traced_outer.particles)
+
+    assert jnp.linalg.norm(smc_log_probs - acc_log_probs) < 1e-3
