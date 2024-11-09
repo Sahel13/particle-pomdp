@@ -123,12 +123,12 @@ def get_recurrent_policy(lstm: LSTM, bijector: Chain):
     )
 
 
-def accumulate_policy_log_prob(
+def log_prob_policy_pathwise(
     policy: RecurrentPolicy,
     params: Dict,
     particles: OuterParticles
 ):
-    def accumulate(log_prob, t):
+    def body(log_prob, t):
         actions = particles.actions[t]
         observations = particles.observations[t]
         carry = jax.tree.map(lambda x: x[t - 1], particles.carry)
@@ -143,7 +143,7 @@ def accumulate_policy_log_prob(
     init_log_prob = policy.log_prob(init_actions, init_observations, init_carry, params)
 
     _, log_prob_inc = jax.lax.scan(
-        accumulate,
+        body,
         init_log_prob,
         jnp.arange(1, num_time_steps - 1)
     )
@@ -158,7 +158,7 @@ def train_step(
 ) -> tuple[TrainState, Array]:
 
     def loss_fn(params):
-        log_probs = accumulate_policy_log_prob(policy, params, particles)
+        log_probs = log_prob_policy_pathwise(policy, params, particles)
         return -1.0 * jnp.mean(jnp.sum(log_probs, axis=0))
 
     grad_fn = jax.value_and_grad(loss_fn)

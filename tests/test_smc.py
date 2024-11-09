@@ -28,7 +28,7 @@ from ppomdp.smc import (
 from ppomdp.policy import (
     LSTM,
     get_recurrent_policy,
-    accumulate_policy_log_prob
+    log_prob_policy_pathwise
 )
 from ppomdp.bijector import Tanh
 
@@ -279,6 +279,6 @@ def test_policy_log_prob(seed):
     traced_outer, _ = backward_tracing(sub_key, outer_states, inner_states)
 
     smc_log_probs = traced_outer.particles.log_probs[:-1, :]
-    acc_log_probs = accumulate_policy_log_prob(policy, init_params, traced_outer.particles)
+    acc_log_probs = log_prob_policy_pathwise(policy, init_params, traced_outer.particles)
 
     assert jnp.linalg.norm(smc_log_probs - acc_log_probs) < 1e-3
