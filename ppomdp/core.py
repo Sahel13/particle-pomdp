@@ -102,7 +102,7 @@ class OuterParticles(NamedTuple):
     observations: Array
     actions: Array
     carry: list[LSTMCarry]
-    log_prob: Array
+    log_probs: Array
 
 
 class OuterState(NamedTuple):
