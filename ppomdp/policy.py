@@ -9,7 +9,7 @@ from flax import linen as nn
 from flax.training.train_state import TrainState
 from jax import Array
 
-from ppomdp.core import LSTMCarry, RecurrentPolicy
+from ppomdp.core import LSTMCarry, RecurrentPolicy, OuterParticles
 
 
 class LSTM(nn.Module):
@@ -23,7 +23,6 @@ class LSTM(nn.Module):
         recurr_size (Sequence[int]): Sizes of the recurrent layers.
         output_size (Sequence[int]): Sizes of the output layers.
         init_log_std (Callable): Initializer for the log standard deviation parameter.
-        init_kernel (Callable): Initializer for the kernel weights.
     """
 
     dim: int
@@ -32,7 +31,6 @@ class LSTM(nn.Module):
     recurr_size: Sequence[int]
     output_size: Sequence[int]
     init_log_std: Callable = nn.initializers.ones
-    init_kernel: Callable = nn.initializers.he_uniform()
 
     @nn.compact
     def __call__(
@@ -68,10 +66,11 @@ def reset_policy(batch_size: int, lstm: LSTM) -> list[LSTMCarry]:
     return carry
 
 
-def squash_policy(bijector: Chain, actions: Array, log_std: Array) -> Transformed:
-    raw = MultivariateNormalDiag(loc=actions, scale_diag=jnp.exp(log_std))
-    squashed = Transformed(distribution=raw, bijector=Block(bijector, ndims=1))
-    return squashed
+def squash_policy(
+    mean: Array, log_std: Array, bijector: Chain
+) -> Transformed:
+    dist = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+    return Transformed(distribution=dist, bijector=Block(bijector, ndims=1))
 
 
 def sample_policy(
@@ -82,9 +81,23 @@ def sample_policy(
     lstm: LSTM,
     bijector: Chain,
 ) -> tuple[list[LSTMCarry], Array]:
-    carry, mean_actions = lstm.apply({"params": params}, carry, observations)
-    dist = squash_policy(bijector, mean_actions, params["log_std"])
+    carry, m = lstm.apply({"params": params}, carry, observations)
+    dist = squash_policy(m, params["log_std"], bijector)
     return carry, dist.sample(seed=rng_key)
+
+
+def sample_and_log_prob_policy(
+    rng_key: PRNGKey,
+    observations: Array,
+    carry: list[LSTMCarry],
+    params: Dict,
+    lstm: LSTM,
+    bijector: Chain,
+) -> tuple[list[LSTMCarry], Array, Array]:
+    carry, m = lstm.apply({"params": params}, carry, observations)
+    dist = squash_policy(m, params["log_std"], bijector)
+    action, log_prob = dist.sample_and_log_prob(seed=rng_key)
+    return carry, action, log_prob
 
 
 def log_prob_policy(
@@ -95,8 +108,8 @@ def log_prob_policy(
     lstm: LSTM,
     bijector: Chain,
 ) -> Array:
-    carry, mean_actions = lstm.apply({"params": params}, carry, observations)
-    dist = squash_policy(bijector, mean_actions, params["log_std"])
+    _, m = lstm.apply({"params": params}, carry, observations)
+    dist = squash_policy(m, params["log_std"], bijector)
     return dist.log_prob(actions)
 
 
@@ -106,33 +119,47 @@ def get_recurrent_policy(lstm: LSTM, bijector: Chain):
         reset=partial(reset_policy, lstm=lstm),
         sample=partial(sample_policy, lstm=lstm, bijector=bijector),
         log_prob=partial(log_prob_policy, lstm=lstm, bijector=bijector),
+        sample_and_log_prob=partial(sample_and_log_prob_policy, lstm=lstm, bijector=bijector),
     )
 
 
-@partial(jax.jit, static_argnums=(1,))
-def train_step(
-    train_state: TrainState,
+def accumulate_policy_log_prob(
     policy: RecurrentPolicy,
-    traced_states: tuple[Array, Array, list[LSTMCarry]],
+    params: Dict,
+    particles: OuterParticles
+):
+    def accumulate(log_prob, t):
+        actions = particles.actions[t]
+        observations = particles.observations[t]
+        carry = jax.tree.map(lambda x: x[t - 1], particles.carry)
+        log_prob_inc = policy.log_prob(actions, observations, carry, params)
+        return log_prob + log_prob_inc, log_prob_inc
+
+    num_time_steps, batch_size, _ = particles.actions.shape
+
+    init_actions = particles.actions[0]
+    init_observations = particles.observations[0]
+    init_carry = policy.reset(batch_size)
+    init_log_prob = policy.log_prob(init_actions, init_observations, init_carry, params)
+
+    _, log_prob_inc = jax.lax.scan(
+        accumulate,
+        init_log_prob,
+        jnp.arange(1, num_time_steps - 1)
+    )
+    return jnp.vstack((init_log_prob, log_prob_inc))
+
+
+@partial(jax.jit, static_argnums=(0,))
+def train_step(
+    policy: RecurrentPolicy,
+    train_state: TrainState,
+    particles: OuterParticles,
 ) -> tuple[TrainState, Array]:
+
     def loss_fn(params):
-        batch_size = traced_states[0].shape[1]
-        num_time_steps = traced_states[0].shape[0] - 1
-
-        def accumulate(_, t):
-            observations = traced_states[0][t]
-            actions = traced_states[1][t]
-            carry = jax.lax.cond(
-                t == 0,
-                lambda _: policy.reset(batch_size),
-                lambda _: jax.tree.map(lambda x: x[t - 1], traced_states[2]),
-                t,
-            )
-            log_prob = policy.log_prob(actions, observations, carry, params)
-            return None, log_prob
-
-        _, log_prob = jax.lax.scan(accumulate, None, jnp.arange(num_time_steps))
-        return -1.0 * jnp.mean(jnp.sum(log_prob, axis=0))
+        log_probs = accumulate_policy_log_prob(policy, params, particles)
+        return -1.0 * jnp.mean(jnp.sum(log_probs, axis=0))
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grads = grad_fn(train_state.params)

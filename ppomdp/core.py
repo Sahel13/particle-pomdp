@@ -77,12 +77,20 @@ class LogProbRecurrentPolicy(Protocol):
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
+class SampleAndLogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self, rng_key: PRNGKey, observations: Array, carry: list[LSTMCarry], params: Dict
+    ) -> tuple[list[LSTMCarry], Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
+
+
 class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
     dim: int
     reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
+    sample_and_log_prob: SampleAndLogProbRecurrentPolicy
 
 
 class RewardFn(Protocol):
@@ -94,6 +102,7 @@ class OuterParticles(NamedTuple):
     observations: Array
     actions: Array
     carry: list[LSTMCarry]
+    log_prob: Array
 
 
 class OuterState(NamedTuple):
