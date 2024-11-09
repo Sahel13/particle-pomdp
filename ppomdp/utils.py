@@ -6,6 +6,11 @@ from jax import numpy as jnp
 from chex import PRNGKey
 
 
+def ess(weights: Array) -> Array:
+    """Compute the effective sample size."""
+    return 1.0 / jnp.sum(jnp.square(weights))
+
+
 def systematic_resampling(
     rng_key: PRNGKey, weights: Array, num_samples: int
 ) -> Array:
@@ -80,5 +85,3 @@ def batch_data(
 
     batch_idx = jnp.array_split(batch_idx, num_batches)
     return batch_idx
-
-

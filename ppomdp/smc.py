@@ -16,31 +16,38 @@ from ppomdp.core import (
     RecurrentPolicy,
     RewardFn,
 )
-from ppomdp.utils import systematic_resampling
+from ppomdp.utils import ess, systematic_resampling
 
 
-def resample_inner(rng_key: PRNGKey, state: InnerState) -> InnerState:
-    """Resample the inner particles for a single trajectory.
+def resample_inner(rng_key: PRNGKey, inner_state: InnerState) -> InnerState:
+    """Resample the inner particles for a single outer trajectory.
+
+    Only resamples if the effective sample size is below 75% of the number of particles.
 
     Args:
-        rng_key: PRNGKey
-        state: InnerState
-            The state associated with a single outer trajectory.
+        rng_key: The random number generator key.
+        inner_state: The state associated with a single outer trajectory.
             Leaves have shape (M, ...).
     """
-    num_particles = state.particles.shape[0]
+    num_particles = inner_state.particles.shape[0]
 
-    resampling_idx = systematic_resampling(rng_key, state.weights, num_particles)
-    # resampling_idx = random.choice(
-    #     rng_key, num_particles, shape=(num_particles,), p=state.weights
-    # )
-    inner_state = InnerState(
-        particles=state.particles[resampling_idx],
-        log_weights=jnp.zeros(num_particles),
-        weights=jnp.ones(num_particles) / num_particles,
-        resampling_indices=resampling_idx,
+    def true_fn(state: InnerState) -> InnerState:
+        resampling_idx = systematic_resampling(rng_key, state.weights, num_particles)
+        return InnerState(
+            particles=state.particles[resampling_idx],
+            log_weights=jnp.zeros(num_particles),
+            weights=jnp.ones(num_particles) / num_particles,
+            resampling_indices=resampling_idx,
+        )
+
+    def false_fn(state: InnerState) -> InnerState:
+        resampling_idx = jnp.arange(num_particles)
+        return state._replace(resampling_indices=resampling_idx)
+
+    resampled_state = jax.lax.cond(
+        ess(inner_state.weights) < 0.75 * num_particles, true_fn, false_fn, inner_state
     )
-    return inner_state
+    return resampled_state
 
 
 def propagate_inner(
@@ -155,6 +162,32 @@ def log_potential(
     return tempering * rewards, rewards
 
 
+def resample_outer(
+    rng_key: PRNGKey, outer_state: OuterState, resample: bool
+) -> tuple[OuterState, Array]:
+    num_particles = outer_state.weights.shape[0]
+
+    def true_fn(state: OuterState) -> OuterState:
+        resampling_idx = systematic_resampling(rng_key, state.weights, num_particles)
+        resampled_particles = jax.tree.map(lambda x: x[resampling_idx], state.particles)
+        resampled_rewards = state.rewards[resampling_idx]
+        return OuterState(
+            particles=resampled_particles,
+            log_weights=jnp.zeros(num_particles),
+            weights=jnp.ones(num_particles) / num_particles,
+            rewards=resampled_rewards,
+            resampling_indices=resampling_idx,
+        )
+
+    def false_fn(state: OuterState) -> OuterState:
+        resampling_idx = jnp.arange(num_particles)
+        return state._replace(resampling_indices=resampling_idx)
+
+    predicate = resample and ess(outer_state.weights) < 0.75 * num_particles
+    resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
+    return resampled_state, predicate
+
+
 def smc_init(
     rng_key: PRNGKey,
     num_outer_particles: int,
@@ -221,9 +254,10 @@ def smc_init(
     outer_particles = OuterParticles(observations, actions, carry, log_probs)
     outer_state = OuterState(
         particles=outer_particles,
+        log_weights=jnp.zeros(num_outer_particles),
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
-        rewards=jnp.zeros(num_outer_particles),
         resampling_indices=jnp.arange(num_outer_particles),
+        rewards=jnp.zeros(num_outer_particles),
     )
 
     return outer_state, inner_state
@@ -271,13 +305,9 @@ def smc_step(
 
     # 1. Resample the outer particles.
     key, sub_key = random.split(rng_key)
-    resampling_idx = jax.lax.cond(
-        resample,
-        lambda _: resample_fn(sub_key, outer_state.weights, num_particles),
-        lambda _: jnp.arange(num_particles),
-        operand=None,
-    )
-    particles = jax.tree.map(lambda x: x[resampling_idx], outer_state.particles)
+    outer_state, resampled = resample_outer(sub_key, outer_state, resample)
+    particles = outer_state.particles
+    resampling_idx = outer_state.resampling_indices
     inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
 
     # 2. Resample the inner particles.
@@ -296,7 +326,9 @@ def smc_step(
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         keys[1:], obs_model, inner_state
     )
-    carry, actions, log_probs = policy.sample_and_log_prob(keys[0], observations, particles.carry, params)
+    carry, actions, log_probs = policy.sample_and_log_prob(
+        keys[0], observations, particles.carry, params
+    )
 
     # 5. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
@@ -304,22 +336,30 @@ def smc_step(
     )
 
     # 6. Reweight the outer particles.
-    log_weights, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
+    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
         reward_fn, particles.actions, inner_state, tempering
     )
+    log_weights = log_potentials + outer_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
+
+    # 7. Compute the normalizing constant increment.
+    # Eq. 10.3 in Chopin and Papaspiliopoulos (2020).
+    log_marginal = jax.lax.cond(
+        resampled,
+        lambda _: logsum_weights - jnp.log(num_particles),
+        lambda _: logsum_weights - jax.nn.logsumexp(outer_state.log_weights),
+        None,
+    )
 
     outer_particles = OuterParticles(observations, actions, carry, log_probs)
     outer_state = OuterState(
         particles=outer_particles,
+        log_weights=log_weights,
         weights=weights,
         rewards=rewards,
         resampling_indices=resampling_idx,
     )
-
-    # 7. Compute the normalizing constant increment.
-    log_marginal = logsum_weights - jnp.log(num_particles)
     return outer_state, inner_state, log_marginal
 
 
@@ -421,29 +461,37 @@ def smc(
 def backward_tracing(
     rng_key: Array,
     outer_states: OuterState,
-    inner_states: InnerState
+    inner_states: InnerState,
+    sample: bool = True
 ) -> tuple[OuterState, InnerState]:
-    """
-    Perform backward tracing to trace the ancestors of the outer states.
+    """Genealogy tracking to get the smoothed trajectories.
 
     Args:
-        rng_key: Array
-            The random key for sampling.
-        outer_states: OuterState
-            The outer state containing particles and weights.
-        inner_states
-            The inner states re-arranged according to the outer states.
+        rng_key: The random number generator key.
+        outer_states: The outer states from the output of the SMC algorithm.
+        inner_states: The inner states from the output of the SMC algorithm.
+        sample: If True, sample the genealogy, otherwise trace back all final
+          particles.
 
     Returns:
-        OuterParticle
-            The traced outer particles: observations, actions and carry.
+        The traced outer and inner states.
     """
     num_steps, num_particles = outer_states.weights.shape
 
-    resampling_idx = systematic_resampling(rng_key, outer_states.weights[-1], num_particles)
+    # Sample the states at the final time step.
+    resampling_idx = jax.lax.cond(
+        sample,
+        lambda _: random.choice(
+            rng_key, num_particles, shape=(num_particles,), p=outer_states.weights[-1]
+        ),
+        lambda _: jnp.arange(num_particles),
+        None,
+    )
+
     last_outer = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
     last_inner = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
 
+    # Trace the genealogy for the outer states.
     def tracing_fn(carry, args):
         idx = carry
         states, resampling_indices = args
@@ -461,7 +509,10 @@ def backward_tracing(
         reverse=True
     )
 
-    get_traced_inner = lambda idx, state: jax.tree.map(lambda x: x[idx], state)
+    # Trace the inner states.
+    def get_traced_inner(idx, state):
+        return jax.tree.map(lambda x: x[idx], state)
+
     traced_inner = jax.vmap(get_traced_inner, in_axes=(0, 0))(
         traced_indices,
         jax.tree.map(lambda x: x[:-1], inner_states),
