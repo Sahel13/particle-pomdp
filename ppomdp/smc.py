@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Callable, Dict
 
 import jax
 import jax.numpy as jnp
@@ -279,7 +279,7 @@ def smc_step(
     reward_fn: RewardFn,
     tempering: float,
     resample: bool,
-    resample_fn: callable,
+    resample_fn: Callable,
     outer_state: OuterState,
     inner_state: InnerState,
 ) -> tuple[OuterState, InnerState, Array]:
@@ -301,7 +301,7 @@ def smc_step(
             The tempering parameter, $\eta$.
         resample: bool
             If True, resample, otherwise do not resample.
-        resample_fn: callable
+        resample_fn: Callable
             The resampling function.
         outer_state: OuterState
             Leaves have shape (N, ...).
@@ -378,7 +378,7 @@ def smc(
     reward_fn: RewardFn,
     tempering: float,
     resample: bool = True,
-    resample_fn: callable = systematic_resampling,
+    resample_fn: Callable = systematic_resampling,
 ) -> tuple[OuterState, InnerState, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -408,7 +408,7 @@ def smc(
             The tempering parameter.
         resample: bool
             If True, resample, otherwise do not resample.
-        resample_fn: callable
+        resample_fn: Callable
             The resampling function.
 
     Returns:
