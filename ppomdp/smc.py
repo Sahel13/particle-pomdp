@@ -164,7 +164,7 @@ def log_potential(
 
 def resample_outer(
     rng_key: PRNGKey, outer_state: OuterState, resample: bool
-) -> tuple[OuterState, Array]:
+) -> OuterState:
     num_particles = outer_state.weights.shape[0]
 
     def true_fn(state: OuterState) -> OuterState:
@@ -185,7 +185,7 @@ def resample_outer(
 
     predicate = resample and ess(outer_state.weights) < 0.75 * num_particles
     resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
-    return resampled_state, predicate
+    return resampled_state
 
 
 def smc_init(
@@ -305,7 +305,7 @@ def smc_step(
 
     # 1. Resample the outer particles.
     key, sub_key = random.split(rng_key)
-    outer_state, resampled = resample_outer(sub_key, outer_state, resample)
+    outer_state = resample_outer(sub_key, outer_state, resample)
     particles = outer_state.particles
     resampling_idx = outer_state.resampling_indices
     inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
@@ -345,12 +345,7 @@ def smc_step(
 
     # 7. Compute the normalizing constant increment.
     # Eq. 10.3 in Chopin and Papaspiliopoulos (2020).
-    log_marginal = jax.lax.cond(
-        resampled,
-        lambda _: logsum_weights - jnp.log(num_particles),
-        lambda _: logsum_weights - jax.nn.logsumexp(outer_state.log_weights),
-        None,
-    )
+    log_marginal = logsum_weights - jax.nn.logsumexp(outer_state.log_weights)
 
     outer_particles = OuterParticles(observations, actions, carry, log_probs)
     outer_state = OuterState(
