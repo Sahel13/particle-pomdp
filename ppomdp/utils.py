@@ -5,7 +5,7 @@ from jax import Array, random
 from jax import numpy as jnp
 
 
-def ess(weights: Array) -> Array:
+def effective_sample_size(weights: Array) -> Array:
     """Compute the effective sample size."""
     return 1.0 / jnp.sum(jnp.square(weights))
 
