@@ -120,8 +120,9 @@ def sample_marginal_obs(
 
 def expected_reward(
     reward_fn: RewardFn,
-    action: Array,
     inner_state: InnerState,
+    action: Array,
+    time_idx: int
 ) -> Array:
     """
     Calculate the expected reward for a given particle and inner state.
@@ -129,23 +130,26 @@ def expected_reward(
     Args:
         reward_fn: RewardFn
             The reward function, r(s_{t], a_{t-1}).
-        action: Array
-            Action particle.
         inner_state: InnerState
             The inner state containing particles and weights.
+        action: Array
+            Action particle.
+        time_idx: int
+            The current time index.
 
     Returns:
         Array: The cumulative return for the given particle and inner state.
     """
-    rewards = jax.vmap(reward_fn, in_axes=(0, None))(inner_state.particles, action)
+    rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(inner_state.particles, action, time_idx)
     return jnp.sum(rewards * inner_state.weights)
 
 
 def log_potential(
     reward_fn: RewardFn,
-    action: Array,
     inner_state: InnerState,
-    tempering: float,
+    action: Array,
+    time_idx: int,
+    tempering: float
 ) -> tuple[Array, Array]:
     r"""Estimate the log potential function.
 
@@ -155,15 +159,17 @@ def log_potential(
 
     Args:
         reward_fn: RewardFn
-        action: Array
-            Action particle $a_t^n$.
         inner_state: InnerState
             The inner state associated with the n-th outer trajectory.
             Leaves have shape (M, ...).
+        action: Array
+            Action particle $a_t^n$.
+        time_idx: int
+            The current time index.
         tempering: float
             The tempering parameter
     """
-    rewards = expected_reward(reward_fn, action, inner_state)
+    rewards = expected_reward(reward_fn, inner_state, action, time_idx)
     return tempering * rewards, rewards
 
 
@@ -277,6 +283,7 @@ def smc_init(
 
 
 def smc_step(
+    time_idx: int,
     rng_key: PRNGKey,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
@@ -313,6 +320,8 @@ def smc_step(
             Leaves have shape (N, ...).
         inner_state: InnerState
             Leaves have shape (N, M, ...).
+        time_idx: int
+            The current time index.
     """
     num_particles = outer_state.weights.shape[0]
 
@@ -349,8 +358,8 @@ def smc_step(
     )
 
     # 6. Reweight the outer particles.
-    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None))(
-        reward_fn, particles.actions, inner_state, tempering
+    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None, None))(
+        reward_fn, inner_state, particles.actions, time_idx, tempering
     )
     log_weights = log_potentials + outer_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
@@ -423,10 +432,12 @@ def smc(
             with the normalizing constant estimate.
     """
 
-    def smc_loop(carry: tuple[OuterState, InnerState, Array], rng_key: PRNGKey):
+    def smc_loop(carry: tuple[OuterState, InnerState, Array], args: tuple[int, PRNGKey]):
         outer_state, inner_state, log_marginal = carry
+        time_idx, rng_key = args
 
         outer_state, inner_state, log_marginal_incr = smc_step(
+            time_idx,
             rng_key,
             trans_model,
             obs_model,
@@ -454,9 +465,12 @@ def smc(
         params,
     )
 
+    time_indices = jnp.arange(num_time_steps)
     keys = random.split(loop_key, num_time_steps)
     (_, _, log_marginal), (outer_states, inner_states) = jax.lax.scan(
-        smc_loop, (init_outer_state, init_inner_state, jnp.array(0.0)), keys
+        smc_loop,
+        (init_outer_state, init_inner_state, jnp.array(0.0)),
+        (time_indices, keys),
     )
 
     def concat_trees(x, y):

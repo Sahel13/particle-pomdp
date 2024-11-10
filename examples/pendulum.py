@@ -58,7 +58,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return obs_noise.log_prob(z - s)
 
 
-def reward_fn(s: Array, a: Array) -> Array:
+def reward_fn(s: Array, a: Array, t: int) -> Array:
     Q = jnp.array([10.0, 0.1])
     R = 1e-3
     goal = jnp.array([jnp.pi, 0.0])
