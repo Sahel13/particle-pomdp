@@ -120,7 +120,7 @@ class OuterState(NamedTuple):
         particles: NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
         log_weights: Log weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
         weights: Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
-        resampling_indecies: Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
+        resampling_indices: Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
         rewards: Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
     """
 
