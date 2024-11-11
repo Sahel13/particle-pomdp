@@ -9,6 +9,7 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from jax import Array, random
 from matplotlib import pyplot as plt
+from functools import partial
 
 from ppomdp.bijector import Tanh
 from ppomdp.core import ObservationModel, TransitionModel
@@ -61,8 +62,8 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 
 def reward_fn(s: Array, a: Array) -> Array:
-    Q = jnp.array([100.0, 0.1])
-    R = 1e-3
+    Q = jnp.array([10.0, 1.0])
+    R = 1e-2
     goal = jnp.array([jnp.pi, 0.0])
 
     def wrap_angle(q: Array) -> Array:
@@ -112,6 +113,53 @@ init_obs = random.normal(obs_key, (num_outer_particles, obs_dim))
 init_params = lstm.init(param_key, init_carry, init_obs)["params"]
 tx = optax.adam(learning_rate)
 train_state = TrainState.create(apply_fn=lstm.apply, params=init_params, tx=tx)
+
+# Run SMC and plot smoothed trajectories.
+key, sub_key = random.split(key)
+outer_states, inner_states, _ = smc(
+    sub_key,
+    num_outer_particles,
+    num_inner_particles,
+    num_time_steps,
+    prior_dist,
+    trans_model,
+    obs_model,
+    policy,
+    train_state.params,
+    reward_fn,
+    tempering=tempering,
+)
+
+# trace ancestors of outer states
+key, sub_key = random.split(key)
+traced_outer_states, traced_inner_states = backward_tracing(sub_key, outer_states, inner_states)
+
+@partial(jnp.vectorize, signature="(n,d),(n)->(d)")
+def compute_empirical_mean(particles: Array, weights: Array) -> Array:
+    return jnp.sum(particles * weights[:, None], axis=0)
+
+key, sub_key = random.split(key)
+random_idx = random.choice(sub_key, num_outer_particles)
+mean_particles = compute_empirical_mean(traced_inner_states.particles, traced_inner_states.weights)
+angles = mean_particles[:, :, 0]
+angular_velocities = mean_particles[:, :, 1]
+actions = traced_outer_states.particles.actions[:, :, 0]
+
+fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+# Set a title for the plots
+fig.suptitle("Smoothed trajectories")
+axs[0].plot(angles, label="angle")
+axs[0].set_ylabel("Angle")
+axs[0].grid(True)
+axs[1].plot(angular_velocities, label="angular velocity")
+axs[1].set_ylabel("Angular velocity")
+axs[1].grid(True)
+axs[2].plot(actions, label="action")
+axs[2].set_ylabel("Action")
+axs[2].set_xlabel("Time step")
+axs[2].grid(True)
+plt.tight_layout()
+plt.show()
 
 # The training loop
 for i in range(1, num_epochs + 1):
