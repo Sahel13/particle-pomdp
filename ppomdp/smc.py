@@ -274,9 +274,9 @@ def smc_init(
     # Initialize dummy actions and policy carry.
     init_carry = policy.reset(num_outer_particles)
     dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
-    log_probs = jnp.zeros(num_outer_particles)
+    init_log_probs = jnp.zeros(num_outer_particles)
 
-    outer_particles = OuterParticles(observations, dummy_actions, init_carry, log_probs)
+    outer_particles = OuterParticles(observations, dummy_actions, init_carry, init_log_probs)
     outer_state = OuterState(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
