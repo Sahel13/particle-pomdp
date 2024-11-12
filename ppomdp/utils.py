@@ -14,7 +14,7 @@ def weighted_mean(particles: Array, weights: Array):
 
 @partial(jnp.vectorize, signature="(m,h),(m)->(h,h)")
 def weighted_covar(particles: Array, weights: Array) -> Array:
-    centered = particles - jnp.average(particles, weights=weights, axis=0)
+    centered = particles - weighted_mean(particles, weights)
     return jnp.einsum('mh,ml,m->hl', centered, centered, weights) / jnp.sum(weights)
 
 
