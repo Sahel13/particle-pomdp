@@ -1,4 +1,3 @@
-from copy import deepcopy
 from functools import partial
 from typing import Callable
 
@@ -121,7 +120,7 @@ train_state = TrainState.create(apply_fn=lstm.apply, params=init_params, tx=tx)
 for i in range(1, num_epochs + 1):
     # run nested smc
     key, sub_key = random.split(key)
-    outer_states, inner_states, log_marginal = smc(
+    outer_states, inner_states, inner_infos, log_marginal = smc(
         sub_key,
         num_outer_particles,
         num_inner_particles,
@@ -137,7 +136,8 @@ for i in range(1, num_epochs + 1):
 
     # trace ancestors of outer states
     key, sub_key = random.split(key)
-    traced_outer, _ = backward_tracing(sub_key, outer_states, inner_states)
+    traced_outer, _, _ = \
+        backward_tracing(sub_key, outer_states, inner_states, inner_infos)
 
     # update policy parameters
     loss = 0.0
