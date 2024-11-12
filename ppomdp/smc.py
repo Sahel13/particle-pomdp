@@ -256,9 +256,9 @@ def smc_init(
     )
 
     # sample marginal observations
-    keys = random.split(key, num_outer_particles + 1)
+    keys = random.split(key, num_outer_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys[1:], obs_model, inner_state
+        keys, obs_model, inner_state
     )
 
     # reweight inner particles
@@ -271,19 +271,17 @@ def smc_init(
         covar=weighted_covar(inner_state.particles, inner_state.weights)
     )
 
-    # sample actions from policy
-    key, sub_key = random.split(keys[0])
+    # Initialize dummy actions and policy carry.
     init_carry = policy.reset(num_outer_particles)
-    carry, actions, log_probs = policy.sample_and_log_prob(
-        sub_key, observations, init_carry, params
-    )
+    dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
+    log_probs = jnp.zeros(num_outer_particles)
 
-    outer_particles = OuterParticles(observations, actions, carry, log_probs)
+    outer_particles = OuterParticles(observations, dummy_actions, init_carry, log_probs)
     outer_state = OuterState(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
-        resampling_indices=jnp.arange(num_outer_particles),
+        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int_),
         rewards=jnp.zeros(num_outer_particles),
     )
 
@@ -346,23 +344,26 @@ def smc_step(
         keys[1:], inner_state, resample_fn
     )
 
-    # 3. Propagate the inner particles.
-    keys = random.split(keys[0], num_particles + 1)
+    # 3. Sample new actions.
+    key, sub_key = random.split(keys[0])
+    carry, actions, log_probs = policy.sample_and_log_prob(
+        sub_key, particles.observations, particles.carry, params
+    )
+
+    # 4. Propagate the inner particles.
+    keys = random.split(key, num_particles + 1)
     inner_particles = jax.vmap(propagate_inner, in_axes=(0, None, 0, 0))(
-        keys[1:], trans_model, inner_state.particles, particles.actions
+        keys[1:], trans_model, inner_state.particles, actions
     )
     inner_state = inner_state._replace(particles=inner_particles)
 
-    # 4. Propagate the outer particles.
-    keys = random.split(keys[0], num_particles + 1)
+    # 5. Sample new observations.
+    keys = random.split(keys[0], num_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys[1:], obs_model, inner_state
-    )
-    carry, actions, log_probs = policy.sample_and_log_prob(
-        keys[0], observations, particles.carry, params
+        keys, obs_model, inner_state
     )
 
-    # 5. Reweight the inner particles.
+    # 6. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
         obs_model, inner_state, observations
     )
@@ -372,15 +373,15 @@ def smc_step(
         covar=weighted_covar(inner_state.particles, inner_state.weights)
     )
 
-    # 6. Reweight the outer particles.
+    # 7. Reweight the outer particles.
     log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None, None))(
-        reward_fn, inner_state, particles.actions, time_idx, tempering
+        reward_fn, inner_state, actions, time_idx, tempering
     )
     log_weights = log_potentials + outer_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
 
-    # 7. Compute the normalizing constant increment.
+    # 8. Compute the normalizing constant increment.
     # Eq. 10.3 in Chopin and Papaspiliopoulos (2020).
     log_marginal = logsum_weights - jax.nn.logsumexp(outer_state.log_weights)
 
