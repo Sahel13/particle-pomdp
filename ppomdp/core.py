@@ -145,3 +145,9 @@ class InnerState(NamedTuple):
     log_weights: Array
     weights: Array
     resampling_indices: Array
+
+
+class InnerInfo(NamedTuple):
+    ess: Array
+    mean: Array
+    covar: Array

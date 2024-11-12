@@ -8,6 +8,7 @@ from jax import Array, random
 
 from ppomdp.core import (
     InnerState,
+    InnerInfo,
     ObservationModel,
     OuterParticles,
     OuterState,
@@ -15,7 +16,12 @@ from ppomdp.core import (
     RewardFn,
     TransitionModel,
 )
-from ppomdp.utils import effective_sample_size, systematic_resampling
+from ppomdp.utils import (
+    weighted_mean,
+    weighted_covar,
+    effective_sample_size,
+    systematic_resampling
+)
 
 
 def resample_inner(
@@ -210,7 +216,7 @@ def smc_init(
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
     params: Dict,
-) -> tuple[OuterState, InnerState]:
+) -> tuple[OuterState, InnerState, InnerInfo]:
     r"""Initialize the outer and inner states for the nested SMC algorithm.
 
     This samples from
@@ -245,11 +251,13 @@ def smc_init(
     inner_state = InnerState(
         particles=inner_particles,
         log_weights=jnp.zeros((num_outer_particles, num_inner_particles)),
-        weights=jnp.ones((num_outer_particles, num_inner_particles))
-        / num_inner_particles,
-        resampling_indices=jnp.zeros(
-            (num_outer_particles, num_inner_particles), dtype=jnp.int_
-        ),
+        weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
+        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
+    )
+    inner_info = InnerInfo(
+        ess=effective_sample_size(inner_state.weights),
+        mean=weighted_mean(inner_state.particles, inner_state.weights),
+        covar=weighted_covar(inner_state.particles, inner_state.weights)
     )
 
     # sample marginal observations
@@ -279,7 +287,7 @@ def smc_init(
         rewards=jnp.zeros(num_outer_particles),
     )
 
-    return outer_state, inner_state
+    return outer_state, inner_state, inner_info
 
 
 def smc_step(
@@ -295,7 +303,7 @@ def smc_step(
     resample_fn: Callable,
     outer_state: OuterState,
     inner_state: InnerState,
-) -> tuple[OuterState, InnerState, Array]:
+) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     r"""A single step of the nested SMC algorithm.
 
     Args:
@@ -334,7 +342,9 @@ def smc_step(
 
     # 2. Resample the inner particles.
     keys = random.split(key, num_particles + 1)
-    inner_state = jax.vmap(resample_inner, in_axes=(0, 0, None))(keys[1:], inner_state, resample_fn)
+    inner_state = jax.vmap(resample_inner, in_axes=(0, 0, None))(
+        keys[1:], inner_state, resample_fn
+    )
 
     # 3. Propagate the inner particles.
     keys = random.split(keys[0], num_particles + 1)
@@ -355,6 +365,11 @@ def smc_step(
     # 5. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
         obs_model, inner_state, observations
+    )
+    inner_info = InnerInfo(
+        ess=effective_sample_size(inner_state.weights),
+        mean=weighted_mean(inner_state.particles, inner_state.weights),
+        covar=weighted_covar(inner_state.particles, inner_state.weights)
     )
 
     # 6. Reweight the outer particles.
@@ -377,7 +392,7 @@ def smc_step(
         resampling_indices=resampling_idx,
         rewards=rewards,
     )
-    return outer_state, inner_state, log_marginal
+    return outer_state, inner_state, inner_info, log_marginal
 
 
 def smc(
@@ -394,7 +409,7 @@ def smc(
     tempering: float,
     resample: bool = True,
     resample_fn: Callable = systematic_resampling,
-) -> tuple[OuterState, InnerState, Array]:
+) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
 
@@ -436,7 +451,7 @@ def smc(
         outer_state, inner_state, log_marginal = carry
         time_idx, rng_key = args
 
-        outer_state, inner_state, log_marginal_incr = smc_step(
+        outer_state, inner_state, inner_info, log_marginal_incr = smc_step(
             time_idx,
             rng_key,
             trans_model,
@@ -452,10 +467,10 @@ def smc(
         )
 
         log_marginal += log_marginal_incr
-        return (outer_state, inner_state, log_marginal), (outer_state, inner_state)
+        return (outer_state, inner_state, log_marginal), (outer_state, inner_state, inner_info)
 
     init_key, loop_key = random.split(rng_key, 2)
-    init_outer_state, init_inner_state = smc_init(
+    init_outer_state, init_inner_state, init_inner_info = smc_init(
         init_key,
         num_outer_particles,
         num_inner_particles,
@@ -467,7 +482,7 @@ def smc(
 
     time_indices = jnp.arange(num_time_steps)
     keys = random.split(loop_key, num_time_steps)
-    (_, _, log_marginal), (outer_states, inner_states) = jax.lax.scan(
+    (_, _, log_marginal), (outer_states, inner_states, inner_infos) = jax.lax.scan(
         smc_loop,
         (init_outer_state, init_inner_state, jnp.array(0.0)),
         (time_indices, keys),
@@ -478,22 +493,25 @@ def smc(
 
     outer_states = concat_trees(init_outer_state, outer_states)
     inner_states = concat_trees(init_inner_state, inner_states)
-    return outer_states, inner_states, log_marginal
+    inner_infos = concat_trees(init_inner_info, inner_infos)
+    return outer_states, inner_states, inner_infos, log_marginal
 
 
 def backward_tracing(
     rng_key: Array,
     outer_states: OuterState,
     inner_states: InnerState,
+    inner_infos: InnerInfo,
     resample: bool = True,
     resample_fn: Callable = systematic_resampling,
-) -> tuple[OuterState, InnerState]:
+) -> tuple[OuterState, InnerState, InnerInfo]:
     """Genealogy tracking to get the smoothed trajectories.
 
     Args:
         rng_key: The random number generator key.
-        outer_states: The outer states from the output of the SMC algorithm.
-        inner_states: The inner states from the output of the SMC algorithm.
+        outer_states: The outer states of the outer particle filter.
+        inner_states: The inner states of the inner particle filter.
+        inner_infos: The inner infos of the inner particle filter.
         resample: If True, sample the genealogy, otherwise trace back all final
           particles.
         resample_fn: The resampling function.
@@ -510,8 +528,9 @@ def backward_tracing(
         None,
     )
 
-    last_outer = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
-    last_inner = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
+    last_outer_state = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
+    last_inner_state = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
+    last_inner_info = jax.tree.map(lambda x: x[-1, resampling_idx], inner_infos)
 
     # Trace the genealogy for the outer states.
     def tracing_fn(carry, args):
@@ -521,7 +540,7 @@ def backward_tracing(
         ancestors = jax.tree.map(lambda x: x[a], states)
         return a, (a, ancestors)
 
-    _, (traced_indices, traced_outer) = jax.lax.scan(
+    _, (traced_indices, traced_outer_states) = jax.lax.scan(
         tracing_fn,
         resampling_idx,
         (
@@ -532,17 +551,19 @@ def backward_tracing(
     )
 
     # Trace the inner states.
-    def get_traced_inner(idx, state):
-        return jax.tree.map(lambda x: x[idx], state)
+    def get_traced_inner(idx, state, info):
+        return jax.tree.map(lambda x: x[idx], state), jax.tree.map(lambda x: x[idx], info)
 
-    traced_inner = jax.vmap(get_traced_inner, in_axes=(0, 0))(
+    traced_inner_states, traced_inner_infos = jax.vmap(get_traced_inner, in_axes=(0, 0, 0))(
         traced_indices,
         jax.tree.map(lambda x: x[:-1], inner_states),
+        jax.tree.map(lambda x: x[:-1], inner_infos),
     )
 
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
 
-    traced_outer = concat_trees(traced_outer, last_outer)
-    traced_inner = concat_trees(traced_inner, last_inner)
-    return traced_outer, traced_inner
+    traced_outer_states = concat_trees(traced_outer_states, last_outer_state)
+    traced_inner_states = concat_trees(traced_inner_states, last_inner_state)
+    traced_inner_infos = concat_trees(traced_inner_infos, last_inner_info)
+    return traced_outer_states, traced_inner_states, traced_inner_infos

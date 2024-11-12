@@ -1,8 +1,21 @@
+from functools import partial
+
 import math
 
 from chex import PRNGKey
 from jax import Array, random
 from jax import numpy as jnp
+
+
+@partial(jnp.vectorize, signature="(m,h),(m)->(h)")
+def weighted_mean(particles: Array, weights: Array):
+    return jnp.einsum('mh,m->h', particles, weights) / jnp.sum(weights)
+
+
+@partial(jnp.vectorize, signature="(m,h),(m)->(h,h)")
+def weighted_covar(particles: Array, weights: Array) -> Array:
+    centered = particles - jnp.average(particles, weights=weights, axis=0)
+    return jnp.einsum('mh,ml,m->hl', centered, centered, weights) / jnp.sum(weights)
 
 
 def effective_sample_size(weights: Array) -> Array:
