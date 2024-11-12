@@ -254,11 +254,6 @@ def smc_init(
         weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
         resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
     )
-    inner_info = InnerInfo(
-        ess=effective_sample_size(inner_state.weights),
-        mean=weighted_mean(inner_state.particles, inner_state.weights),
-        covar=weighted_covar(inner_state.particles, inner_state.weights)
-    )
 
     # sample marginal observations
     keys = random.split(key, num_outer_particles + 1)
@@ -269,6 +264,11 @@ def smc_init(
     # reweight inner particles
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
         obs_model, inner_state, observations
+    )
+    inner_info = InnerInfo(
+        ess=effective_sample_size(inner_state.weights),
+        mean=weighted_mean(inner_state.particles, inner_state.weights),
+        covar=weighted_covar(inner_state.particles, inner_state.weights)
     )
 
     # sample actions from policy
