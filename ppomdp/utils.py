@@ -18,6 +18,7 @@ def weighted_covar(particles: Array, weights: Array) -> Array:
     return jnp.einsum('mh,ml,m->hl', centered, centered, weights) / jnp.sum(weights)
 
 
+@partial(jnp.vectorize, signature="(m)->()")
 def effective_sample_size(weights: Array) -> Array:
     """Compute the effective sample size."""
     return 1.0 / jnp.sum(jnp.square(weights))
