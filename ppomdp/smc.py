@@ -154,8 +154,10 @@ def log_potential(
     reward_fn: RewardFn,
     inner_state: InnerState,
     action: Array,
+    prev_action: Array,
     time_idx: int,
-    tempering: float
+    tempering: float,
+    slew_rate_penalty: float,
 ) -> tuple[Array, Array]:
     r"""Estimate the log potential function.
 
@@ -164,19 +166,18 @@ def log_potential(
     \log g_t^n = \eta * \sum_{m=1}^M W_{s,t}^{nm} r_t(s_t^{nm}, a_t^n).
 
     Args:
-        reward_fn: RewardFn
-        inner_state: InnerState
-            The inner state associated with the n-th outer trajectory.
+        reward_fn: The reward function.
+        inner_state: The inner state associated with the n-th outer trajectory.
             Leaves have shape (M, ...).
-        action: Array
-            Action particle $a_t^n$.
-        time_idx: int
-            The current time index.
-        tempering: float
-            The tempering parameter
+        action: The current action.
+        prev_action: The previous action.
+        time_idx: The current time index.
+        tempering: The tempering parameter.
+        slew_rate_penalty: The slew rate penalty.
     """
     rewards = expected_reward(reward_fn, inner_state, action, time_idx)
-    return tempering * rewards, rewards
+    mod_rewards = rewards - slew_rate_penalty * jnp.dot(action - prev_action, action - prev_action)
+    return tempering * mod_rewards, rewards
 
 
 def resample_outer(
@@ -301,6 +302,7 @@ def smc_step(
     resample_fn: Callable,
     outer_state: OuterState,
     inner_state: InnerState,
+    slew_rate_penalty: float,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     r"""A single step of the nested SMC algorithm.
 
@@ -374,8 +376,8 @@ def smc_step(
     )
 
     # 7. Reweight the outer particles.
-    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, None, None))(
-        reward_fn, inner_state, actions, time_idx, tempering
+    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, 0, None, None, None))(
+        reward_fn, inner_state, actions, particles.actions, time_idx, tempering, slew_rate_penalty
     )
     log_weights = log_potentials + outer_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
@@ -410,6 +412,7 @@ def smc(
     tempering: float,
     resample: bool = True,
     resample_fn: Callable = systematic_resampling,
+    slew_rate_penalty: float = 0.05,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -465,6 +468,7 @@ def smc(
             resample_fn,
             outer_state,
             inner_state,
+            slew_rate_penalty,
         )
 
         log_marginal += log_marginal_incr
