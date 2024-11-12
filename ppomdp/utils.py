@@ -9,11 +9,31 @@ from jax import numpy as jnp
 
 @partial(jnp.vectorize, signature="(m,h),(m)->(h)")
 def weighted_mean(particles: Array, weights: Array):
+    """
+    Compute the weighted mean of the particles.
+
+    Args:
+        particles (Array): The particles array of shape (m, h), where m is the number of particles and h is the dimension.
+        weights (Array): The weights array of shape (m,).
+
+    Returns:
+        Array: The weighted mean of the particles of shape (h,).
+    """
     return jnp.einsum('mh,m->h', particles, weights) / jnp.sum(weights)
 
 
 @partial(jnp.vectorize, signature="(m,h),(m)->(h,h)")
 def weighted_covar(particles: Array, weights: Array) -> Array:
+    """
+    Compute the weighted empirical covariance of the particles.
+
+    Args:
+        particles (Array): The particles array of shape (m, h), where m is the number of particles and h is the dimension.
+        weights (Array): The weights array of shape (m,).
+
+    Returns:
+        Array: The weighted covariance matrix of shape (h, h).
+    """
     centered = particles - weighted_mean(particles, weights)
     return jnp.einsum('mh,ml,m->hl', centered, centered, weights) / jnp.sum(weights)
 
