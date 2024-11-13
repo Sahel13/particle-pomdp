@@ -15,6 +15,7 @@ from ppomdp.bijector import Tanh
 from ppomdp.core import ObservationModel, TransitionModel
 from ppomdp.policy import LSTM, get_recurrent_policy, train_step
 from ppomdp.smc import backward_tracing, smc
+
 from ppomdp.utils import batch_data
 
 jax.config.update("jax_enable_x64", True)
@@ -48,7 +49,7 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 
 def get_obs(s: Array) -> Array:
-    """Position in Cartesian coordinates."""
+    """The observation is the position of the bob in Cartesian coordinates."""
     return jnp.array((jnp.sin(s[0]), jnp.cos(s[0])))
 
 
@@ -61,7 +62,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return obs_noise.log_prob(z - mean_obs)
 
 
-def reward_fn(s: Array, a: Array) -> Array:
+def reward_fn(s: Array, a: Array, _: int) -> Array:
     Q = jnp.array([10.0, 1.0])
     R = 1e-2
     goal = jnp.array([jnp.pi, 0.0])
@@ -78,17 +79,13 @@ state_dim = 2
 action_dim = 1
 obs_dim = 2
 
-num_outer_particles = 256
-num_inner_particles = 256
-num_time_steps = 100
-
 lstm = LSTM(
     dim=action_dim,
     feature_fn=lambda x: x,
     encoder_size=[256, 256],
-    recurr_size=[64, 64],
+    recurr_size=[128, 128],
     output_size=[256, 256],
-    init_log_std=constant(jnp.log(jnp.sqrt(1.0))),
+    init_log_std=constant(jnp.log(1.0)),
 )
 bijector = Chain([ScalarAffine(0.0, 2.5), Tanh()])
 
@@ -100,11 +97,14 @@ trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 policy = get_recurrent_policy(lstm, bijector)
 
-rng_key = random.PRNGKey(77)
+rng_key = random.PRNGKey(10)
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 25
-tempering = 0.2
+num_epochs = 200
+tempering = 0.1
+num_outer_particles = 256
+num_inner_particles = 256
+num_time_steps = 100
 
 # Initialize training state
 key, obs_key, param_key = random.split(rng_key, 3)
@@ -116,7 +116,7 @@ train_state = TrainState.create(apply_fn=lstm.apply, params=init_params, tx=tx)
 
 # Run SMC and plot smoothed trajectories.
 key, sub_key = random.split(key)
-outer_states, inner_states, _ = smc(
+outer_states, inner_states, inner_infos, _ = smc(
     sub_key,
     num_outer_particles,
     num_inner_particles,
@@ -128,11 +128,12 @@ outer_states, inner_states, _ = smc(
     train_state.params,
     reward_fn,
     tempering=tempering,
+    slew_rate_penalty=0.05,
 )
 
 # trace ancestors of outer states
 key, sub_key = random.split(key)
-traced_outer_states, traced_inner_states = backward_tracing(sub_key, outer_states, inner_states)
+traced_outer_states, traced_inner_states, _ = backward_tracing(sub_key, outer_states, inner_states, inner_infos)
 
 @partial(jnp.vectorize, signature="(n,d),(n)->(d)")
 def compute_empirical_mean(particles: Array, weights: Array) -> Array:
@@ -165,7 +166,7 @@ plt.show()
 for i in range(1, num_epochs + 1):
     # run nested smc
     key, sub_key = random.split(key)
-    outer_states, inner_states, log_marginal = smc(
+    outer_states, inner_states, inner_infos, log_marginal = smc(
         sub_key,
         num_outer_particles,
         num_inner_particles,
@@ -181,7 +182,7 @@ for i in range(1, num_epochs + 1):
 
     # trace ancestors of outer states
     key, sub_key = random.split(key)
-    traced_outer, _ = backward_tracing(sub_key, outer_states, inner_states)
+    traced_outer, _, _ = backward_tracing(sub_key, outer_states, inner_states, inner_infos)
 
     # update policy parameters
     loss = 0.0
@@ -192,7 +193,8 @@ for i in range(1, num_epochs + 1):
         train_state, batch_loss = train_step(policy, train_state, outer_batch)
         loss += batch_loss
 
-    print(f"Iter: {i}, Loss: {loss}, Log marginal: {log_marginal}")
+    log_std = train_state.params["log_std"][0]
+    print(f"Iter: {i:2d}, Log marginal: {log_marginal:10.3f}, Log std: {log_std:10.3f}")
 
 
 train_state.params["log_std"] = -20.0 * jnp.ones((1,))
@@ -229,14 +231,19 @@ observations = jnp.squeeze(jnp.array(observations))
 
 # Plot the results
 fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+fig.suptitle("Simulated trajectories")
+
 axs[0].plot(states[:, 0])
 axs[0].set_ylabel("Angle")
 axs[0].grid(True)
+
 axs[1].plot(states[:, 1])
 axs[1].set_ylabel("Angular Velocity")
 axs[1].grid(True)
+
 axs[2].plot(actions)
 axs[2].set_ylabel("Action")
 axs[2].grid(True)
+
 plt.tight_layout()
 plt.show()
