@@ -410,9 +410,9 @@ def smc(
     params: Dict,
     reward_fn: RewardFn,
     tempering: float,
+    slew_rate_penalty: float,
     resample: bool = True,
     resample_fn: Callable = systematic_resampling,
-    slew_rate_penalty: float = 0.05,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
