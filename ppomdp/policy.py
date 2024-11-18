@@ -125,25 +125,18 @@ def get_recurrent_policy(lstm: LSTM, bijector: Chain):
 
 def log_prob_policy_pathwise(
     policy: RecurrentPolicy, params: Dict, particles: OuterParticles
-):
-    def body(log_prob, t):
+) -> Array:
+    def body(t, log_probs):
         actions = particles.actions[t]
-        observations = particles.observations[t]
+        observations = particles.observations[t - 1]
         carry = jax.tree.map(lambda x: x[t - 1], particles.carry)
-        log_prob_inc = policy.log_prob(actions, observations, carry, params)
-        return log_prob + log_prob_inc, log_prob_inc
+        log_prob_incs = policy.log_prob(actions, observations, carry, params)
+        return log_probs + log_prob_incs
 
     num_time_steps, batch_size, _ = particles.actions.shape
-
-    init_actions = particles.actions[0]
-    init_observations = particles.observations[0]
-    init_carry = policy.reset(batch_size)
-    init_log_prob = policy.log_prob(init_actions, init_observations, init_carry, params)
-
-    _, log_prob_inc = jax.lax.scan(
-        body, init_log_prob, jnp.arange(1, num_time_steps - 1)
-    )
-    return jnp.vstack((init_log_prob, log_prob_inc))
+    init_log_probs = jnp.zeros(batch_size)
+    log_probs = jax.lax.fori_loop(1, num_time_steps, body, init_log_probs)
+    return log_probs
 
 
 @partial(jax.jit, static_argnums=(0,))
@@ -154,7 +147,7 @@ def train_step(
 ) -> tuple[TrainState, Array]:
     def loss_fn(params):
         log_probs = log_prob_policy_pathwise(policy, params, particles)
-        return -1.0 * jnp.mean(jnp.sum(log_probs, axis=0))
+        return -1.0 * jnp.mean(log_probs)
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grads = grad_fn(train_state.params)
