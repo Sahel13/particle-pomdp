@@ -1,25 +1,26 @@
 import time
 
 import jax
+from jax import random
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
-import optax
-from distrax import Chain, MultivariateNormalDiag, ScalarAffine
-from environment import obs_model, reward_fn, trans_model
+
+from distrax import Chain, ScalarAffine
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from jax import random
 
 from ppomdp.bijector import Tanh
 from ppomdp.policy import LSTM, get_recurrent_policy, train_step
 from ppomdp.smc import backward_tracing, smc
 from ppomdp.utils import batch_data, weighted_mean
 
+import optax
+import matplotlib.pyplot as plt
+
+from environment import prior_dist, trans_model, obs_model, reward_fn
+from environment import state_dim, action_dim, obs_dim, num_time_steps
+
 jax.config.update("jax_enable_x64", True)
 
-state_dim = 2
-action_dim = 1
-obs_dim = 2
 
 lstm = LSTM(
     dim=action_dim,
@@ -30,9 +31,6 @@ lstm = LSTM(
     init_log_std=constant(jnp.log(1.0)),
 )
 bijector = Chain([ScalarAffine(0.0, 2.5), Tanh()])
-prior_dist = MultivariateNormalDiag(
-    loc=jnp.zeros((state_dim,)), scale_diag=jnp.ones((state_dim,)) * 1e-16
-)
 policy = get_recurrent_policy(lstm, bijector)
 
 rng_key = random.PRNGKey(10)
@@ -42,7 +40,6 @@ num_epochs = 400
 tempering = 0.1
 num_outer_particles = 256
 num_inner_particles = 256
-num_time_steps = 100
 
 # Initialize training state
 key, obs_key, param_key = random.split(rng_key, 3)

@@ -11,6 +11,12 @@ from ppomdp.core import ObservationModel, TransitionModel
 jax.config.update("jax_enable_x64", True)
 
 
+state_dim = 4
+action_dim = 1
+obs_dim = 2
+num_time_steps = 100
+
+
 def euler_step(deriv_fn: Callable, s: Array, a: Array, dt: float) -> Array:
     return s + deriv_fn(s, a) * dt
 
@@ -78,5 +84,9 @@ def reward_fn(s: Array, a: Array, _: int) -> Array:
     return -0.5 * cost
 
 
+prior_dist = MultivariateNormalDiag(
+    loc=jnp.zeros((state_dim,)),
+    scale_diag=jnp.ones((state_dim,)) * 1e-16
+)
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)

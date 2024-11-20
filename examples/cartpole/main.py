@@ -2,25 +2,25 @@ import time
 from functools import partial
 
 import jax
+from jax import random
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
-import optax
-from distrax import Chain, MultivariateNormalDiag, ScalarAffine
-from environment import obs_model, reward_fn, trans_model
+
+from distrax import Chain, ScalarAffine
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from jax import random
 
 from ppomdp.bijector import Tanh
 from ppomdp.policy import LSTM, get_recurrent_policy, train_step
 from ppomdp.smc import backward_tracing, smc
 from ppomdp.utils import batch_data, weighted_mean
 
-jax.config.update("jax_enable_x64", True)
+import optax
+import matplotlib.pyplot as plt
 
-state_dim = 4
-action_dim = 1
-obs_dim = 2
+from environment import prior_dist, trans_model, obs_model, reward_fn
+from environment import state_dim, action_dim, obs_dim, num_time_steps
+
+jax.config.update("jax_enable_x64", True)
 
 
 @partial(jnp.vectorize, signature="(m)->(n)")
@@ -37,9 +37,6 @@ lstm = LSTM(
     init_log_std=constant(jnp.log(2.0)),
 )
 bijector = Chain([ScalarAffine(0.0, 50.0), Tanh()])
-prior_dist = MultivariateNormalDiag(
-    loc=jnp.zeros((state_dim,)), scale_diag=jnp.ones((state_dim,)) * 1e-16
-)
 policy = get_recurrent_policy(lstm, bijector)
 
 rng_key = random.PRNGKey(1)
@@ -50,7 +47,6 @@ tempering = 0.05
 slew_rate_penalty = 0.005
 num_outer_particles = 512
 num_inner_particles = 256
-num_time_steps = 100
 
 # Initialize training state
 key, obs_key, param_key = random.split(rng_key, 3)
@@ -62,7 +58,7 @@ tx = optax.adam(scheduler)
 train_state = TrainState.create(apply_fn=lstm.apply, params=init_params, tx=tx)
 
 jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9, 10))
-jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5))
+jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5,))
 
 # Run SMC and plot smoothed trajectories.
 key, sub_key = random.split(key)
