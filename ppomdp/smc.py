@@ -298,11 +298,11 @@ def smc_step(
     params: Dict,
     reward_fn: RewardFn,
     tempering: float,
+    slew_rate_penalty: float,
     resample: bool,
     resample_fn: Callable,
     outer_state: OuterState,
     inner_state: InnerState,
-    slew_rate_penalty: float,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     r"""A single step of the nested SMC algorithm.
 
@@ -320,6 +320,8 @@ def smc_step(
             The reward function, $r(s_t, a_t)$.
         tempering: float
             The tempering parameter, $\eta$.
+        slew_rate_penalty: float
+            The slew rate penalty.
         resample: bool
             If True, resample, otherwise do not resample.
         resample_fn: Callable
@@ -440,6 +442,8 @@ def smc(
             The reward function.
         tempering: float
             The tempering parameter.
+        slew_rate_penalty: float
+            The slew rate penalty.
         resample: bool
             If True, resample, otherwise do not resample.
         resample_fn: Callable
@@ -464,11 +468,11 @@ def smc(
             params,
             reward_fn,
             tempering,
+            slew_rate_penalty,
             resample,
             resample_fn,
             outer_state,
             inner_state,
-            slew_rate_penalty,
         )
 
         log_marginal += log_marginal_incr

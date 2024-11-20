@@ -97,6 +97,14 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
 
 
+class EntropyRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        params: Dict,
+    ) -> Array:
+        r"""Compute the entropy of $\pi_\phi$."""
+
+
 class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
 
@@ -105,6 +113,7 @@ class RecurrentPolicy(NamedTuple):
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
+    entropy: EntropyRecurrentPolicy
 
 
 class RewardFn(Protocol):

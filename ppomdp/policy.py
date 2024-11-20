@@ -180,6 +180,18 @@ def log_prob_policy(
     return dist.log_prob(actions)
 
 
+def entropy_policy(
+    params: Dict,
+    network: Union[LSTM, GRU],
+    bijector: Chain,
+) -> Array:
+    sigma = jnp.diag(jnp.exp(2. * params["log_std"]))
+    return (
+        network.dim * jnp.log(2.0 * jnp.pi * jnp.exp(1))
+        + jnp.linalg.slogdet(sigma)[1]
+    ) / 2.0
+
+
 def get_recurrent_policy(network: Union[LSTM, GRU], bijector: Chain):
     return RecurrentPolicy(
         dim=network.dim,
@@ -189,6 +201,7 @@ def get_recurrent_policy(network: Union[LSTM, GRU], bijector: Chain):
         sample_and_log_prob=partial(
             sample_and_log_prob_policy, network=network, bijector=bijector
         ),
+        entropy=partial(entropy_policy, network=network, bijector=bijector),
     )
 
 
