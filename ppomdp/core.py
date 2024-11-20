@@ -1,9 +1,11 @@
-from typing import Dict, NamedTuple, Protocol
+from typing import Dict, NamedTuple, Protocol, Union
 
 from chex import PRNGKey
 from jax import Array
 
 LSTMCarry = tuple[Array, Array]
+GRUCarry = Array
+Carry = Union[LSTMCarry, GRUCarry]
 
 
 class SampleTransition(Protocol):
@@ -58,7 +60,7 @@ class Policy(NamedTuple):
 
 
 class ResetRecurrentPolicy(Protocol):
-    def __call__(self, batch_size: int) -> list[LSTMCarry]:
+    def __call__(self, batch_size: int) -> list[Carry]:
         r"""Reset the recurrent state of the policy."""
 
 
@@ -67,15 +69,19 @@ class SampleRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         observations: Array,
-        carry: list[LSTMCarry],
+        carry: list[Carry],
         params: Dict,
-    ) -> tuple[list[LSTMCarry], Array]:
+    ) -> tuple[list[Carry], Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
     def __call__(
-        self, actions: Array, observations: Array, carry: list[LSTMCarry], params: Dict
+        self,
+        actions: Array,
+        observations: Array,
+        carry: list[Carry],
+        params: Dict
     ) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
 
@@ -85,9 +91,9 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         observations: Array,
-        carry: list[LSTMCarry],
+        carry: list[Carry],
         params: Dict,
-    ) -> tuple[list[LSTMCarry], Array, Array]:
+    ) -> tuple[list[Carry], Array, Array]:
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
 
 
@@ -109,7 +115,7 @@ class RewardFn(Protocol):
 class OuterParticles(NamedTuple):
     observations: Array
     actions: Array
-    carry: list[LSTMCarry]
+    carry: list[Carry]
     log_probs: Array
 
 
