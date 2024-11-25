@@ -457,11 +457,11 @@ def smc(
 
     def smc_loop(carry: tuple[OuterState, InnerState, Array], args: tuple[int, PRNGKey]):
         outer_state, inner_state, log_marginal = carry
-        time_idx, rng_key = args
+        time_idx, key = args
 
         outer_state, inner_state, inner_info, log_marginal_incr = smc_step(
             time_idx,
-            rng_key,
+            key,
             trans_model,
             obs_model,
             policy,
