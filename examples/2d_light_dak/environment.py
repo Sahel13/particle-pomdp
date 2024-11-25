@@ -56,14 +56,10 @@ def mean_obs(s: Array) -> Array:
 
 
 def stddev_obs(s: Array) -> Array:
-    b = jnp.array([5.0, 0.0])  # beacon position
-    H = jnp.array([
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0]
-    ])
+    # beacon at along y-axis at x=5
     return jnp.sqrt(
-        1e-4 * jnp.ones(obs_dim)
-        + (b - H @ s)**2 / 2.0
+        jnp.array([5.0 - s[0], 0.0])**2 / 2.0
+        + 1e-4 * jnp.ones(obs_dim)
     )
 
 
