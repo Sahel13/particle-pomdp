@@ -42,7 +42,6 @@ class Args(NamedTuple):
     target_network_frequency: int = 1
     alpha: float = 0.2
     autotune: bool = True
-    print_freq: int = 50
 
 
 def init(
@@ -86,11 +85,10 @@ def step(
             keys[1:], _outer_state.states, _outer_state.actions
         )
         time_steps = _outer_state.time_steps + 1
-        dones = jax.lax.cond(
+        dones = jax.lax.select(
             time_steps[0] >= env.num_time_steps,
-            lambda _: jnp.ones(num_particles),
-            lambda _: jnp.zeros(num_particles),
-            None,
+            jnp.ones(num_particles),
+            jnp.zeros(num_particles),
         )
         eps_rewards = _outer_state.episodic_rewards + rewards
 
@@ -142,12 +140,11 @@ def create_train_state(
     q_optimizer = optax.adam(q_lr)
     policy_optimizer = optax.adam(policy_lr)
 
-    @jax.jit
-    def q_apply_fn(_params, states, actions):
+    def q_apply_fn(states, actions, _params):
         _qf1_params, _qf2_params = _params
         qf1_vals = qf1.apply({"params": _qf1_params}, states, actions)
         qf2_vals = qf2.apply({"params": _qf2_params}, states, actions)
-        return jnp.squeeze(qf1_vals), jnp.squeeze(qf2_vals)
+        return qf1_vals.squeeze(axis=-1), qf2_vals.squeeze(axis=-1)
 
     q_train_state = TrainState.create(
         apply_fn=q_apply_fn, params=q_params, tx=q_optimizer
@@ -170,7 +167,7 @@ def q_train_step(
         rng_key, data.next_states, ts.policy_state.params
     )
     qf1_next_target, qf2_next_target = ts.q_state.apply_fn(
-        ts.q_target_params, data.next_states, next_actions
+        data.next_states, next_actions, ts.q_target_params
     )
     min_qf_next_target = (
         jnp.minimum(qf1_next_target, qf2_next_target) - alpha * next_log_probs
@@ -179,7 +176,7 @@ def q_train_step(
 
     def loss_fn(_params):
         qf1_a_values, qf2_a_values = ts.q_state.apply_fn(
-            _params, data.states, data.actions
+            data.states, data.actions, _params
         )
         qf1_loss = optax.l2_loss(qf1_a_values, next_q_value)
         qf2_loss = optax.l2_loss(qf2_a_values, next_q_value)
@@ -198,7 +195,7 @@ def policy_train_step(
 ) -> tuple[JointTrainState, Array]:
     def loss_fn(_params):
         actions, log_probs, _ = ts.policy_state.apply_fn(rng_key, data.states, _params)
-        qf1_pi, qf2_pi = ts.q_state.apply_fn(ts.q_state.params, data.states, actions)
+        qf1_pi, qf2_pi = ts.q_state.apply_fn(data.states, actions, ts.q_state.params)
         min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
         return jnp.mean(alpha * log_probs - min_qf_pi)
 
@@ -223,7 +220,7 @@ if __name__ == "__main__":
     args = Args()
 
     env = pendulum.env
-    key = random.PRNGKey(0)
+    key = random.PRNGKey(args.seed)
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
 
@@ -266,5 +263,3 @@ if __name__ == "__main__":
             print(
                 f"Step: {global_step:6d} | Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
             )
-
-    # Plot a sample trajectory once training is done.
