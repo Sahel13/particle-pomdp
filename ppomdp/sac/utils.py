@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import NamedTuple
 
 import flax.linen as nn
@@ -20,6 +21,7 @@ class Environment(NamedTuple):
     trans_model: TransitionModel
     reward_fn: RewardFn
     prior_dist: Distribution
+    obs_fn: Callable
 
 
 class OuterState(NamedTuple):
@@ -33,11 +35,13 @@ class OuterState(NamedTuple):
 
 
 class SoftQNetwork(nn.Module):
+    obs_fn: Callable[[Array], Array]
     hidden_sizes: tuple[int, ...] = (256, 256)
 
     @nn.compact
     def __call__(self, state: Array, action: Array) -> Array:
-        y = jnp.concatenate([state, action], axis=-1)
+        observation = self.obs_fn(state)
+        y = jnp.concatenate([observation, action], axis=-1)
         for size in self.hidden_sizes:
             y = nn.relu(nn.Dense(size)(y))
         return nn.Dense(1)(y)
@@ -45,13 +49,15 @@ class SoftQNetwork(nn.Module):
 
 class ActorNetwork(nn.Module):
     action_dim: int
+    init_log_std: Array
+    obs_fn: Callable[[Array], Array]
     hidden_sizes: tuple[int, ...] = (256, 256)
     log_std_max: float = 2
     log_std_min: float = -5
 
     @nn.compact
     def __call__(self, state: Array) -> tuple[Array, Array]:
-        y = state
+        y = self.obs_fn(state)
         for size in self.hidden_sizes:
             y = nn.relu(nn.Dense(size)(y))
 

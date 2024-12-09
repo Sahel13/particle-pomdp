@@ -24,13 +24,14 @@ from ppomdp.sac.utils import (
     SoftQNetwork,
     sample_and_log_prob,
 )
+import matplotlib.pyplot as plt
 
 
 class Args(NamedTuple):
     """Arguments for SAC."""
 
     seed: int = 1
-    total_timesteps: int = 1000000
+    total_timesteps: int = 10000  # 1000000
     buffer_size: int = int(1e6)
     gamma: float = 0.99
     tau: float = 0.005
@@ -44,15 +45,26 @@ class Args(NamedTuple):
     autotune: bool = True
 
 
+def sample_random_actions(rng_key: PRNGKey, env: Environment, batch_size: int) -> Array:
+    rand_uniforms = random.uniform(
+        rng_key, (batch_size, env.action_dim), minval=-1.0, maxval=1.0
+    )
+    return (rand_uniforms * env.action_scale) + env.action_shift
+
+
 def init(
     rng_key: PRNGKey,
     env: Environment,
     num_outer_particles: int,
     policy_state: TrainState,
+    random_actions: bool = False,
 ) -> OuterState:
     key, state_key, action_key = random.split(rng_key, 3)
     states = env.prior_dist.sample(seed=state_key, sample_shape=(num_outer_particles,))
-    actions, _, _ = policy_state.apply_fn(action_key, states, policy_state.params)
+    if random_actions:
+        actions = sample_random_actions(action_key, env, num_outer_particles)
+    else:
+        actions, _, _ = policy_state.apply_fn(action_key, states, policy_state.params)
     rewards = jax.vmap(env.reward_fn, in_axes=(0, 0, None))(states, actions, 0)
 
     keys = random.split(key, num_outer_particles)
@@ -66,19 +78,23 @@ def init(
     return outer_state
 
 
-@partial(jax.jit, static_argnums=1, donate_argnums=3)
+@partial(jax.jit, static_argnums=(1, 4), donate_argnums=3)
 def step(
     rng_key: PRNGKey,
     env: Environment,
     policy_state: TrainState,
     outer_state: OuterState,
+    random_actions: bool = False,
 ) -> OuterState:
     num_particles = outer_state.states.shape[0]
 
     def true_fn(_outer_state: OuterState) -> OuterState:
         keys = random.split(rng_key, num_particles + 1)
         states = _outer_state.next_states
-        actions, _, _ = policy_state.apply_fn(keys[0], states, policy_state.params)
+        if random_actions:
+            actions = sample_random_actions(keys[0], env, num_particles)
+        else:
+            actions, _, _ = policy_state.apply_fn(keys[0], states, policy_state.params)
         rewards = jax.vmap(env.reward_fn)(states, actions, _outer_state.time_steps)
 
         next_states = jax.vmap(env.trans_model.sample)(
@@ -100,7 +116,7 @@ def step(
     outer_state = jax.lax.cond(
         outer_state.dones[0] == 0,
         true_fn,
-        lambda _: init(rng_key, env, num_particles, policy_state),
+        lambda _: init(rng_key, env, num_particles, policy_state, random_actions),
         outer_state,
     )
     return outer_state
@@ -118,11 +134,11 @@ def create_train_state(
     q_lr: float,
     policy_lr: float,
 ) -> JointTrainState:
-    actor_network = ActorNetwork(env.action_dim)
+    actor_network = ActorNetwork(env.action_dim, jnp.array(1.0), env.obs_fn)
     bijector = Chain([ScalarAffine(env.action_shift, env.action_scale), Tanh()])
     actor = partial(sample_and_log_prob, network=actor_network, bijector=bijector)
-    qf1 = SoftQNetwork()
-    qf2 = SoftQNetwork()
+    qf1 = SoftQNetwork(env.obs_fn)
+    qf2 = SoftQNetwork(env.obs_fn)
 
     key, state_key, action_key = random.split(rng_key, 3)
     init_states = random.uniform(state_key, (1, env.state_dim))
@@ -220,12 +236,12 @@ if __name__ == "__main__":
     args = Args()
 
     env = pendulum.env
-    key = random.PRNGKey(args.seed)
+    key = random.key(args.seed)
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
 
     key, sub_key = random.split(key)
-    outer_state = init(sub_key, env, args.batch_size, ts.policy_state)
+    outer_state = init(sub_key, env, args.batch_size, ts.policy_state, True)
 
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], outer_state)
     buffer = rb.init(buffer_entry_prototype, args.buffer_size)
@@ -234,7 +250,10 @@ if __name__ == "__main__":
     for global_step in range(1, args.total_timesteps):
         key, sub_key = random.split(key)
         # TODO: Before learning starts, sample action from a uniform distribution.
-        outer_state = step(sub_key, env, ts.policy_state, outer_state)
+        if global_step < args.learning_starts:
+            outer_state = step(sub_key, env, ts.policy_state, outer_state, True)
+        else:
+            outer_state = step(sub_key, env, ts.policy_state, outer_state)
         buffer = rb.add_batch(buffer, outer_state)
 
         if global_step > args.learning_starts:
@@ -242,18 +261,16 @@ if __name__ == "__main__":
             data = rb.sample(sub_key, buffer, args.batch_size)
 
             # Update the Q function.
-            key, q_key = random.split(key)
-            ts, q_loss = q_train_step(q_key, ts, data, args.alpha, args.gamma)
+            key, sub_key = random.split(key)
+            ts, q_loss = q_train_step(sub_key, ts, data, args.alpha, args.gamma)
 
             # Update the policy.
             if global_step % args.policy_frequency == 0:
-                policy_loss_sum = 0.0
                 for _ in range(args.policy_frequency):
                     key, policy_key = random.split(key)
                     ts, policy_loss = policy_train_step(
                         policy_key, ts, data, args.alpha
                     )
-                    policy_loss_sum += float(policy_loss)
 
             # Update the target networks.
             if global_step % args.target_network_frequency == 0:
@@ -263,3 +280,34 @@ if __name__ == "__main__":
             print(
                 f"Step: {global_step:6d} | Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
             )
+
+    # Evalute the learned policy.
+    key, sub_key = random.split(key)
+    state_list, action_list = [], []
+    states = env.prior_dist.sample(seed=sub_key, sample_shape=(args.batch_size,))
+    state_list.append(states)
+
+    for i in range(env.num_time_steps):
+        key, sub_key = random.split(key)
+        _, _, actions = ts.policy_state.apply_fn(
+            sub_key, states, ts.policy_state.params
+        )
+        action_list.append(actions)
+        keys = random.split(key, args.batch_size + 1)
+        states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
+        state_list.append(states)
+
+    states = jnp.stack(state_list[:-1], axis=0)
+    actions = jnp.stack(action_list, axis=0)
+    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+
+    axs[0].plot(states[:, 0, 0])
+    axs[0].set_ylabel("Angle")
+
+    axs[1].plot(states[:, 0, 1])
+    axs[1].set_ylabel("Angular velocity")
+
+    axs[2].plot(actions[:, 0, 0])
+    axs[2].set_ylabel("Action")
+    axs[2].set_xlabel("Time")
+    plt.show()

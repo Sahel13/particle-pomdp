@@ -1,8 +1,11 @@
-from collections.abc import Callable
+"""The Pendulum-v1 environment from gymnasium:
+https://gymnasium.farama.org/environments/classic_control/pendulum/."""
+
+from functools import partial
 
 import jax.numpy as jnp
 from chex import PRNGKey
-from distrax import MultivariateNormalDiag
+from distrax import MultivariateNormalDiag, Uniform
 from jax import Array
 
 from ppomdp.core import TransitionModel
@@ -10,53 +13,55 @@ from ppomdp.sac.utils import Environment
 
 state_dim = 2
 action_dim = 1
-num_time_steps = 100
-action_scale = 2.5
+num_time_steps = 200
+action_scale = 2.0
 action_shift = 0.0
 
 
-def euler_step(deriv_fn: Callable, s: Array, a: Array, dt: float) -> Array:
-    return s + deriv_fn(s, a) * dt
-
-
-def pendulum_ode(s: Array, a: Array) -> Array:
+def step(s: Array, a: Array) -> Array:
     m, l = 1.0, 1.0
-    g, d = 9.81, 1e-3
+    g = 10.0
+    max_speed = 8.0
+    dt = 0.05
 
-    q, dq = s[0], s[1]
-    ddq = -3.0 * g / (2.0 * l) * jnp.sin(q)
-    ddq += (a[0] - d * dq) * 3.0 / (m * l**2)
-    return jnp.array([dq, ddq])
+    th, thdot = s[0], s[1]
+    newthdot = thdot + (3 * g / (2 * l) * jnp.sin(th) + 3.0 / (m * l**2) * a[0]) * dt
+    newthdot = jnp.clip(newthdot, -max_speed, max_speed)
+    newth = th + newthdot * dt
+    return jnp.array([newth, newthdot])
 
 
-trans_noise = MultivariateNormalDiag(jnp.zeros(2), scale_diag=jnp.array([1e-4, 0.025]))
+@partial(jnp.vectorize, signature="(n)->(m)")
+def obs_fn(state: Array):
+    return jnp.array([jnp.cos(state[0]), jnp.sin(state[0]), state[1]])
+
+
+trans_noise = MultivariateNormalDiag(jnp.zeros(2), scale_diag=jnp.array([1e-8, 1e-8]))
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
-    return euler_step(pendulum_ode, s, a, 0.05) + trans_noise.sample(seed=rng_key)
+    return step(s, a) + trans_noise.sample(seed=rng_key)
 
 
 def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
-    mean = euler_step(pendulum_ode, s, a, 0.05)
+    mean = step(s, a)
     return trans_noise.log_prob(sn - mean)
 
 
 def reward_fn(s: Array, a: Array, t: int) -> Array:
-    Q = jnp.array([10.0, 1.0])
-    R = 1e-2
-    goal = jnp.array([jnp.pi, 0.0])
+    def angle_normalize(x):
+        return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi
 
-    def wrap_angle(q: Array) -> Array:
-        return jnp.array((q[0] % (2 * jnp.pi), q[1]))
+    cost = (
+        jnp.square(angle_normalize(s[0]))
+        + 0.1 * jnp.square(s[1])
+        + 0.001 * jnp.square(a[0])
+    )
+    return -cost
 
-    s = wrap_angle(s)
-    cost = jnp.dot((s - goal) * Q, (s - goal)) + R * jnp.dot(a, a)
-    return -0.5 * cost
 
-
-prior_dist = MultivariateNormalDiag(
-    loc=jnp.zeros((state_dim,)), scale_diag=jnp.ones((state_dim,)) * 1e-16
-)
+_default_init_state = jnp.array([jnp.pi, 1.0])
+prior_dist = Uniform(low=-_default_init_state, high=_default_init_state)
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 
 env = Environment(
@@ -68,4 +73,5 @@ env = Environment(
     trans_model,
     reward_fn,
     prior_dist,
+    obs_fn,
 )
