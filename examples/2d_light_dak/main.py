@@ -4,7 +4,7 @@ import jax
 from jax import random
 import jax.numpy as jnp
 
-from distrax import Chain, MultivariateNormalDiag, ScalarAffine
+from distrax import Chain, ScalarAffine
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 
@@ -16,10 +16,10 @@ from ppomdp.utils import batch_data
 from copy import deepcopy
 import optax
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 from environment import prior_dist, trans_model, obs_model, reward_fn
-from environment import state_dim, action_dim, obs_dim, num_time_steps
-from environment import stddev_obs
+from environment import action_dim, obs_dim, num_time_steps, stddev_obs
 
 jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", True)
@@ -44,14 +44,14 @@ policy = get_recurrent_policy(network, bijector)
 
 rng_key = random.PRNGKey(1337)
 
-num_outer_particles = 256
+num_outer_particles = 512
 num_inner_particles = 256
-tempering = 0.05
+tempering = 0.01
 slew_rate_penalty = 1e-3
 
 learning_rate = 3e-4
 batch_size = 64
-num_epochs = 500
+num_epochs = 1000
 
 # Initialize training state
 key, obs_key, param_key = random.split(rng_key, 3)
@@ -75,9 +75,9 @@ for i in range(1, num_epochs + 1):
     outer_states, inner_states, inner_info, log_marginal = \
         jitted_smc(
             sub_key,
+            num_time_steps,
             num_outer_particles,
             num_inner_particles,
-            num_time_steps,
             prior_dist,
             trans_model,
             obs_model,
@@ -85,7 +85,7 @@ for i in range(1, num_epochs + 1):
             train_state.params,
             reward_fn,
             tempering,
-            slew_rate_penalty,
+            slew_rate_penalty
         )
 
     # trace ancestors of outer states
@@ -115,25 +115,24 @@ for i in range(1, num_epochs + 1):
         f"Time per epoch: {time_diff:.3f}s"
     )
 
-
 eval_state = deepcopy(train_state)
 eval_state.params["log_std"] = -20.0 * jnp.ones((action_dim,))
 
 key, sub_key = random.split(key)
-outer_states, inner_states, inner_infos, log_marginal = \
+outer_states, inner_states, inner_infos, _ = \
     jitted_smc(
         sub_key,
+        num_time_steps,
         num_outer_particles,
         num_inner_particles,
-        num_time_steps,
         prior_dist,
         trans_model,
         obs_model,
         policy,
         eval_state.params,
         reward_fn,
-        tempering,
-        slew_rate_penalty
+        tempering=0.0,
+        slew_rate_penalty=0.0,
     )
 
 # trace ancestors of outer states
@@ -171,18 +170,52 @@ for n in range(num_outer_particles):
 plt.tight_layout()
 plt.show()
 
+# plot environment
+xgrid = jnp.linspace(-1.0, 6.0, 100)
+ygrid = jnp.linspace(-2.0, 2.5, 100)
+X, Y = jnp.meshgrid(xgrid, ygrid)
 
+Z = jnp.zeros_like(X)
+for i in range(X.shape[0]):
+    for j in range(X.shape[1]):
+        xy = jnp.array([X[i, j], Y[i, j], 0.0, 0.0])
+        Z = Z.at[i, j].set(
+            jnp.linalg.norm(stddev_obs(xy))
+        )
+
+plt.imshow(-Z, extent=(-1.0, 6.0, -2.0, 2.5), origin='lower', cmap='gray')
+plt.title('Light-Dark Environment')
+plt.xlabel('X')
+plt.ylabel('Y')
+
+# plot means and covars
+plt.plot(
+    jnp.mean(state_means, axis=1)[:, 0],
+    jnp.mean(state_means, axis=1)[:, 1], 'r-'
+)
+
+for t in range(0, num_time_steps + 1, 2):
+    mean = jnp.mean(state_means, axis=1)[t, :2]
+    covar = jnp.mean(state_covars, axis=1)[t, :2, :2]
+
+    eigvals, eigvecs = jnp.linalg.eigh(covar)
+    angle = jnp.degrees(jnp.arctan2(eigvecs[0, 1], eigvecs[0, 0]))
+    width, height = jnp.sqrt(eigvals)
+    ell = patches.Ellipse(
+        mean, width, height,
+        angle=angle, edgecolor='b', facecolor='none'
+    )
+    plt.gca().add_patch(ell)
+
+
+# plot realization
 states = []
 actions = []
 observations = []
 
 key, state_key, obs_key = random.split(key, 3)
-init_dist = MultivariateNormalDiag(
-    loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
-    scale_diag=jnp.array([1e-2, 1e-2, 1e-2, 1e-2])
-)
 
-state = init_dist.sample(seed=state_key)
+state = jnp.array([2., 2., 0., 0.])
 obs = obs_model.sample(obs_key, state)
 carry = policy.reset(1)
 
@@ -204,21 +237,5 @@ states = jnp.squeeze(jnp.array(states))
 actions = jnp.squeeze(jnp.array(actions))
 observations = jnp.squeeze(jnp.array(observations))
 
-xgrid = jnp.linspace(-1.0, 6.0, 100)
-ygrid = jnp.linspace(-3.0, 2.5, 100)
-X, Y = jnp.meshgrid(xgrid, ygrid)
-
-Z = jnp.zeros_like(X)
-for i in range(X.shape[0]):
-    for j in range(X.shape[1]):
-        s = jnp.array([X[i, j], Y[i, j], 0.0, 0.0])
-        Z = Z.at[i, j].set(jnp.linalg.norm(stddev_obs(s)))
-
-plt.imshow(-Z, extent=(-2.0, 6.0, -3.0, 2.5), origin='lower', cmap='gray')
-plt.xlabel('X')
-plt.ylabel('Y')
-plt.plot(states[:, 0], states[:, 1], 'r-')
-plt.plot(states[0, 0], states[0, 1], 'bo', marker='o', markersize=12, markeredgewidth=2, markerfacecolor='none')  # Hollow blue circle at the first point
-plt.plot(states[-1, 0], states[-1, 1], 'g+', markersize=12, markeredgewidth=2)  # Bigger green cross at the last point
-plt.title('Light-Dark Environment')
+plt.plot(states[:, 0], states[:, 1], 'g-')
 plt.show()

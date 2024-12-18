@@ -56,9 +56,10 @@ def mean_obs(s: Array) -> Array:
 
 
 def stddev_obs(s: Array) -> Array:
-    # beacon at along y-axis at x=5
+    # light region along y-axis around x=5
+    dist = (s[0] - 5.0)**2 / 2.0
     return jnp.sqrt(
-        jnp.array([5.0 - s[0], 0.0])**2 / 2.0
+        dist * jnp.ones(obs_dim)
         + 1e-4 * jnp.ones(obs_dim)
     )
 
@@ -94,7 +95,7 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
 
 prior_dist = distrax.MultivariateNormalDiag(
     loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
-    scale_diag=jnp.array([2.5, 1e-2, 1e-4, 1e-4])
+    scale_diag=jnp.array([2.5, 2.5, 1e-4, 1e-4])
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
