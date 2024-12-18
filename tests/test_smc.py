@@ -157,7 +157,7 @@ def test_nested_smc():
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
     policy = get_recurrent_policy(lstm, bijector)
 
-    def reward_fn(x, u):
+    def reward_fn(x, u, t):
         return -0.1 * jnp.sum(x**2 + u**2)
 
     rng_key = random.PRNGKey(0)
@@ -167,11 +167,11 @@ def test_nested_smc():
     init_params = lstm.init(param_key, init_carry, init_obs)["params"]
 
     key, sub_key = random.split(key)
-    outer_states, inner_states, _ = smc(
+    outer_states, inner_states, _, _ = smc(
         sub_key,
+        num_time_steps,
         num_outer_particles,
         num_inner_particles,
-        num_time_steps,
         prior_dist,
         trans_model,
         obs_model,
@@ -179,6 +179,7 @@ def test_nested_smc():
         init_params,
         reward_fn,
         tempering=0.5,
+        slew_rate_penalty=0.0
     )
 
     # Check the shapes of the leaves of `outer_states`.
@@ -250,7 +251,7 @@ def test_policy_log_prob(seed):
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
     policy = get_recurrent_policy(lstm, bijector)
 
-    def reward_fn(x, u):
+    def reward_fn(x, u, t):
         return -0.1 * jnp.sum(x**2 + u**2)
 
     rng_key = random.PRNGKey(seed)
@@ -261,11 +262,11 @@ def test_policy_log_prob(seed):
 
     # Run SMC and plot smoothed trajectories.
     key, sub_key = random.split(rng_key)
-    outer_states, inner_states, _ = smc(
+    outer_states, inner_states, inner_infos, _ = smc(
         sub_key,
+        num_time_steps,
         num_outer_particles,
         num_inner_particles,
-        num_time_steps,
         prior_dist,
         trans_model,
         obs_model,
@@ -273,10 +274,13 @@ def test_policy_log_prob(seed):
         init_params,
         reward_fn,
         tempering=0.1,
+        slew_rate_penalty=0.0
     )
 
     key, sub_key = random.split(key)
-    traced_outer, _ = backward_tracing(sub_key, outer_states, inner_states)
+    traced_outer, _, _ = backward_tracing(
+        sub_key, outer_states, inner_states, inner_infos
+    )
 
     smc_log_probs = traced_outer.particles.log_probs[:-1, :]
     acc_log_probs = log_prob_policy_pathwise(policy, init_params, traced_outer.particles)
