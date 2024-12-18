@@ -51,15 +51,15 @@ tx = optax.adam(scheduler)
 train_state = TrainState.create(apply_fn=lstm.apply, params=init_params, tx=tx)
 
 jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9, 10))
-jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5))
+jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5,))
 
 # Run SMC and plot smoothed trajectories.
 key, sub_key = random.split(key)
 outer_states, inner_states, inner_infos, _ = jitted_smc(
     sub_key,
+    num_time_steps,
     num_outer_particles,
     num_inner_particles,
-    num_time_steps,
     prior_dist,
     trans_model,
     obs_model,
@@ -104,9 +104,9 @@ for i in range(1, num_epochs + 1):
     key, sub_key = random.split(key)
     outer_states, inner_states, inner_infos, log_marginal = jitted_smc(
         sub_key,
+        num_time_steps,
         num_outer_particles,
         num_inner_particles,
-        num_time_steps,
         prior_dist,
         trans_model,
         obs_model,

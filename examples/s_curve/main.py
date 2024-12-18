@@ -72,9 +72,9 @@ jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5))
 key, sub_key = random.split(key)
 outer_states, inner_states, inner_infos, log_marginal = jitted_smc(
     sub_key,
+    num_time_steps,
     num_outer_particles,
     num_inner_particles,
-    num_time_steps,
     prior_dist,
     env.trans_model,
     env.obs_model,
@@ -113,9 +113,9 @@ for i in range(1, num_epochs + 1):
     key, sub_key = random.split(key)
     outer_states, inner_states, inner_infos, log_marginal = jitted_smc(
         sub_key,
+        num_time_steps,
         num_outer_particles,
         num_inner_particles,
-        num_time_steps,
         prior_dist,
         env.trans_model,
         env.obs_model,

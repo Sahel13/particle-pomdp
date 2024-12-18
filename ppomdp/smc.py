@@ -402,9 +402,9 @@ def smc_step(
 
 def smc(
     rng_key: PRNGKey,
+    num_time_steps: int,
     num_outer_particles: int,
     num_inner_particles: int,
-    num_time_steps: int,
     prior_dist: Distribution,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
@@ -414,7 +414,7 @@ def smc(
     tempering: float,
     slew_rate_penalty: float,
     resample: bool = True,
-    resample_fn: Callable = systematic_resampling,
+    resample_fn: Callable = systematic_resampling
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
