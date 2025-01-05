@@ -15,6 +15,7 @@ dependencies = [
   "chex",
   "distrax",
   "optax",
+  "brax",
   "matplotlib"
 ]
 

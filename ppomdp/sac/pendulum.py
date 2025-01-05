@@ -23,9 +23,11 @@ def step(s: Array, a: Array) -> Array:
     g = 10.0
     max_speed = 8.0
     dt = 0.05
+    max_torque = 2.0
 
     th, thdot = s[0], s[1]
-    newthdot = thdot + (3 * g / (2 * l) * jnp.sin(th) + 3.0 / (m * l**2) * a[0]) * dt
+    a = jnp.clip(a[0], -max_torque, max_torque)
+    newthdot = thdot + (3 * g / (2 * l) * jnp.sin(th) + 3.0 / (m * l**2) * a) * dt
     newthdot = jnp.clip(newthdot, -max_speed, max_speed)
     newth = th + newthdot * dt
     return jnp.array([newth, newthdot])

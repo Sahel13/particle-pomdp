@@ -4,10 +4,12 @@ from typing import NamedTuple
 import flax.linen as nn
 import jax.numpy as jnp
 from chex import Numeric, PRNGKey
-from distrax import Chain, Distribution
+from distrax import Chain, Distribution, ScalarAffine
 from flax.core import FrozenDict
 from jax import Array
+from jax.typing import ArrayLike
 
+from ppomdp.bijector import Tanh
 from ppomdp.core import RewardFn, TransitionModel
 from ppomdp.policy import squash_policy
 
@@ -34,17 +36,37 @@ class OuterState(NamedTuple):
     episodic_rewards: Array
 
 
-class SoftQNetwork(nn.Module):
+class MLP(nn.Module):
+    """MLP module."""
+
+    layer_sizes: tuple[int, ...]
+
+    @nn.compact
+    def __call__(self, data: Array):
+        hidden = data
+        for i, hidden_size in enumerate(self.layer_sizes):
+            hidden = nn.Dense(hidden_size)(hidden)
+            if i != len(self.layer_sizes) - 1:
+                hidden = nn.relu(hidden)
+        return hidden
+
+
+class QNetworks(nn.Module):
     obs_fn: Callable[[Array], Array]
+    n_critics: int = 2
     hidden_sizes: tuple[int, ...] = (256, 256)
 
     @nn.compact
-    def __call__(self, state: Array, action: Array) -> Array:
-        observation = self.obs_fn(state)
-        y = jnp.concatenate([observation, action], axis=-1)
-        for size in self.hidden_sizes:
-            y = nn.relu(nn.Dense(size)(y))
-        return nn.Dense(1)(y)
+    def __call__(self, states: Array, actions: Array):
+        observations = self.obs_fn(states)
+        hidden = jnp.concatenate([observations, actions], axis=-1)
+        res = []
+        for _ in range(self.n_critics):
+            q = MLP(
+                layer_sizes=self.hidden_sizes + (1,),
+            )(hidden)
+            res.append(q)
+        return jnp.concatenate(res, axis=-1)
 
 
 class ActorNetwork(nn.Module):
@@ -72,13 +94,15 @@ class ActorNetwork(nn.Module):
 
 def sample_and_log_prob(
     rng_key: PRNGKey,
-    states: Array,
     params: FrozenDict,
+    states: Array,
     network: ActorNetwork,
-    bijector: Chain,
+    action_scale: ArrayLike,
+    action_shift: ArrayLike,
 ) -> tuple[Array, Array, Array]:
-    """Sample actions and compute log probabilities."""
+    """Sample actions and compute their log probabilities."""
     mean, log_std = network.apply({"params": params}, states)
+    bijector = Chain([ScalarAffine(action_scale, action_shift), Tanh()])
     dist = squash_policy(mean, log_std, bijector)
     sampled_action, log_prob = dist.sample_and_log_prob(seed=rng_key)
     mean_action = bijector.forward(mean)

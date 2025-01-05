@@ -1,38 +1,36 @@
 import os
 
+# If running on Wong, specify the GPU to use (0-4).
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 from functools import partial
-from typing import NamedTuple
+from typing import Dict, NamedTuple
 
+import chex
 import jax
 import jax.numpy as jnp
 import optax
-from chex import PRNGKey
-from distrax import Chain, ScalarAffine
-from flax.core import FrozenDict
+from brax.training.replay_buffers import UniformSamplingQueue
 from flax.training.train_state import TrainState
 from jax import Array, random
+import matplotlib.pyplot as plt
 
-import ppomdp.sac.replay_buffer as rb
-from ppomdp.bijector import Tanh
 from ppomdp.sac import pendulum
 from ppomdp.sac.utils import (
     ActorNetwork,
     Environment,
     OuterState,
-    SoftQNetwork,
+    QNetworks,
     sample_and_log_prob,
 )
-import matplotlib.pyplot as plt
 
 
 class Args(NamedTuple):
-    """Arguments for SAC."""
+    """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = 10000  # 1000000
-    buffer_size: int = int(1e6)
+    total_timesteps: int = 20000  # 1000000
+    buffer_size: int = int(2e5)  # int(1e6)
     gamma: float = 0.99
     tau: float = 0.005
     batch_size: int = 256
@@ -42,10 +40,12 @@ class Args(NamedTuple):
     policy_frequency: int = 2
     target_network_frequency: int = 1
     alpha: float = 0.2
-    autotune: bool = True
+    autotune: bool = False
 
 
-def sample_random_actions(rng_key: PRNGKey, env: Environment, batch_size: int) -> Array:
+def sample_random_actions(
+    rng_key: chex.PRNGKey, env: Environment, batch_size: int
+) -> Array:
     rand_uniforms = random.uniform(
         rng_key, (batch_size, env.action_dim), minval=-1.0, maxval=1.0
     )
@@ -53,18 +53,19 @@ def sample_random_actions(rng_key: PRNGKey, env: Environment, batch_size: int) -
 
 
 def init(
-    rng_key: PRNGKey,
+    rng_key: chex.PRNGKey,
     env: Environment,
     num_outer_particles: int,
     policy_state: TrainState,
     random_actions: bool = False,
 ) -> OuterState:
+    """Initialize the outer state."""
     key, state_key, action_key = random.split(rng_key, 3)
     states = env.prior_dist.sample(seed=state_key, sample_shape=(num_outer_particles,))
     if random_actions:
         actions = sample_random_actions(action_key, env, num_outer_particles)
     else:
-        actions, _, _ = policy_state.apply_fn(action_key, states, policy_state.params)
+        actions, _, _ = policy_state.apply_fn(action_key, policy_state.params, states)
     rewards = jax.vmap(env.reward_fn, in_axes=(0, 0, None))(states, actions, 0)
 
     keys = random.split(key, num_outer_particles)
@@ -80,7 +81,7 @@ def init(
 
 @partial(jax.jit, static_argnums=(1, 4), donate_argnums=3)
 def step(
-    rng_key: PRNGKey,
+    rng_key: chex.PRNGKey,
     env: Environment,
     policy_state: TrainState,
     outer_state: OuterState,
@@ -94,12 +95,10 @@ def step(
         if random_actions:
             actions = sample_random_actions(keys[0], env, num_particles)
         else:
-            actions, _, _ = policy_state.apply_fn(keys[0], states, policy_state.params)
+            actions, _, _ = policy_state.apply_fn(keys[0], policy_state.params, states)
         rewards = jax.vmap(env.reward_fn)(states, actions, _outer_state.time_steps)
 
-        next_states = jax.vmap(env.trans_model.sample)(
-            keys[1:], _outer_state.states, _outer_state.actions
-        )
+        next_states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
         time_steps = _outer_state.time_steps + 1
         dones = jax.lax.select(
             time_steps[0] >= env.num_time_steps,
@@ -125,29 +124,22 @@ def step(
 class JointTrainState(NamedTuple):
     policy_state: TrainState
     q_state: TrainState
-    q_target_params: tuple[FrozenDict, FrozenDict]
+    q_target_params: Dict
 
 
 def create_train_state(
-    rng_key: PRNGKey,
+    rng_key: chex.PRNGKey,
     env: Environment,
     q_lr: float,
     policy_lr: float,
 ) -> JointTrainState:
     actor_network = ActorNetwork(env.action_dim, jnp.array(1.0), env.obs_fn)
-    bijector = Chain([ScalarAffine(env.action_shift, env.action_scale), Tanh()])
-    actor = partial(sample_and_log_prob, network=actor_network, bijector=bijector)
-    qf1 = SoftQNetwork(env.obs_fn)
-    qf2 = SoftQNetwork(env.obs_fn)
+    q_networks = QNetworks(env.obs_fn)
 
-    key, state_key, action_key = random.split(rng_key, 3)
-    init_states = random.uniform(state_key, (1, env.state_dim))
-    init_actions = random.uniform(action_key, (1, env.action_dim))
-
-    key, qf1_key, qf2_key = random.split(key, 3)
-    qf1_params = qf1.init(qf1_key, init_states, init_actions)["params"]
-    qf2_params = qf2.init(qf2_key, init_states, init_actions)["params"]
-    q_params = (qf1_params, qf2_params)
+    key, sub_key = random.split(rng_key, 2)
+    init_states = jnp.empty((1, env.state_dim))
+    init_actions = jnp.empty((1, env.action_dim))
+    q_params = q_networks.init(sub_key, init_states, init_actions)
     q_target_params = jax.tree.map(lambda x: x.copy(), q_params)
 
     key, policy_key = random.split(key)
@@ -156,49 +148,44 @@ def create_train_state(
     q_optimizer = optax.adam(q_lr)
     policy_optimizer = optax.adam(policy_lr)
 
-    def q_apply_fn(states, actions, _params):
-        _qf1_params, _qf2_params = _params
-        qf1_vals = qf1.apply({"params": _qf1_params}, states, actions)
-        qf2_vals = qf2.apply({"params": _qf2_params}, states, actions)
-        return qf1_vals.squeeze(axis=-1), qf2_vals.squeeze(axis=-1)
-
     q_train_state = TrainState.create(
-        apply_fn=q_apply_fn, params=q_params, tx=q_optimizer
+        apply_fn=q_networks.apply, params=q_params, tx=q_optimizer
+    )
+
+    actor_apply_fn = partial(
+        sample_and_log_prob,
+        network=actor_network,
+        action_shift=env.action_scale,
+        action_scale=env.action_shift,
     )
     policy_train_state = TrainState.create(
-        apply_fn=actor, params=policy_params, tx=policy_optimizer
+        apply_fn=actor_apply_fn, params=policy_params, tx=policy_optimizer
     )
     return JointTrainState(policy_train_state, q_train_state, q_target_params)
 
 
 @partial(jax.jit, donate_argnums=1)
 def q_train_step(
-    rng_key: PRNGKey,
+    rng_key: chex.PRNGKey,
     ts: JointTrainState,
     data: OuterState,
     alpha: float,
     gamma: float,
 ) -> tuple[JointTrainState, Array]:
     next_actions, next_log_probs, _ = ts.policy_state.apply_fn(
-        rng_key, data.next_states, ts.policy_state.params
+        rng_key, ts.policy_state.params, data.next_states
     )
-    qf1_next_target, qf2_next_target = ts.q_state.apply_fn(
-        data.next_states, next_actions, ts.q_target_params
-    )
-    min_qf_next_target = (
-        jnp.minimum(qf1_next_target, qf2_next_target) - alpha * next_log_probs
-    )
-    next_q_value = data.rewards + (1 - data.dones) * gamma * min_qf_next_target
+    next_q = ts.q_state.apply_fn(ts.q_target_params, data.next_states, next_actions)
+    next_v = jnp.min(next_q, axis=-1) - alpha * next_log_probs
+    target_q = data.rewards + (1 - data.dones) * gamma * next_v
 
-    def loss_fn(_params):
-        qf1_a_values, qf2_a_values = ts.q_state.apply_fn(
-            data.states, data.actions, _params
-        )
-        qf1_loss = optax.l2_loss(qf1_a_values, next_q_value)
-        qf2_loss = optax.l2_loss(qf2_a_values, next_q_value)
-        return jnp.sum(qf1_loss + qf2_loss)
+    def critic_loss(params):
+        q_old = ts.q_state.apply_fn(params, data.states, data.actions)
+        q_error = q_old - jnp.expand_dims(target_q, -1)
+        q_loss = 0.5 * jnp.mean(jnp.square(q_error))
+        return q_loss
 
-    grad_fn = jax.value_and_grad(loss_fn)
+    grad_fn = jax.value_and_grad(critic_loss)
     loss, grads = grad_fn(ts.q_state.params)
     new_q_state = ts.q_state.apply_gradients(grads=grads)
     ts = ts._replace(q_state=new_q_state)
@@ -207,15 +194,15 @@ def q_train_step(
 
 @partial(jax.jit, donate_argnums=1)
 def policy_train_step(
-    rng_key: PRNGKey, ts: JointTrainState, data: OuterState, alpha: float
+    rng_key: chex.PRNGKey, ts: JointTrainState, data: OuterState, alpha: float
 ) -> tuple[JointTrainState, Array]:
-    def loss_fn(_params):
-        actions, log_probs, _ = ts.policy_state.apply_fn(rng_key, data.states, _params)
-        qf1_pi, qf2_pi = ts.q_state.apply_fn(data.states, actions, ts.q_state.params)
-        min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
+    def actor_loss(params):
+        actions, log_probs, _ = ts.policy_state.apply_fn(rng_key, params, data.states)
+        q_vals = ts.q_state.apply_fn(ts.q_state.params, data.states, actions)
+        min_qf_pi = jnp.min(q_vals, axis=-1)
         return jnp.mean(alpha * log_probs - min_qf_pi)
 
-    grad_fn = jax.value_and_grad(loss_fn)
+    grad_fn = jax.value_and_grad(actor_loss)
     loss, grads = grad_fn(ts.policy_state.params)
     new_policy_state = ts.policy_state.apply_gradients(grads=grads)
     ts = ts._replace(policy_state=new_policy_state)
@@ -225,7 +212,7 @@ def policy_train_step(
 @partial(jax.jit, donate_argnums=0)
 def q_target_update(ts: JointTrainState, tau: float) -> JointTrainState:
     updated_params = jax.tree.map(
-        lambda p, tp: optax.incremental_update(p, tp, tau),
+        lambda p, tp: tau * p + (1 - tau) * tp,
         ts.q_state.params,
         ts.q_target_params,
     )
@@ -240,25 +227,33 @@ if __name__ == "__main__":
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
 
+    n_envs = 1
     key, sub_key = random.split(key)
-    outer_state = init(sub_key, env, args.batch_size, ts.policy_state, True)
+    outer_state = init(sub_key, env, n_envs, ts.policy_state, True)
 
+    # Set up the replay buffer from Brax.
+    key, sub_key = random.split(key)
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], outer_state)
-    buffer = rb.init(buffer_entry_prototype, args.buffer_size)
-    buffer = rb.add_batch(buffer, outer_state)
+    buffer = UniformSamplingQueue(
+        args.buffer_size, buffer_entry_prototype, sample_batch_size=args.batch_size
+    )
+    buffer.insert_internal = jax.jit(buffer.insert_internal)
+    buffer.sample_internal = jax.jit(buffer.sample_internal)
+
+    buffer_state = buffer.init(sub_key)
+    buffer_state = buffer.insert(buffer_state, outer_state)
 
     for global_step in range(1, args.total_timesteps):
         key, sub_key = random.split(key)
-        # TODO: Before learning starts, sample action from a uniform distribution.
         if global_step < args.learning_starts:
             outer_state = step(sub_key, env, ts.policy_state, outer_state, True)
         else:
             outer_state = step(sub_key, env, ts.policy_state, outer_state)
-        buffer = rb.add_batch(buffer, outer_state)
+        buffer_state = buffer.insert(buffer_state, outer_state)
 
         if global_step > args.learning_starts:
             key, sub_key = random.split(key)
-            data = rb.sample(sub_key, buffer, args.batch_size)
+            buffer_state, data = buffer.sample(buffer_state)
 
             # Update the Q function.
             key, sub_key = random.split(key)
@@ -290,11 +285,11 @@ if __name__ == "__main__":
     for i in range(env.num_time_steps):
         key, sub_key = random.split(key)
         _, _, actions = ts.policy_state.apply_fn(
-            sub_key, states, ts.policy_state.params
+            sub_key, ts.policy_state.params, states
         )
         action_list.append(actions)
-        keys = random.split(key, args.batch_size + 1)
-        states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
+        keys = random.split(key, args.batch_size)
+        states = jax.vmap(env.trans_model.sample)(keys, states, actions)
         state_list.append(states)
 
     states = jnp.stack(state_list[:-1], axis=0)
