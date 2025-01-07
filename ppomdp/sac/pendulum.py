@@ -5,7 +5,7 @@ from functools import partial
 
 import jax.numpy as jnp
 from chex import PRNGKey
-from distrax import MultivariateNormalDiag, Uniform
+from distrax import MultivariateNormalDiag, Normal
 from jax import Array
 
 from ppomdp.core import TransitionModel
@@ -52,18 +52,18 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 def reward_fn(s: Array, a: Array, t: int) -> Array:
     def angle_normalize(x):
-        return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi
+        return x % (2 * jnp.pi)
 
     cost = (
-        jnp.square(angle_normalize(s[0]))
+        jnp.square(angle_normalize(s[0]) - jnp.pi)
         + 0.1 * jnp.square(s[1])
         + 0.001 * jnp.square(a[0])
     )
     return -cost
 
 
-_default_init_state = jnp.array([jnp.pi, 1.0])
-prior_dist = Uniform(low=-_default_init_state, high=_default_init_state)
+_default_init_state = jnp.array([0.0, 0.0])
+prior_dist = Normal(_default_init_state, jnp.array([1e-8, 1e-8]))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 
 env = Environment(
