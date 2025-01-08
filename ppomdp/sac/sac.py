@@ -9,11 +9,11 @@ from typing import Dict, NamedTuple
 import chex
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import optax
 from brax.training.replay_buffers import UniformSamplingQueue
 from flax.training.train_state import TrainState
 from jax import Array, random
-import matplotlib.pyplot as plt
 
 from ppomdp.sac import pendulum
 from ppomdp.sac.utils import (
@@ -29,8 +29,8 @@ class Args(NamedTuple):
     """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = 20000  # 1000000
-    buffer_size: int = int(2e5)  # int(1e6)
+    total_timesteps: int = 100000
+    buffer_size: int = int(1e6)
     gamma: float = 0.99
     tau: float = 0.005
     batch_size: int = 256
@@ -164,7 +164,6 @@ def create_train_state(
     return JointTrainState(policy_train_state, q_train_state, q_target_params)
 
 
-@partial(jax.jit, donate_argnums=1)
 def q_train_step(
     rng_key: chex.PRNGKey,
     ts: JointTrainState,
@@ -192,7 +191,6 @@ def q_train_step(
     return ts, loss
 
 
-@partial(jax.jit, donate_argnums=1)
 def policy_train_step(
     rng_key: chex.PRNGKey, ts: JointTrainState, data: OuterState, alpha: float
 ) -> tuple[JointTrainState, Array]:
@@ -209,7 +207,6 @@ def policy_train_step(
     return ts, loss
 
 
-@partial(jax.jit, donate_argnums=0)
 def q_target_update(ts: JointTrainState, tau: float) -> JointTrainState:
     updated_params = jax.tree.map(
         lambda p, tp: tau * p + (1 - tau) * tp,
@@ -217,6 +214,21 @@ def q_target_update(ts: JointTrainState, tau: float) -> JointTrainState:
         ts.q_target_params,
     )
     return ts._replace(q_target_params=updated_params)
+
+
+@partial(jax.jit, donate_argnums=1)
+def gradient_step(
+    rng_key: chex.PRNGKey,
+    ts: JointTrainState,
+    data: OuterState,
+    alpha: float,
+    gamma: float,
+) -> tuple[JointTrainState, Array, Array]:
+    q_key, policy_key = random.split(rng_key, 2)
+    ts, q_loss = q_train_step(q_key, ts, data, alpha, gamma)
+    ts, policy_loss = policy_train_step(policy_key, ts, data, alpha)
+    ts = q_target_update(ts, tau=0.005)
+    return ts, q_loss, policy_loss
 
 
 if __name__ == "__main__":
@@ -252,24 +264,11 @@ if __name__ == "__main__":
         buffer_state = buffer.insert(buffer_state, outer_state)
 
         if global_step > args.learning_starts:
-            key, sub_key = random.split(key)
             buffer_state, data = buffer.sample(buffer_state)
-
-            # Update the Q function.
             key, sub_key = random.split(key)
-            ts, q_loss = q_train_step(sub_key, ts, data, args.alpha, args.gamma)
-
-            # Update the policy.
-            if global_step % args.policy_frequency == 0:
-                for _ in range(args.policy_frequency):
-                    key, policy_key = random.split(key)
-                    ts, policy_loss = policy_train_step(
-                        policy_key, ts, data, args.alpha
-                    )
-
-            # Update the target networks.
-            if global_step % args.target_network_frequency == 0:
-                ts = q_target_update(ts, args.tau)
+            ts, q_loss, policy_loss = gradient_step(
+                sub_key, ts, data, args.alpha, args.gamma
+            )
 
         if outer_state.dones[0] == 1:
             print(
