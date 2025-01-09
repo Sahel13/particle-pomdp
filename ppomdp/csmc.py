@@ -1,4 +1,4 @@
-from typing import Callable, Dict
+from typing import Dict
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +12,7 @@ from ppomdp.core import (
     ObservationModel,
     OuterParticles,
     OuterState,
+    Reference,
     RecurrentPolicy,
     RewardFn,
     TransitionModel,
@@ -26,11 +27,12 @@ from ppomdp.utils import (
     weighted_mean,
     weighted_covar,
     effective_sample_size,
-    systematic_resampling,
+    multinomial_resampling,
+    systematic_resampling
 )
 
 
-def smc_init(
+def csmc_init(
     rng_key: PRNGKey,
     num_outer_particles: int,
     num_inner_particles: int,
@@ -38,8 +40,9 @@ def smc_init(
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
     params: Dict,
+    reference: Reference,
 ) -> tuple[OuterState, InnerState, InnerInfo]:
-    r"""Initialize the outer and inner states for the nested SMC algorithm.
+    r"""Initialize the outer and inner states for the nested CSMC algorithm.
 
     This samples from
     .. math::
@@ -63,6 +66,8 @@ def smc_init(
             The recurrent policy.
         params: Dict
             Parameters of the recurrent policy.
+        reference: Reference
+            Reference state of the conditional particle filter.
     """
     key, sub_key = random.split(rng_key)
     inner_particles = prior_dist.sample(
@@ -77,11 +82,19 @@ def smc_init(
         resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
     )
 
+    # replace zeroth inner state with reference inner state
+    inner_state = jax.tree.map(
+        lambda x, y: x.at[0].set(y), inner_state, reference.inner_state
+    )
+
     # sample marginal observations
     keys = random.split(key, num_outer_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         keys, obs_model, inner_state
     )
+
+    # replace zeroth observations with reference observation
+    observations = observations.at[0].set(reference.observations)
 
     # reweight inner particles
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
@@ -98,6 +111,11 @@ def smc_init(
     dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
     init_log_probs = jnp.zeros(num_outer_particles)
 
+    # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
+    init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.carry)
+    dummy_actions = dummy_actions.at[0].set(reference.actions)
+    init_log_probs = init_log_probs.at[0].set(reference.log_probs)
+
     outer_particles = OuterParticles(observations, dummy_actions, init_carry, init_log_probs)
     outer_state = OuterState(
         particles=outer_particles,
@@ -106,11 +124,10 @@ def smc_init(
         resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int_),
         rewards=jnp.zeros(num_outer_particles),
     )
-
     return outer_state, inner_state, inner_info
 
 
-def smc_step(
+def csmc_step(
     time_idx: int,
     rng_key: PRNGKey,
     trans_model: TransitionModel,
@@ -120,14 +137,16 @@ def smc_step(
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
+    reference: Reference,
     resample: bool,
-    resample_fn: Callable,
     outer_state: OuterState,
     inner_state: InnerState,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
-    r"""A single step of the nested SMC algorithm.
+    r"""A single step of the nested CSMC algorithm.
 
     Args:
+        time_idx: int
+            The current time index.
         rng_key: PRNGKey
         trans_model: TransitionModel
             The transition model for the state, $f(s_t \mid s_{t-1}, a_{t-1})$.
@@ -143,22 +162,23 @@ def smc_step(
             The tempering parameter, $\eta$.
         slew_rate_penalty: float
             The slew rate penalty.
+        reference: Reference
+            Reference trajectory of the conditional particle filter.
         resample: bool
             If True, resample, otherwise do not resample.
-        resample_fn: Callable
             The resampling function.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
             Leaves have shape (N, M, ...).
-        time_idx: int
-            The current time index.
     """
     num_particles = outer_state.weights.shape[0]
 
     # 1. Resample the outer particles.
     key, sub_key = random.split(rng_key)
-    outer_state = resample_outer(sub_key, outer_state, resample, resample_fn)
+    outer_state = resample_outer(
+        sub_key, outer_state, resample, multinomial_resampling, conditional=True
+    )
     particles = outer_state.particles
     resampling_idx = outer_state.resampling_indices
     inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
@@ -166,7 +186,7 @@ def smc_step(
     # 2. Resample the inner particles.
     keys = random.split(key, num_particles + 1)
     inner_state = jax.vmap(resample_inner, in_axes=(0, 0, None))(
-        keys[1:], inner_state, resample_fn
+        keys[1:], inner_state, systematic_resampling
     )
 
     # 3. Sample new actions.
@@ -175,6 +195,11 @@ def smc_step(
         sub_key, particles.observations, particles.carry, params
     )
 
+    # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
+    carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.carry)
+    actions = actions.at[0].set(reference.actions)
+    log_probs = log_probs.at[0].set(reference.log_probs)
+
     # 4. Propagate the inner particles.
     keys = random.split(key, num_particles + 1)
     inner_particles = jax.vmap(propagate_inner, in_axes=(0, None, 0, 0))(
@@ -182,11 +207,19 @@ def smc_step(
     )
     inner_state = inner_state._replace(particles=inner_particles)
 
+    # replace zeroth inner state with reference inner state
+    inner_state = jax.tree.map(
+        lambda x, y: x.at[0].set(y), inner_state, reference.inner_state
+    )
+
     # 5. Sample new observations.
     keys = random.split(keys[0], num_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         keys, obs_model, inner_state
     )
+
+    # replace zeroth observations with reference observation
+    observations = observations.at[0].set(reference.observations)
 
     # 6. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
@@ -221,7 +254,7 @@ def smc_step(
     return outer_state, inner_state, inner_info, log_marginal
 
 
-def smc(
+def csmc(
     rng_key: PRNGKey,
     num_time_steps: int,
     num_outer_particles: int,
@@ -234,11 +267,11 @@ def smc(
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
+    reference: Reference,
     resample: bool = True,
-    resample_fn: Callable = systematic_resampling
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
-    Perform the Sequential Monte Carlo (SMC) algorithm.
+    Perform the Conditional Sequential Monte Carlo (CSMC) algorithm.
 
     Args:
         rng_key: PRNGKey
@@ -265,9 +298,10 @@ def smc(
             The tempering parameter.
         slew_rate_penalty: float
             The slew rate penalty.
+        reference: Reference
+            Reference trajectory of the conditional particle filter.
         resample: bool
             If True, resample, otherwise do not resample.
-        resample_fn: Callable
             The resampling function.
 
     Returns:
@@ -276,11 +310,11 @@ def smc(
             with the normalizing constant estimate.
     """
 
-    def smc_loop(carry: tuple[OuterState, InnerState, Array], args: tuple[int, PRNGKey]):
+    def csmc_loop(carry, args):
         outer_state, inner_state, log_marginal = carry
-        time_idx, key = args
+        time_idx, key, ref_step = args
 
-        outer_state, inner_state, inner_info, log_marginal_incr = smc_step(
+        outer_state, inner_state, inner_info, log_marginal_incr = csmc_step(
             time_idx,
             key,
             trans_model,
@@ -290,8 +324,8 @@ def smc(
             reward_fn,
             tempering,
             slew_rate_penalty,
+            ref_step,
             resample,
-            resample_fn,
             outer_state,
             inner_state,
         )
@@ -300,7 +334,7 @@ def smc(
         return (outer_state, inner_state, log_marginal), (outer_state, inner_state, inner_info)
 
     init_key, loop_key = random.split(rng_key, 2)
-    init_outer_state, init_inner_state, init_inner_info = smc_init(
+    init_outer_state, init_inner_state, init_inner_info = csmc_init(
         init_key,
         num_outer_particles,
         num_inner_particles,
@@ -308,14 +342,17 @@ def smc(
         obs_model,
         policy,
         params,
+        jax.tree.map(lambda x: x[0], reference),
     )
 
-    time_indices = jnp.arange(num_time_steps)
-    keys = random.split(loop_key, num_time_steps)
     (_, _, log_marginal), (outer_states, inner_states, inner_infos) = jax.lax.scan(
-        smc_loop,
+        csmc_loop,
         (init_outer_state, init_inner_state, jnp.array(0.0)),
-        (time_indices, keys),
+        (
+            jnp.arange(num_time_steps),  # time indices
+            random.split(loop_key, num_time_steps),  # random keys
+            jax.tree.map(lambda x: x[1:], reference)  # reference trajectory
+        ),
     )
 
     def concat_trees(x, y):
@@ -325,160 +362,3 @@ def smc(
     inner_states = concat_trees(init_inner_state, inner_states)
     inner_infos = concat_trees(init_inner_info, inner_infos)
     return outer_states, inner_states, inner_infos, log_marginal
-
-
-def backward_tracing(
-    rng_key: Array,
-    outer_states: OuterState,
-    inner_states: InnerState,
-    inner_infos: InnerInfo,
-    resample: bool = True,
-    resample_fn: Callable = systematic_resampling,
-) -> tuple[OuterState, InnerState, InnerInfo]:
-    """Genealogy tracking to get the smoothed trajectories.
-
-    Args:
-        rng_key: The random number generator key.
-        outer_states: The outer states of the outer particle filter.
-        inner_states: The inner states of the inner particle filter.
-        inner_infos: The inner infos of the inner particle filter.
-        resample: If True, sample the genealogy, otherwise trace back all final
-          particles.
-        resample_fn: The resampling function.
-    Returns:
-        The traced outer and inner states.
-    """
-    num_steps, num_particles = outer_states.weights.shape
-
-    # Sample the states at the final time step.
-    resampling_idx = jax.lax.cond(
-        resample,
-        lambda _: resample_fn(rng_key, outer_states.weights[-1], num_particles),
-        lambda _: jnp.arange(num_particles),
-        None,
-    )
-
-    last_outer_state = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
-    last_inner_state = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
-    last_inner_info = jax.tree.map(lambda x: x[-1, resampling_idx], inner_infos)
-
-    # Trace the genealogy for the outer states.
-    def tracing_fn(carry, args):
-        idx = carry
-        states, resampling_indices = args
-        a = resampling_indices[idx]
-        ancestors = jax.tree.map(lambda x: x[a], states)
-        return a, (a, ancestors)
-
-    _, (traced_indices, traced_outer_states) = jax.lax.scan(
-        tracing_fn,
-        resampling_idx,
-        (
-            jax.tree.map(lambda x: x[:-1], outer_states),
-            outer_states.resampling_indices[1:],
-        ),
-        reverse=True,
-    )
-
-    # Trace the inner states.
-    def get_traced_inner(idx, state, info):
-        return jax.tree.map(lambda x: x[idx], state), jax.tree.map(lambda x: x[idx], info)
-
-    traced_inner_states, traced_inner_infos = jax.vmap(get_traced_inner, in_axes=(0, 0, 0))(
-        traced_indices,
-        jax.tree.map(lambda x: x[:-1], inner_states),
-        jax.tree.map(lambda x: x[:-1], inner_infos),
-    )
-
-    def concat_trees(x, y):
-        return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
-
-    traced_outer_states = concat_trees(traced_outer_states, last_outer_state)
-    traced_inner_states = concat_trees(traced_inner_states, last_inner_state)
-    traced_inner_infos = concat_trees(traced_inner_infos, last_inner_info)
-    return traced_outer_states, traced_inner_states, traced_inner_infos
-
-
-def marginal_observation_logpdf(
-    outer_state: OuterState,
-    inner_state: InnerState,
-    obs_model: ObservationModel,
-):
-    """
-    Compute the log marginal likelihood of the observations.
-
-    Args:
-        outer_state: OuterState
-            The outer state.
-        inner_state: InnerState
-            The inner state.
-        obs_model: ObservationModel
-            The observation model.
-    """
-    num_particles = inner_state.particles.shape[0]
-    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(outer_state.particles.observations, inner_state.particles)
-    log_marginal_prob = jax.nn.logsumexp(log_probs) - jnp.log(num_particles)
-    return log_marginal_prob
-
-
-# def policy_logpdf(
-#     outer_states: OuterState,
-#     inner_states: InnerState,
-#     policy: RecurrentPolicy,
-#     params: Dict,
-# ) -> Array:
-#
-#
-#     def body(k, log_prob):
-#         action = outer_states.particles.actions[k]
-#         observation = outer_states.particles.observations[k - 1]
-#         carry = jax.tree.map(lambda x: x[k - 1], outer_states.particles.carry)
-#         log_prob += policy.log_prob(action, observation, carry, params)
-#         return log_prob, log_prob
-#
-#     log_prob = jax.lax.fori_loop(1, num_time_steps, body, 0.0)
-#     return log_prob
-
-# function transition_logpdf_and_potential(
-#     bd::BayesianDynamics,
-#     ps::AbstractMatrix{Float64},
-#     z::AbstractVector{Float64},
-#     zn::AbstractVector{Float64},
-# )
-#     """
-#     Computes the transition density of the state and the
-#     potential function for a single trajectory.
-#     """
-#     xdim = bd.xdim
-#
-#     x = z[1:xdim]
-#     up = z[xdim+1:end]
-#     xn = zn[1:xdim]
-#     u = zn[xdim+1:end]
-#     lws = zeros(size(ps, 2))
-#
-#     logpdfs = conditional_dynamics_logpdf(
-#         bd,     # dynamics
-#         ps,     # params
-#         x,      # state
-#         u,      # design
-#         xn,     # next state
-#         sc      # scratch
-#     )
-#
-#     info_gain = info_gain_increment(
-#         bd,     # dynamics
-#         ps,     # params
-#         lws,    # log weights
-#         x,      # state
-#         u,      # desgin
-#         xn,     # next state
-#         sc      # scratch
-#     )
-#
-#     # TODO: slew rate penalty is hard-coded
-#     slew_rate_penalty = 1e-1
-#     reward = info_gain - slew_rate_penalty * dot(u - up, u - up)
-#     return (logsumexp(logpdfs) - log(size(ps, 2))) + eta * reward
-# end
-#

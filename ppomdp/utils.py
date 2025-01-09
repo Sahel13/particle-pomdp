@@ -1,10 +1,214 @@
 from functools import partial
 
 import math
+from typing import Callable
 
+import jax
 from chex import PRNGKey
 from jax import Array, random
 from jax import numpy as jnp
+
+from ppomdp.core import (
+    OuterState,
+    InnerState,
+    Reference,
+    TransitionModel,
+    ObservationModel,
+    RewardFn
+)
+
+
+def resample_inner(
+    rng_key: PRNGKey,
+    inner_state: InnerState,
+    resample_fn: Callable,
+) -> InnerState:
+    """Resample the inner particles for a single outer trajectory.
+
+    Only resamples if the effective sample size is below 75% of the number of particles.
+
+    Args:
+        rng_key: The random number generator key.
+        inner_state: The state associated with a single outer trajectory.
+            Leaves have shape (M, ...).
+        resample_fn: The resampling function.
+    """
+    num_particles = inner_state.particles.shape[0]
+
+    def true_fn(state: InnerState) -> InnerState:
+        resampling_idx = resample_fn(rng_key, state.weights, num_particles)
+        return InnerState(
+            particles=state.particles[resampling_idx],
+            log_weights=jnp.zeros(num_particles),
+            weights=jnp.ones(num_particles) / num_particles,
+            resampling_indices=resampling_idx,
+        )
+
+    def false_fn(state: InnerState) -> InnerState:
+        resampling_idx = jnp.arange(num_particles)
+        return state._replace(resampling_indices=resampling_idx)
+
+    resampled_state = jax.lax.cond(
+        effective_sample_size(inner_state.weights) < 0.75 * num_particles,
+        true_fn, false_fn, inner_state
+    )
+    return resampled_state
+
+
+def propagate_inner(
+    rng_key: PRNGKey,
+    model: TransitionModel,
+    particles: Array,
+    action: Array,
+) -> Array:
+    r"""Propagate the inner particles for a single trajectory.
+
+    Args:
+        rng_key: PRNGKey
+        model: TransitionModel
+            The transition model for the state.
+        particles: Array
+            The state particles $\{s_{t-1}^{nm}\}_{m=1}^M$ associated with
+            the n-th outer trajectory. Has shape (M, ...).
+        action: Array
+            The action $a_{t-1}^n$.
+    """
+    num_particles = particles.shape[0]
+    rng_keys = random.split(rng_key, num_particles)
+    return jax.vmap(model.sample, in_axes=(0, 0, None))(rng_keys, particles, action)
+
+
+def reweight_inner(
+    model: ObservationModel, state: InnerState, obs: Array
+) -> InnerState:
+    r"""Reweight the inner particles for a single outer trajectory.
+
+    Args:
+        model: ObservationModel
+            The observation model.
+        state: InnerState
+            The inner state associated with the n-th outer trajectory.
+            Leaves have shape (M, ...).
+        obs: Array.
+            The observation $z_t^n$.
+    """
+    log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(obs, state.particles)
+    log_weights += state.log_weights
+    logsum_weights = jax.nn.logsumexp(log_weights)
+    weights = jnp.exp(log_weights - logsum_weights)
+    return state._replace(log_weights=log_weights, weights=weights)
+
+
+def sample_marginal_obs(
+    rng_key: PRNGKey, obs_model: ObservationModel, state: InnerState
+) -> Array:
+    r"""Sample from the marginal observation distribution.
+
+    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$.
+
+    Args:
+        rng_key: PRNGKey
+        obs_model: ObservationModel
+        state: InnerState
+            The inner state associated with the n-th outer trajectory.
+            Leaves have shape (M, ...).
+    """
+    key1, key2 = random.split(rng_key)
+    x = random.choice(key1, state.particles, p=state.weights)
+    return obs_model.sample(key2, x)
+
+
+def expected_reward(
+    reward_fn: RewardFn,
+    inner_state: InnerState,
+    action: Array,
+    time_idx: int
+) -> Array:
+    """
+    Calculate the expected reward for a given particle and inner state.
+
+    Args:
+        reward_fn: RewardFn
+            The reward function, r(s_{t], a_{t-1}).
+        inner_state: InnerState
+            The inner state containing particles and weights.
+        action: Array
+            Action particle.
+        time_idx: int
+            The current time index.
+
+    Returns:
+        Array: The cumulative return for the given particle and inner state.
+    """
+    rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(inner_state.particles, action, time_idx)
+    return jnp.sum(rewards * inner_state.weights)
+
+
+def log_potential(
+    reward_fn: RewardFn,
+    inner_state: InnerState,
+    action: Array,
+    prev_action: Array,
+    time_idx: int,
+    tempering: float,
+    slew_rate_penalty: float,
+) -> tuple[Array, Array]:
+    r"""Estimate the log potential function.
+
+    The estimate for the log potential function is given by
+    .. math::
+    \log g_t^n = \eta * \sum_{m=1}^M W_{s,t}^{nm} r_t(s_t^{nm}, a_t^n).
+
+    Args:
+        reward_fn: The reward function.
+        inner_state: The inner state associated with the n-th outer trajectory.
+            Leaves have shape (M, ...).
+        action: The current action.
+        prev_action: The previous action.
+        time_idx: The current time index.
+        tempering: The tempering parameter.
+        slew_rate_penalty: The slew rate penalty.
+    """
+    rewards = expected_reward(reward_fn, inner_state, action, time_idx)
+    mod_rewards = rewards - slew_rate_penalty * jnp.dot(action - prev_action, action - prev_action)
+    return tempering * mod_rewards, rewards
+
+
+def resample_outer(
+    rng_key: PRNGKey,
+    outer_state: OuterState,
+    resample: bool,
+    resample_fn: Callable,
+    conditional: bool = False
+) -> OuterState:
+    num_particles = outer_state.weights.shape[0]
+
+    def true_fn(state: OuterState) -> OuterState:
+        resampling_idx = resample_fn(rng_key, state.weights, num_particles)
+        # set zeroth resampling index to zero if conditional resampling is enabled
+        resampling_idx = jax.lax.cond(
+            conditional,
+            lambda _: resampling_idx.at[0].set(0),
+            lambda _: resampling_idx,
+            None
+        )
+        resampled_particles = jax.tree.map(lambda x: x[resampling_idx], state.particles)
+        resampled_rewards = state.rewards[resampling_idx]
+        return OuterState(
+            particles=resampled_particles,
+            log_weights=jnp.zeros(num_particles),
+            weights=jnp.ones(num_particles) / num_particles,
+            resampling_indices=resampling_idx,
+            rewards=resampled_rewards,
+        )
+
+    def false_fn(state: OuterState) -> OuterState:
+        resampling_idx = jnp.arange(num_particles)
+        return state._replace(resampling_indices=resampling_idx)
+
+    predicate = resample and effective_sample_size(outer_state.weights) < 0.75 * num_particles
+    resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
+    return resampled_state
 
 
 @partial(jnp.vectorize, signature="(m,h),(m)->(h)")

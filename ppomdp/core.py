@@ -166,3 +166,12 @@ class InnerInfo(NamedTuple):
     ess: Array
     mean: Array
     covar: Array
+
+
+class Reference(NamedTuple):
+    observations: Array
+    actions: Array
+    carry: list[Carry]
+    log_probs: Array
+
+    inner_state: InnerState

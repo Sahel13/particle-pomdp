@@ -15,6 +15,7 @@ from ppomdp.utils import batch_data
 
 from copy import deepcopy
 import optax
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 

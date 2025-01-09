@@ -19,12 +19,10 @@ from ppomdp.core import (
     ObservationModel,
 )
 from ppomdp.smc import (
-    resample_inner,
-    propagate_inner,
-    reweight_inner,
     smc,
     backward_tracing
 )
+from ppomdp.utils import resample_inner, propagate_inner, reweight_inner
 from ppomdp.policy import (
     LSTM,
     get_recurrent_policy,
