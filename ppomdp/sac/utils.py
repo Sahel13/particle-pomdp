@@ -3,27 +3,14 @@ from typing import NamedTuple
 
 import flax.linen as nn
 import jax.numpy as jnp
-from chex import Numeric, PRNGKey
-from distrax import Chain, Distribution, ScalarAffine
+from chex import PRNGKey
+from distrax import Chain, ScalarAffine
 from flax.core import FrozenDict
 from jax import Array
 from jax.typing import ArrayLike
 
 from ppomdp.bijector import Tanh
-from ppomdp.core import RewardFn, TransitionModel
 from ppomdp.policy import squash_policy
-
-
-class Environment(NamedTuple):
-    state_dim: int
-    action_dim: int
-    num_time_steps: int
-    action_scale: Numeric
-    action_shift: Numeric
-    trans_model: TransitionModel
-    reward_fn: RewardFn
-    prior_dist: Distribution
-    obs_fn: Callable
 
 
 class OuterState(NamedTuple):

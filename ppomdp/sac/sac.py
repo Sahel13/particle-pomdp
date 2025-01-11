@@ -15,10 +15,10 @@ from brax.training.replay_buffers import UniformSamplingQueue
 from flax.training.train_state import TrainState
 from jax import Array, random
 
-from ppomdp.sac import pendulum
+from ppomdp.envs import pendulum
+from ppomdp.envs.base import Environment
 from ppomdp.sac.utils import (
     ActorNetwork,
-    Environment,
     OuterState,
     QNetworks,
     sample_and_log_prob,
@@ -133,8 +133,8 @@ def create_train_state(
     q_lr: float,
     policy_lr: float,
 ) -> JointTrainState:
-    actor_network = ActorNetwork(env.action_dim, jnp.array(1.0), env.obs_fn)
-    q_networks = QNetworks(env.obs_fn)
+    actor_network = ActorNetwork(env.action_dim, jnp.array(1.0), env.feature_fn)
+    q_networks = QNetworks(env.feature_fn)
 
     key, sub_key = random.split(rng_key, 2)
     init_states = jnp.empty((1, env.state_dim))
