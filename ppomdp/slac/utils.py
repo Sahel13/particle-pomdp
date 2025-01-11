@@ -1,34 +1,19 @@
 from collections.abc import Callable
-from typing import NamedTuple, Union
 from functools import partial
+from typing import NamedTuple, Union
 
 import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from distrax import Chain, Distribution, ScalarAffine
+from distrax import Chain, ScalarAffine
 from flax.core import FrozenDict
 from jax import Array
 
 from ppomdp.bijector import Tanh
-from ppomdp.core import InnerState, ObservationModel, RewardFn, TransitionModel
+from ppomdp.core import InnerState
 from ppomdp.policy import GRU, LSTM, Carry, squash_policy
 from ppomdp.utils import systematic_resampling
-
-
-class Environment(NamedTuple):
-    num_envs: int
-    state_dim: int
-    action_dim: int
-    obs_dim: int
-    num_time_steps: int
-    action_scale: chex.Numeric
-    action_shift: chex.Numeric
-    trans_model: TransitionModel
-    obs_model: ObservationModel
-    reward_fn: RewardFn
-    prior_dist: Distribution
-    feature_fn: Callable
 
 
 class OuterState(NamedTuple):

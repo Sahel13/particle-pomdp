@@ -17,10 +17,10 @@ from jax import Array, random
 
 from ppomdp import smc
 from ppomdp.core import InnerState
+from ppomdp.envs import pendulum
+from ppomdp.envs.base import Environment
 from ppomdp.policy import GRU, reset_policy
-from ppomdp.slac import pendulum
 from ppomdp.slac.utils import (
-    Environment,
     OuterState,
     QNetworks,
     Transition,
