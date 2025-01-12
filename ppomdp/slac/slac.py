@@ -9,6 +9,7 @@ from typing import Dict, NamedTuple
 import chex
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import optax
 from brax.training.replay_buffers import UniformSamplingQueue
 from flax.linen.initializers import constant
@@ -19,7 +20,8 @@ from ppomdp import smc
 from ppomdp.core import InnerState
 from ppomdp.envs import pendulum
 from ppomdp.envs.base import Environment
-from ppomdp.policy import GRU, reset_policy
+from ppomdp.policy import LSTM, reset_policy
+from ppomdp.sac.sac import sample_random_actions
 from ppomdp.slac.utils import (
     OuterState,
     QNetworks,
@@ -34,26 +36,17 @@ class Args(NamedTuple):
     """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = int(2e5)  # int(1e6)
-    buffer_size: int = int(2e5)
+    total_timesteps: int = int(1e5)  # int(1e6)
+    buffer_size: int = int(1e5)
     gamma: float = 0.99
     tau: float = 0.005
     batch_size: int = 256
-    learning_starts: int = 1000  # int(5e3)
-    policy_lr: float = 3e-4
+    learning_starts: int = int(5e3)
+    policy_lr: float = 1e-4
     q_lr: float = 1e-3
     alpha: float = 0.2
     num_envs: int = 1
-    num_particles: int = 256  # For the particle filter.
-
-
-def sample_random_actions(
-    rng_key: chex.PRNGKey, env: Environment, batch_size: int
-) -> Array:
-    rand_uniforms = random.uniform(
-        rng_key, (batch_size, env.action_dim), minval=-1.0, maxval=1.0
-    )
-    return (rand_uniforms * env.action_scale) + env.action_shift
+    num_particles: int = 2  # For the particle filter.
 
 
 def pf_init(
@@ -133,7 +126,7 @@ def init(
     rng_key: chex.PRNGKey,
     env: Environment,
     policy_state: TrainState,
-    policy_network: GRU,
+    policy_network: LSTM,
     num_envs: int,
     num_particles: int = 100,
     random_actions: bool = False,
@@ -193,7 +186,7 @@ def step(
     rng_key: chex.PRNGKey,
     env: Environment,
     policy_state: TrainState,
-    policy_network: GRU,
+    policy_network: LSTM,
     outer_state: OuterState,
     random_actions: bool = False,
 ) -> OuterState:
@@ -267,12 +260,12 @@ def create_train_state(
     env: Environment,
     q_lr: float,
     policy_lr: float,
-) -> tuple[JointTrainState, GRU]:
-    policy_network = GRU(
+) -> tuple[JointTrainState, LSTM]:
+    policy_network = LSTM(
         dim=env.action_dim,
-        feature_fn=env.feature_fn,
+        feature_fn=lambda x: x,
         encoder_size=(256, 256),
-        recurr_size=(128, 128),
+        recurr_size=(64, 64),
         output_size=(256, 256),
         init_log_std=constant(jnp.log(1.0)),
     )
@@ -320,17 +313,15 @@ def q_train_step(
     alpha: float,
     gamma: float,
 ) -> tuple[JointTrainState, Array]:
-    states = data.states.squeeze(axis=1)
-    next_states = data.next_states.squeeze(axis=1)
     _, next_actions, next_log_probs, _ = ts.policy_state.apply_fn(
         rng_key, ts.policy_state.params, data.next_carry, data.next_observations
     )
-    next_q = ts.q_state.apply_fn(ts.q_target_params, next_states, next_actions)
+    next_q = ts.q_state.apply_fn(ts.q_target_params, data.next_states, next_actions)
     next_v = jnp.min(next_q, axis=-1) - alpha * next_log_probs
     target_q = data.rewards + (1 - data.dones) * gamma * next_v
 
     def critic_loss(params):
-        q_old = ts.q_state.apply_fn(params, states, data.actions)
+        q_old = ts.q_state.apply_fn(params, data.states, data.actions)
         q_error = q_old - jnp.expand_dims(target_q, -1)
         q_loss = 0.5 * jnp.mean(jnp.square(q_error))
         return q_loss
@@ -349,10 +340,7 @@ def policy_train_step(
         _, actions, log_probs, _ = ts.policy_state.apply_fn(
             rng_key, params, data.carry, data.observations
         )
-        # Only one latent state is sampled per observation and action .
-        q_vals = ts.q_state.apply_fn(
-            ts.q_state.params, data.states.squeeze(axis=1), actions
-        )
+        q_vals = ts.q_state.apply_fn(ts.q_state.params, data.states, actions)
         min_qf_pi = jnp.min(q_vals, axis=-1)
         return jnp.mean(alpha * log_probs - min_qf_pi)
 
@@ -480,40 +468,43 @@ if __name__ == "__main__":
         buffer_state, outer_state, ts = sim_and_train(
             sub_key, buffer_state, outer_state, ts, env, policy_network, buffer
         )
-
-        assert outer_state.dones[0] == 1
         if global_step % 200 == 0:
             print(
                 f"Step: {global_step:6d} | Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
             )
 
-    # # Evalute the learned policy.
-    # key, sub_key = random.split(key)
-    # state_list, action_list = [], []
-    # states = env.prior_dist.sample(seed=sub_key, sample_shape=(args.batch_size,))
-    # state_list.append(states)
+    # Evalute the learned policy.
+    state_list, action_list = [], []
+    key, sub_key = random.split(key)
+    states = env.prior_dist.sample(seed=sub_key, sample_shape=(args.num_envs,))
+    keys = random.split(key, args.num_envs + 1)
+    observations = jax.vmap(env.obs_model.sample)(keys[1:], states)
+    carry = reset_policy(args.num_envs, policy_network)
+    state_list.append(states)
 
-    # for i in range(env.num_time_steps):
-    #     key, sub_key = random.split(key)
-    #     _, _, actions = ts.policy_state.apply_fn(
-    #         sub_key, ts.policy_state.params, states
-    #     )
-    #     action_list.append(actions)
-    #     keys = random.split(key, args.batch_size)
-    #     states = jax.vmap(env.trans_model.sample)(keys, states, actions)
-    #     state_list.append(states)
+    for i in range(env.num_time_steps):
+        key, sub_key = random.split(keys[0])
+        carry, _, _, actions = ts.policy_state.apply_fn(
+            sub_key, ts.policy_state.params, carry, observations
+        )
+        action_list.append(actions)
+        keys = random.split(key, args.num_envs + 1)
+        states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
+        state_list.append(states)
+        keys = random.split(keys[0], args.num_envs + 1)
+        observations = jax.vmap(env.obs_model.sample)(keys[1:], states)
 
-    # states = jnp.stack(state_list[:-1], axis=0)
-    # actions = jnp.stack(action_list, axis=0)
-    # fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+    states = jnp.stack(state_list[:-1], axis=0)
+    actions = jnp.stack(action_list, axis=0)
+    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
 
-    # axs[0].plot(states[:, 0, 0])
-    # axs[0].set_ylabel("Angle")
+    axs[0].plot(states[:, 0, 0])
+    axs[0].set_ylabel("Angle")
 
-    # axs[1].plot(states[:, 0, 1])
-    # axs[1].set_ylabel("Angular velocity")
+    axs[1].plot(states[:, 0, 1])
+    axs[1].set_ylabel("Angular velocity")
 
-    # axs[2].plot(actions[:, 0, 0])
-    # axs[2].set_ylabel("Action")
-    # axs[2].set_xlabel("Time")
-    # plt.show()
+    axs[2].plot(actions[:, 0, 0])
+    axs[2].set_ylabel("Action")
+    axs[2].set_xlabel("Time")
+    plt.show()
