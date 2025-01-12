@@ -1,3 +1,5 @@
+from typing import Dict
+
 from functools import partial
 
 import math
@@ -9,15 +11,18 @@ from jax import Array, random
 from jax import numpy as jnp
 
 from ppomdp.core import (
+    Carry,
     OuterState,
     InnerState,
-    Reference,
+    OuterParticles,
     TransitionModel,
     ObservationModel,
-    RewardFn
+    RewardFn,
+    RecurrentPolicy,
 )
 
 
+# smc functions
 def resample_inner(
     rng_key: PRNGKey,
     inner_state: InnerState,
@@ -211,6 +216,107 @@ def resample_outer(
     return resampled_state
 
 
+def systematic_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
+    """
+    Perform systematic resampling of particles based on their weights.
+
+    Args:
+        rng_key (PRNGKey): The random key for sampling.
+        weights (Array): The weights of the particles.
+        num_samples (int): The number of samples to draw.
+
+    Returns:
+        Array: The indices of the resampled particles.
+    """
+    n = weights.shape[0]
+    u = random.uniform(rng_key, ())
+    cumsum = jnp.cumsum(weights)
+    linspace = (jnp.arange(num_samples, dtype=weights.dtype) + u) / num_samples
+    idx = jnp.searchsorted(cumsum, linspace)
+    return jnp.clip(idx, 0, n - 1).astype(jnp.int_)
+
+
+def multinomial_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
+    """
+    Perform multinomial resampling of particles based on their weights.
+
+    Args:
+        rng_key (PRNGKey): The random key for sampling.
+        weights (Array): The weights of the particles.
+        num_samples (int): The number of samples to draw.
+
+    Returns:
+        Array: The indices of the resampled particles.
+    """
+    idx = random.choice(rng_key, num_samples, shape=(num_samples,), p=weights)
+    return idx
+
+
+# backward sampling functions
+def marginal_observation_logpdf(
+    states: Array,
+    observation: Array,
+    obs_model: ObservationModel,
+):
+    """
+    Compute the log marginal likelihood of a single observation.
+
+    Args:
+        states: Array
+            State particles.
+        observation: Array
+            The observation.
+        obs_model: ObservationModel
+            The observation model.
+    """
+    num_particles = states.shape[0]
+    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(
+        observation, states
+    )
+    return jax.nn.logsumexp(log_probs) - jnp.log(num_particles)
+
+
+def policy_logpdf(
+    actions: Array,
+    observations: Array,
+    policy: RecurrentPolicy,
+    params: Dict,
+) -> Array:
+    """
+    Compute the logpdf of init and all future actions for a single trajectory
+    """
+    def body(carry, args):
+        action, observation = args
+        carry, log_prob_inc = policy.carry_and_log_prob(action, observation, carry, params)
+        return carry, log_prob_inc
+
+    _, log_probs = jax.lax.scan(body, policy.reset(1), (actions[1:], observations[:-1]))
+    return log_probs
+
+
+def transition_logpdf(
+    states: Array,
+    log_weights: Array,
+    action: Array,
+    future_states: Array,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel
+):
+    """" Transition probability of the inner particles for a single trajectory
+    The transition density is marginalized over the resmapling indices
+    """
+
+    def _log_transition(next_state, states, action):
+        logpdfs = jax.vmap(trans_model.log_prob, in_axes=(None, 0, None))(next_state, states, action)
+        return jax.nn.logsumexp(logpdfs + log_weights)
+
+    log_transitions = jax.vmap(_log_transition, in_axes=(0, None, None))(
+        future_states, states, action
+    )
+    return jnp.sum(log_transitions)
+
+
+# misc functions
 @partial(jnp.vectorize, signature="(m,h),(m)->(h)")
 def weighted_mean(particles: Array, weights: Array):
     """
@@ -246,42 +352,6 @@ def weighted_covar(particles: Array, weights: Array) -> Array:
 def effective_sample_size(weights: Array) -> Array:
     """Compute the effective sample size."""
     return 1.0 / jnp.sum(jnp.square(weights))
-
-
-def systematic_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
-    """
-    Perform systematic resampling of particles based on their weights.
-
-    Args:
-        rng_key (PRNGKey): The random key for sampling.
-        weights (Array): The weights of the particles.
-        num_samples (int): The number of samples to draw.
-
-    Returns:
-        Array: The indices of the resampled particles.
-    """
-    n = weights.shape[0]
-    u = random.uniform(rng_key, ())
-    cumsum = jnp.cumsum(weights)
-    linspace = (jnp.arange(num_samples, dtype=weights.dtype) + u) / num_samples
-    idx = jnp.searchsorted(cumsum, linspace)
-    return jnp.clip(idx, 0, n - 1).astype(jnp.int_)
-
-
-def multinomial_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
-    """
-    Perform multinomial resampling of particles based on their weights.
-
-    Args:
-        rng_key (PRNGKey): The random key for sampling.
-        weights (Array): The weights of the particles.
-        num_samples (int): The number of samples to draw.
-
-    Returns:
-        Array: The indices of the resampled particles.
-    """
-    idx = random.choice(rng_key, num_samples, shape=(num_samples,), p=weights)
-    return idx
 
 
 def batch_data(

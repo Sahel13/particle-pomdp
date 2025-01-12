@@ -94,7 +94,7 @@ def csmc_init(
     )
 
     # replace zeroth observations with reference observation
-    observations = observations.at[0].set(reference.observations)
+    observations = observations.at[0].set(reference.outer_particles.observations)
 
     # reweight inner particles
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
@@ -112,11 +112,11 @@ def csmc_init(
     init_log_probs = jnp.zeros(num_outer_particles)
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
-    init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.carry)
-    dummy_actions = dummy_actions.at[0].set(reference.actions)
-    init_log_probs = init_log_probs.at[0].set(reference.log_probs)
+    init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.outer_particles.carry)
+    dummy_actions = dummy_actions.at[0].set(reference.outer_particles.actions)
+    dummy_log_probs = init_log_probs.at[0].set(reference.outer_particles.log_probs)
 
-    outer_particles = OuterParticles(observations, dummy_actions, init_carry, init_log_probs)
+    outer_particles = OuterParticles(observations, dummy_actions, init_carry, dummy_log_probs)
     outer_state = OuterState(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
@@ -196,9 +196,9 @@ def csmc_step(
     )
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
-    carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.carry)
-    actions = actions.at[0].set(reference.actions)
-    log_probs = log_probs.at[0].set(reference.log_probs)
+    carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.outer_particles.carry)
+    actions = actions.at[0].set(reference.outer_particles.actions)
+    log_probs = log_probs.at[0].set(reference.outer_particles.log_probs)
 
     # 4. Propagate the inner particles.
     keys = random.split(key, num_particles + 1)
@@ -219,7 +219,7 @@ def csmc_step(
     )
 
     # replace zeroth observations with reference observation
-    observations = observations.at[0].set(reference.observations)
+    observations = observations.at[0].set(reference.outer_particles.observations)
 
     # 6. Reweight the inner particles.
     inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(

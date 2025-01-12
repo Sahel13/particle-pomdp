@@ -27,6 +27,9 @@ from ppomdp.utils import (
     weighted_covar,
     effective_sample_size,
     systematic_resampling,
+    policy_logpdf,
+    marginal_observation_logpdf,
+    transition_logpdf,
 )
 
 
@@ -96,9 +99,9 @@ def smc_init(
     # Initialize dummy actions and policy carry.
     init_carry = policy.reset(num_outer_particles)
     dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
-    init_log_probs = jnp.zeros(num_outer_particles)
+    dummy_log_probs = jnp.zeros(num_outer_particles)
 
-    outer_particles = OuterParticles(observations, dummy_actions, init_carry, init_log_probs)
+    outer_particles = OuterParticles(observations, dummy_actions, init_carry, dummy_log_probs)
     outer_state = OuterState(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
@@ -380,7 +383,7 @@ def backward_tracing(
         reverse=True,
     )
 
-    # Trace the inner states.
+    # Trace the inner states.^
     def get_traced_inner(idx, state, info):
         return jax.tree.map(lambda x: x[idx], state), jax.tree.map(lambda x: x[idx], info)
 
@@ -399,86 +402,197 @@ def backward_tracing(
     return traced_outer_states, traced_inner_states, traced_inner_infos
 
 
-def marginal_observation_logpdf(
-    outer_state: OuterState,
-    inner_state: InnerState,
-    obs_model: ObservationModel,
-):
+def stitch_arrays(a: Array, b: Array, stitch: int, max_size: int):
     """
-    Compute the log marginal likelihood of the observations.
+    Stitch two arrays `a` and `b` along the first axis up to a specified index.
+
+    This function creates a new array by selecting elements from `a` up to the
+    `stitch` index and elements from `b` for the remaining indices up to `max_size`.
 
     Args:
-        outer_state: OuterState
-            The outer state.
-        inner_state: InnerState
-            The inner state.
-        obs_model: ObservationModel
-            The observation model.
+        a (Array): The first input array.
+        b (Array): The second input array.
+        stitch (int): The index up to which elements are taken from `a`.
+        max_size (int): The total size of the output array.
+
+    Returns:
+        Array: The stitched array with elements from `a` up to `stitch` index
+               and elements from `b` for the remaining indices.
     """
-    num_particles = inner_state.particles.shape[0]
-    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(outer_state.particles.observations, inner_state.particles)
-    log_marginal_prob = jax.nn.logsumexp(log_probs) - jnp.log(num_particles)
-    return log_marginal_prob
+
+    return jnp.where(jnp.arange(max_size)[:, None] <= stitch, a, b)
 
 
-# def policy_logpdf(
-#     outer_states: OuterState,
-#     inner_states: InnerState,
-#     policy: RecurrentPolicy,
-#     params: Dict,
-# ) -> Array:
-#
-#
-#     def body(k, log_prob):
-#         action = outer_states.particles.actions[k]
-#         observation = outer_states.particles.observations[k - 1]
-#         carry = jax.tree.map(lambda x: x[k - 1], outer_states.particles.carry)
-#         log_prob += policy.log_prob(action, observation, carry, params)
-#         return log_prob, log_prob
-#
-#     log_prob = jax.lax.fori_loop(1, num_time_steps, body, 0.0)
-#     return log_prob
+def mcmc_backward_sampling_single(
+    rng_key: PRNGKey,
+    outer_state: OuterState,
+    inner_state: InnerState,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+    slew_rate_penalty: float,
+):
+    """
+    MCMC-based backward sampling from Bunch and Godsill (2013)
+    """
+    num_time_steps, num_outer_particles = outer_state.weights.shape
 
-# function transition_logpdf_and_potential(
-#     bd::BayesianDynamics,
-#     ps::AbstractMatrix{Float64},
-#     z::AbstractVector{Float64},
-#     zn::AbstractVector{Float64},
-# )
-#     """
-#     Computes the transition density of the state and the
-#     potential function for a single trajectory.
-#     """
-#     xdim = bd.xdim
-#
-#     x = z[1:xdim]
-#     up = z[xdim+1:end]
-#     xn = zn[1:xdim]
-#     u = zn[xdim+1:end]
-#     lws = zeros(size(ps, 2))
-#
-#     logpdfs = conditional_dynamics_logpdf(
-#         bd,     # dynamics
-#         ps,     # params
-#         x,      # state
-#         u,      # design
-#         xn,     # next state
-#         sc      # scratch
-#     )
-#
-#     info_gain = info_gain_increment(
-#         bd,     # dynamics
-#         ps,     # params
-#         lws,    # log weights
-#         x,      # state
-#         u,      # desgin
-#         xn,     # next state
-#         sc      # scratch
-#     )
-#
-#     # TODO: slew rate penalty is hard-coded
-#     slew_rate_penalty = 1e-1
-#     reward = info_gain - slew_rate_penalty * dot(u - up, u - up)
-#     return (logsumexp(logpdfs) - log(size(ps, 2))) + eta * reward
-# end
-#
+    # Sample the last particle
+    key, sub_key = random.split(rng_key)
+    idx = jax.random.choice(
+        sub_key, jnp.arange(num_outer_particles), p=outer_state.weights[-1]
+    )
+    last_sampled_outer_state = jax.tree.map(lambda x: x[-1, idx], outer_state)
+    last_sampled_inner_state = jax.tree.map(lambda x: x[-1, idx], inner_state)
+
+    def body(idx, args):
+        t, key = args
+
+        ancestor_idx = outer_state.resampling_indices[t + 1, idx]
+        key, sub_key = random.split(key)
+        proposed_idx = jax.random.choice(
+            sub_key, jnp.arange(num_outer_particles), p=outer_state.weights[t]
+        )
+
+        ancestor_policy_logpdfs = policy_logpdf(
+            stitch_arrays(
+                outer_state.particles.actions[:, ancestor_idx],
+                outer_state.particles.actions[:, idx],
+                stitch=t, max_size=num_time_steps
+            ),
+            stitch_arrays(
+                outer_state.particles.observations[:, ancestor_idx],
+                outer_state.particles.observations[:, idx],
+                stitch=t, max_size=num_time_steps
+            ),
+            policy, params
+        )
+        ancestor_policy_logpdf = jnp.sum(
+            jnp.where(
+                jnp.arange(num_time_steps) < t,
+                jnp.zeros((num_time_steps,)),
+                ancestor_policy_logpdfs
+            )
+        )
+
+        proposed_policy_logpdfs = policy_logpdf(
+            stitch_arrays(
+                outer_state.particles.actions[:, proposed_idx],
+                outer_state.particles.actions[:, idx],
+                stitch=t + 1, max_size=num_time_steps
+            ),
+            stitch_arrays(
+                outer_state.particles.observations[:, proposed_idx],
+                outer_state.particles.observations[:, idx],
+                stitch=t + 1, max_size=num_time_steps
+            ),
+            policy, params
+        )
+        proposed_policy_logpdf = jnp.sum(
+            jnp.where(
+                jnp.arange(num_time_steps) < t,
+                jnp.zeros((num_time_steps,)),
+                proposed_policy_logpdfs
+            )
+        )
+
+        ancestor_trans_logpdf = transition_logpdf(
+            inner_state.particles[t, ancestor_idx],
+            inner_state.log_weights[t, ancestor_idx],
+            outer_state.particles.actions[t + 1, idx],
+            inner_state.particles[t + 1, idx],
+            trans_model,
+            obs_model
+        )
+        proposed_trans_logpdf = transition_logpdf(
+            inner_state.particles[t, proposed_idx],
+            inner_state.log_weights[t, proposed_idx],
+            outer_state.particles.actions[t + 1, idx],
+            inner_state.particles[t + 1, idx],
+            trans_model,
+            obs_model
+        )
+
+        ancestor_log_potential, _ = log_potential(
+            reward_fn,
+            jax.tree.map(lambda x: x[t + 1, idx], inner_state),
+            outer_state.particles.actions[t + 1, idx],
+            outer_state.particles.actions[t, ancestor_idx],
+            t + 1,
+            tempering,
+            slew_rate_penalty
+        )
+        proposed_log_potential, _ = log_potential(
+            reward_fn,
+            jax.tree.map(lambda x: x[t + 1, idx], inner_state),
+            outer_state.particles.actions[t + 1, idx],
+            outer_state.particles.actions[t, proposed_idx],
+            t + 1,
+            tempering,
+            slew_rate_penalty
+        )
+
+        log_prob_ancestor = (
+            ancestor_policy_logpdf + ancestor_trans_logpdf + ancestor_log_potential
+        )
+        log_prob_proposed = (
+            proposed_policy_logpdf + proposed_trans_logpdf + proposed_log_potential
+        )
+
+        # accept / reject
+        key, sub_key = random.split(key)
+        log_u = jnp.log(jax.random.uniform(sub_key))
+        log_ratio = log_prob_proposed - log_prob_ancestor
+        idx = jax.lax.select(log_ratio > log_u, proposed_idx, ancestor_idx)
+        return idx, (
+            jax.tree.map(lambda x: x[t, idx], outer_state),
+            jax.tree.map(lambda x: x[t, idx], inner_state)
+        )
+
+    _, (sampled_outer_states, sampled_inner_states) = jax.lax.scan(
+        body, idx,
+        (
+            jnp.arange(num_time_steps - 1),
+            random.split(key, num_time_steps - 1)
+        ), reverse=True,
+    )
+
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
+
+    sampled_outer_states = concat_trees(sampled_outer_states, last_sampled_outer_state)
+    sampled_inner_states = concat_trees(sampled_inner_states, last_sampled_inner_state)
+    return sampled_outer_states, sampled_inner_states
+
+
+def mcmc_backward_sampling(
+    rng_key: PRNGKey,
+    num_samples: int,
+    outer_state: OuterState,
+    inner_state: InnerState,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+    slew_rate_penalty: float,
+):
+    keys = random.split(rng_key, num_samples)
+    sampled_outer_states, sampled_inner_states = jax.vmap(
+        lambda key: mcmc_backward_sampling_single(
+            key,
+            outer_state,
+            inner_state,
+            trans_model,
+            obs_model,
+            policy,
+            params,
+            reward_fn,
+            tempering,
+            slew_rate_penalty),
+        out_axes=1)(keys)
+    return sampled_outer_states, sampled_inner_states

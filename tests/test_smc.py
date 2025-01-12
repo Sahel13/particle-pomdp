@@ -281,6 +281,6 @@ def test_policy_log_prob(seed):
     )
 
     smc_log_probs = traced_outer.particles.log_probs[:-1, :]
-    acc_log_probs = log_prob_policy_pathwise(policy, init_params, traced_outer.particles)
+    acc_log_probs = log_prob_policy_pathwise(traced_outer.particles, policy, init_params)
 
     assert jnp.linalg.norm(smc_log_probs - acc_log_probs) < 1e-3
