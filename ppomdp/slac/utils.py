@@ -54,7 +54,9 @@ def one_step_genealogy_tracking(
     next_bs: InnerState,
     num_samples: int,
 ) -> tuple[Array, Array]:
-    resampling_idx = systematic_resampling(rng_key, next_bs.weights, num_samples)
+    # resampling_idx = systematic_resampling(rng_key, next_bs.weights, num_samples)
+    # Pick the highest weighted particles.
+    resampling_idx = jnp.argsort(next_bs.weights, descending=True)[:num_samples]
     x_tp1 = next_bs.particles[resampling_idx]
     prev_idx = next_bs.resampling_indices[resampling_idx]
     x_t = bs.particles[prev_idx]
@@ -71,6 +73,9 @@ def get_transition(
     states, next_states = jax.vmap(one_step_genealogy_tracking, (0, 0, 0, None))(
         keys, os.belief_states, os.next_belief_states, num_samples
     )
+    if num_samples == 1:
+        states = states.squeeze(1)
+        next_states = next_states.squeeze(1)
     return Transition(
         states=states,
         observations=os.observations,
