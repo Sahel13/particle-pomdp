@@ -2,9 +2,10 @@ from typing import Callable, Dict
 
 import jax
 import jax.numpy as jnp
+from jax import Array, random
+
 from chex import PRNGKey
 from distrax import Distribution
-from jax import Array, random
 
 from ppomdp.core import (
     InnerState,
@@ -28,7 +29,6 @@ from ppomdp.utils import (
     effective_sample_size,
     systematic_resampling,
     policy_logpdf,
-    marginal_observation_logpdf,
     transition_logpdf,
 )
 
@@ -402,25 +402,6 @@ def backward_tracing(
     return traced_outer_states, traced_inner_states, traced_inner_infos
 
 
-def stitch_arrays(a: Array, b: Array, stitch: int, max_size: int):
-    """
-    Stitch two arrays `a` and `b` along the first axis up to a specified index.
-
-    This function creates a new array by selecting elements from `a` up to the
-    `stitch` index and elements from `b` for the remaining indices up to `max_size`.
-
-    Args:
-        a (Array): The first input array.
-        b (Array): The second input array.
-        stitch (int): The index up to which elements are taken from `a`.
-        max_size (int): The total size of the output array.
-
-    Returns:
-        Array: The stitched array with elements from `a` up to `stitch` index
-               and elements from `b` for the remaining indices.
-    """
-
-    return jnp.where(jnp.arange(max_size)[:, None] <= stitch, a, b)
 
 
 def mcmc_backward_sampling_single(
@@ -440,6 +421,12 @@ def mcmc_backward_sampling_single(
     """
     num_time_steps, num_outer_particles = outer_state.weights.shape
 
+    _, _, action_dim = outer_state.particles.actions.shape
+    _, _, observation_dim = outer_state.particles.observations.shape
+
+    future_actions = jnp.zeros((num_time_steps, action_dim))
+    future_observations = jnp.zeros((num_time_steps, observation_dim))
+
     # Sample the last particle
     key, sub_key = random.split(rng_key)
     idx = jax.random.choice(
@@ -448,7 +435,11 @@ def mcmc_backward_sampling_single(
     last_sampled_outer_state = jax.tree.map(lambda x: x[-1, idx], outer_state)
     last_sampled_inner_state = jax.tree.map(lambda x: x[-1, idx], inner_state)
 
-    def body(idx, args):
+    future_actions = future_actions.at[-1, :].set(last_sampled_outer_state.particles.actions)
+    future_observations = future_observations.at[-1, :].set(last_sampled_outer_state.particles.observations)
+
+    def body(carry, args):
+        idx, future_actions, future_observations = carry
         t, key = args
 
         ancestor_idx = outer_state.resampling_indices[t + 1, idx]
@@ -457,46 +448,23 @@ def mcmc_backward_sampling_single(
             sub_key, jnp.arange(num_outer_particles), p=outer_state.weights[t]
         )
 
-        ancestor_policy_logpdfs = policy_logpdf(
-            stitch_arrays(
-                outer_state.particles.actions[:, ancestor_idx],
-                outer_state.particles.actions[:, idx],
-                stitch=t, max_size=num_time_steps
-            ),
-            stitch_arrays(
-                outer_state.particles.observations[:, ancestor_idx],
-                outer_state.particles.observations[:, idx],
-                stitch=t, max_size=num_time_steps
-            ),
-            policy, params
+        ancestor_policy_logpdf = policy_logpdf(
+            jax.tree.map(lambda x: x[t, ancestor_idx], outer_state.particles.carry),
+            jax.tree.map(lambda x: x[t, ancestor_idx], outer_state.particles.observations),
+            future_actions,
+            future_observations,
+            t + 1,  # starting index of future time steps
+            policy,
+            params
         )
-        ancestor_policy_logpdf = jnp.sum(
-            jnp.where(
-                jnp.arange(num_time_steps) < t,
-                jnp.zeros((num_time_steps,)),
-                ancestor_policy_logpdfs
-            )
-        )
-
-        proposed_policy_logpdfs = policy_logpdf(
-            stitch_arrays(
-                outer_state.particles.actions[:, proposed_idx],
-                outer_state.particles.actions[:, idx],
-                stitch=t + 1, max_size=num_time_steps
-            ),
-            stitch_arrays(
-                outer_state.particles.observations[:, proposed_idx],
-                outer_state.particles.observations[:, idx],
-                stitch=t + 1, max_size=num_time_steps
-            ),
-            policy, params
-        )
-        proposed_policy_logpdf = jnp.sum(
-            jnp.where(
-                jnp.arange(num_time_steps) < t,
-                jnp.zeros((num_time_steps,)),
-                proposed_policy_logpdfs
-            )
+        proposed_policy_logpdf = policy_logpdf(
+            jax.tree.map(lambda x: x[t, proposed_idx], outer_state.particles.carry),
+            jax.tree.map(lambda x: x[t, proposed_idx], outer_state.particles.observations),
+            future_actions,
+            future_observations,
+            t + 1,  # starting index of future time steps
+            policy,
+            params
         )
 
         ancestor_trans_logpdf = transition_logpdf(
@@ -547,13 +515,19 @@ def mcmc_backward_sampling_single(
         log_u = jnp.log(jax.random.uniform(sub_key))
         log_ratio = log_prob_proposed - log_prob_ancestor
         idx = jax.lax.select(log_ratio > log_u, proposed_idx, ancestor_idx)
-        return idx, (
-            jax.tree.map(lambda x: x[t, idx], outer_state),
-            jax.tree.map(lambda x: x[t, idx], inner_state)
-        )
+
+        sampled_outer_state = jax.tree.map(lambda x: x[t, idx], outer_state)
+        sampled_inner_state = jax.tree.map(lambda x: x[t, idx], inner_state)
+
+        future_actions = future_actions.at[t, :].set(sampled_outer_state.particles.actions)
+        future_observations = future_observations.at[t, :].set(sampled_outer_state.particles.observations)
+
+        return (idx, future_actions, future_observations), \
+            (sampled_outer_state, sampled_inner_state)
 
     _, (sampled_outer_states, sampled_inner_states) = jax.lax.scan(
-        body, idx,
+        body,
+        (idx, future_actions, future_observations),
         (
             jnp.arange(num_time_steps - 1),
             random.split(key, num_time_steps - 1)
@@ -579,7 +553,7 @@ def mcmc_backward_sampling(
     params: Dict,
     reward_fn: RewardFn,
     tempering: float,
-    slew_rate_penalty: float,
+    slew_rate_penalty: float = 0.0,
 ):
     keys = random.split(rng_key, num_samples)
     sampled_outer_states, sampled_inner_states = jax.vmap(

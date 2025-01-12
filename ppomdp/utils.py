@@ -277,21 +277,32 @@ def marginal_observation_logpdf(
 
 
 def policy_logpdf(
-    actions: Array,
-    observations: Array,
+    init_carry: list[Carry],
+    init_observation: Array,
+    future_actions: Array,
+    future_observations: Array,
+    time_idx: int,
     policy: RecurrentPolicy,
     params: Dict,
 ) -> Array:
     """
     Compute the logpdf of init and all future actions for a single trajectory
     """
-    def body(carry, args):
-        action, observation = args
-        carry, log_prob_inc = policy.carry_and_log_prob(action, observation, carry, params)
-        return carry, log_prob_inc
+    num_steps = future_observations.shape[0]
 
-    _, log_probs = jax.lax.scan(body, policy.reset(1), (actions[1:], observations[:-1]))
-    return log_probs
+    def body(k, val):
+        carry, log_prob = val
+        next_carry, log_prob_inc = policy.carry_and_log_prob(
+            future_actions[k], future_observations[k - 1], carry, params
+        )
+        return next_carry, log_prob + log_prob_inc
+
+    carry, log_prob = policy.carry_and_log_prob(
+        future_actions[time_idx], init_observation, init_carry, params
+    )
+
+    _, log_prob = jax.lax.fori_loop(time_idx + 1, num_steps, body, (carry, log_prob))
+    return log_prob
 
 
 def transition_logpdf(
@@ -383,3 +394,24 @@ def batch_data(
 
     batch_idx = jnp.array_split(batch_idx, num_batches)
     return batch_idx
+
+
+def stitch_arrays(a: Array, b: Array, stitch: int, max_size: int):
+    """
+    Stitch two arrays `a` and `b` along the first axis up to a specified index.
+
+    This function creates a new array by selecting elements from `a` up to the
+    `stitch` index and elements from `b` for the remaining indices up to `max_size`.
+
+    Args:
+        a (Array): The first input array.
+        b (Array): The second input array.
+        stitch (int): The index up to which elements are taken from `a`.
+        max_size (int): The total size of the output array.
+
+    Returns:
+        Array: The stitched array with elements from `a` up to `stitch` index
+               and elements from `b` for the remaining indices.
+    """
+
+    return jnp.where(jnp.arange(max_size)[:, None] <= stitch, a, b)
