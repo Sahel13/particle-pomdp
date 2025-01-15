@@ -8,7 +8,7 @@ from functools import partial
 
 import jax.numpy as jnp
 from chex import PRNGKey
-from distrax import Distribution, MultivariateNormalDiag, Normal
+from distrax import Deterministic, Distribution, MultivariateNormalDiag
 from jax import Array
 
 from ppomdp.core import ObservationModel, TransitionModel
@@ -72,12 +72,11 @@ num_envs = 1
 state_dim = 2
 action_dim = 1
 obs_dim = 2
-num_time_steps = 200
+num_time_steps = 100
 action_scale = 2.0
 action_shift = 0.0
 
-_default_init_state = jnp.array([0.0, 0.0])
-prior_dist = Normal(_default_init_state, jnp.array([1e-16, 1e-16]))
+prior_dist = Deterministic(jnp.zeros(state_dim))
 
 trans_noise = MultivariateNormalDiag(jnp.zeros(2), scale_diag=jnp.array([1e-4, 0.025]))
 trans_model = get_transition_model(trans_noise)
@@ -87,7 +86,7 @@ obs_model = get_observation_model(obs_noise)
 
 
 @partial(jnp.vectorize, signature="(n)->(m)")
-def feature_fn(state: Array):
+def feature_fn(state: Array) -> Array:
     return jnp.array([jnp.cos(state[0]), jnp.sin(state[0]), state[1]])
 
 

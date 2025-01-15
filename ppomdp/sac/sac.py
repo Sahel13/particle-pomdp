@@ -29,18 +29,15 @@ class Args(NamedTuple):
     """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = 100000
-    buffer_size: int = int(1e6)
+    total_timesteps: int = int(5e4)
+    buffer_size: int = int(5e4)
     gamma: float = 0.99
     tau: float = 0.005
     batch_size: int = 256
     learning_starts: int = int(5e3)
     policy_lr: float = 3e-4
     q_lr: float = 1e-3
-    policy_frequency: int = 2
-    target_network_frequency: int = 1
     alpha: float = 0.2
-    autotune: bool = False
 
 
 def sample_random_actions(
@@ -66,10 +63,9 @@ def init(
         actions = sample_random_actions(action_key, env, num_outer_particles)
     else:
         actions, _, _ = policy_state.apply_fn(action_key, policy_state.params, states)
-    rewards = jax.vmap(env.reward_fn, in_axes=(0, 0, None))(states, actions, 0)
-
     keys = random.split(key, num_outer_particles)
     next_states = jax.vmap(env.trans_model.sample)(keys, states, actions)
+    rewards = jax.vmap(env.reward_fn, in_axes=(0, 0, None))(next_states, actions, 1)
     time_steps = jnp.ones(num_outer_particles)
     dones = jnp.zeros(num_outer_particles)
 
@@ -96,15 +92,14 @@ def step(
             actions = sample_random_actions(keys[0], env, num_particles)
         else:
             actions, _, _ = policy_state.apply_fn(keys[0], policy_state.params, states)
-        rewards = jax.vmap(env.reward_fn)(states, actions, _outer_state.time_steps)
-
         next_states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
         time_steps = _outer_state.time_steps + 1
         dones = jax.lax.select(
-            time_steps[0] >= env.num_time_steps,
+            time_steps[0] == env.num_time_steps,
             jnp.ones(num_particles),
             jnp.zeros(num_particles),
         )
+        rewards = jax.vmap(env.reward_fn)(next_states, actions, time_steps)
         eps_rewards = _outer_state.episodic_rewards + rewards
 
         return OuterState(
@@ -136,14 +131,13 @@ def create_train_state(
     actor_network = ActorNetwork(env.action_dim, jnp.array(1.0), env.feature_fn)
     q_networks = QNetworks(env.feature_fn)
 
-    key, sub_key = random.split(rng_key, 2)
+    q_key, policy_key = random.split(rng_key)
     init_states = jnp.empty((1, env.state_dim))
     init_actions = jnp.empty((1, env.action_dim))
-    q_params = q_networks.init(sub_key, init_states, init_actions)
+    q_params = q_networks.init(q_key, init_states, init_actions)
     q_target_params = jax.tree.map(lambda x: x.copy(), q_params)
 
-    key, policy_key = random.split(key)
-    policy_params = actor_network.init(policy_key, init_states)["params"]
+    policy_params = actor_network.init(policy_key, init_states)
 
     q_optimizer = optax.adam(q_lr)
     policy_optimizer = optax.adam(policy_lr)
@@ -244,7 +238,6 @@ if __name__ == "__main__":
     outer_state = init(sub_key, env, n_envs, ts.policy_state, True)
 
     # Set up the replay buffer from Brax.
-    key, sub_key = random.split(key)
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], outer_state)
     buffer = UniformSamplingQueue(
         args.buffer_size, buffer_entry_prototype, sample_batch_size=args.batch_size
@@ -252,6 +245,7 @@ if __name__ == "__main__":
     buffer.insert_internal = jax.jit(buffer.insert_internal)
     buffer.sample_internal = jax.jit(buffer.sample_internal)
 
+    key, sub_key = random.split(key)
     buffer_state = buffer.init(sub_key)
     buffer_state = buffer.insert(buffer_state, outer_state)
 
@@ -272,36 +266,37 @@ if __name__ == "__main__":
 
         if outer_state.dones[0] == 1:
             print(
-                f"Step: {global_step:6d} | Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
+                f"Step: {global_step:6d} | "
+                + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f}"
             )
 
     # Evalute the learned policy.
-    key, sub_key = random.split(key)
-    state_list, action_list = [], []
-    states = env.prior_dist.sample(seed=sub_key, sample_shape=(args.batch_size,))
-    state_list.append(states)
+    key, state_key = random.split(key)
+    state = env.prior_dist.sample(seed=state_key)
 
-    for i in range(env.num_time_steps):
-        key, sub_key = random.split(key)
-        _, _, actions = ts.policy_state.apply_fn(
-            sub_key, ts.policy_state.params, states
+    def body_fn(state, rng_key):
+        action_key, state_key = random.split(rng_key)
+        _, _, action = ts.policy_state.apply_fn(
+            action_key, ts.policy_state.params, state
         )
-        action_list.append(actions)
-        keys = random.split(key, args.batch_size)
-        states = jax.vmap(env.trans_model.sample)(keys, states, actions)
-        state_list.append(states)
+        state = env.trans_model.sample(state_key, state, action)
+        return state, (state, action)
 
-    states = jnp.stack(state_list[:-1], axis=0)
-    actions = jnp.stack(action_list, axis=0)
+    _, (states, actions) = jax.lax.scan(
+        body_fn, state, random.split(key, env.num_time_steps)
+    )
+    states = jnp.concatenate([state[None, ...], states], axis=0)
+
+    # For the pendulum environment.
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
 
-    axs[0].plot(states[:, 0, 0])
+    axs[0].plot(states[:, 0])
     axs[0].set_ylabel("Angle")
 
-    axs[1].plot(states[:, 0, 1])
+    axs[1].plot(states[:, 1])
     axs[1].set_ylabel("Angular velocity")
 
-    axs[2].plot(actions[:, 0, 0])
+    axs[2].plot(actions[:, 0])
     axs[2].set_ylabel("Action")
     axs[2].set_xlabel("Time")
     plt.show()

@@ -88,7 +88,7 @@ def sample_and_log_prob(
     action_shift: ArrayLike,
 ) -> tuple[Array, Array, Array]:
     """Sample actions and compute their log probabilities."""
-    mean, log_std = network.apply({"params": params}, states)
+    mean, log_std = network.apply(params, states)
     bijector = Chain([ScalarAffine(action_scale, action_shift), Tanh()])
     dist = squash_policy(mean, log_std, bijector)
     sampled_action, log_prob = dist.sample_and_log_prob(seed=rng_key)
