@@ -15,8 +15,7 @@ from brax.training.replay_buffers import UniformSamplingQueue
 from flax.training.train_state import TrainState
 from jax import Array, random
 
-from ppomdp.envs import pendulum
-from ppomdp.envs.base import Environment
+from ppomdp.envs import Environment, PendulumEnv
 from ppomdp.sac.utils import (
     ActorNetwork,
     OuterState,
@@ -137,7 +136,7 @@ def create_train_state(
     q_params = q_networks.init(q_key, init_states, init_actions)
     q_target_params = jax.tree.map(lambda x: x.copy(), q_params)
 
-    policy_params = actor_network.init(policy_key, init_states)
+    policy_params = actor_network.init(policy_key, init_states)["params"]
 
     q_optimizer = optax.adam(q_lr)
     policy_optimizer = optax.adam(policy_lr)
@@ -228,7 +227,7 @@ def gradient_step(
 if __name__ == "__main__":
     args = Args()
 
-    env = pendulum.env
+    env = PendulumEnv
     key = random.key(args.seed)
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
@@ -289,14 +288,20 @@ if __name__ == "__main__":
 
     # For the pendulum environment.
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+    fig.suptitle("Simulated trajectory")
 
     axs[0].plot(states[:, 0])
     axs[0].set_ylabel("Angle")
+    axs[0].grid(True)
 
     axs[1].plot(states[:, 1])
     axs[1].set_ylabel("Angular velocity")
+    axs[1].grid(True)
 
     axs[2].plot(actions[:, 0])
     axs[2].set_ylabel("Action")
     axs[2].set_xlabel("Time")
+    axs[2].grid(True)
+
+    plt.tight_layout()
     plt.show()

@@ -90,7 +90,7 @@ def feature_fn(state: Array) -> Array:
     return jnp.array([jnp.cos(state[0]), jnp.sin(state[0]), state[1]])
 
 
-env = Environment(
+PendulumEnv = Environment(
     num_envs,
     state_dim,
     action_dim,
