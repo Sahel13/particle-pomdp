@@ -14,7 +14,6 @@ from ppomdp.core import (
     Carry,
     OuterState,
     InnerState,
-    OuterParticles,
     TransitionModel,
     ObservationModel,
     RewardFn,
@@ -182,7 +181,6 @@ def log_potential(
 def resample_outer(
     rng_key: PRNGKey,
     outer_state: OuterState,
-    resample: bool,
     resample_fn: Callable,
     conditional: bool = False
 ) -> OuterState:
@@ -211,7 +209,7 @@ def resample_outer(
         resampling_idx = jnp.arange(num_particles)
         return state._replace(resampling_indices=resampling_idx)
 
-    predicate = resample and effective_sample_size(outer_state.weights) < 0.75 * num_particles
+    predicate = effective_sample_size(outer_state.weights) < 0.75 * num_particles
     resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
     return resampled_state
 

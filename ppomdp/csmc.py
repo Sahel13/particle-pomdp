@@ -138,7 +138,6 @@ def csmc_step(
     tempering: float,
     slew_rate_penalty: float,
     reference: Reference,
-    resample: bool,
     outer_state: OuterState,
     inner_state: InnerState,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
@@ -164,9 +163,6 @@ def csmc_step(
             The slew rate penalty.
         reference: Reference
             Reference trajectory of the conditional particle filter.
-        resample: bool
-            If True, resample, otherwise do not resample.
-            The resampling function.
         outer_state: OuterState
             Leaves have shape (N, ...).
         inner_state: InnerState
@@ -177,7 +173,7 @@ def csmc_step(
     # 1. Resample the outer particles.
     key, sub_key = random.split(rng_key)
     outer_state = resample_outer(
-        sub_key, outer_state, resample, multinomial_resampling, conditional=True
+        sub_key, outer_state, multinomial_resampling, conditional=True
     )
     particles = outer_state.particles
     resampling_idx = outer_state.resampling_indices
@@ -268,7 +264,6 @@ def csmc(
     tempering: float,
     slew_rate_penalty: float,
     reference: Reference,
-    resample: bool = True,
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
     Perform the Conditional Sequential Monte Carlo (CSMC) algorithm.
@@ -300,9 +295,6 @@ def csmc(
             The slew rate penalty.
         reference: Reference
             Reference trajectory of the conditional particle filter.
-        resample: bool
-            If True, resample, otherwise do not resample.
-            The resampling function.
 
     Returns:
         tuple[OuterState, InnerState, Array]
@@ -325,7 +317,6 @@ def csmc(
             tempering,
             slew_rate_penalty,
             ref_state,
-            resample,
             outer_state,
             inner_state,
         )
