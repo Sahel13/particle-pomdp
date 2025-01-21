@@ -124,10 +124,10 @@ def sample_marginal_obs(
 
 
 def expected_reward(
-    reward_fn: RewardFn,
     inner_state: InnerState,
     action: Array,
-    time_idx: int
+    time_idx: int,
+    reward_fn: RewardFn
 ) -> Array:
     """
     Calculate the expected reward for a given particle and inner state.
@@ -150,13 +150,13 @@ def expected_reward(
 
 
 def log_potential(
-    reward_fn: RewardFn,
     inner_state: InnerState,
     action: Array,
     prev_action: Array,
     time_idx: int,
+    reward_fn: RewardFn,
     tempering: float,
-    slew_rate_penalty: float,
+    slew_rate_penalty: float
 ) -> tuple[Array, Array]:
     r"""Estimate the log potential function.
 
@@ -174,7 +174,7 @@ def log_potential(
         tempering: The tempering parameter.
         slew_rate_penalty: The slew rate penalty.
     """
-    rewards = expected_reward(reward_fn, inner_state, action, time_idx)
+    rewards = expected_reward(inner_state, action, time_idx, reward_fn)
     mod_rewards = rewards - slew_rate_penalty * jnp.dot(action - prev_action, action - prev_action)
     return tempering * mod_rewards, rewards
 
@@ -277,18 +277,18 @@ def marginal_observation_logpdf(
 
 
 def policy_logpdf(
-    init_carry: list[Carry],
-    init_observation: Array,
+    time_idx: int,
     future_actions: Array,
     future_observations: Array,
-    time_idx: int,
+    init_carry: list[Carry],
+    init_observation: Array,
     policy: RecurrentPolicy,
     params: Dict,
 ) -> Array:
     """
     Compute the logpdf of init and all future actions for a single trajectory
     """
-    num_steps = future_observations.shape[0]
+    num_steps = future_actions.shape[0]
 
     def body(k, val):
         carry, log_prob = val
@@ -306,25 +306,25 @@ def policy_logpdf(
 
 
 def transition_logpdf(
-    states: Array,
-    log_weights: Array,
+    future_inner_state: InnerState,
+    inner_state: InnerState,
     action: Array,
-    future_states: Array,
     trans_model: TransitionModel,
-    obs_model: ObservationModel
 ):
     """" Transition probability of the inner particles for a single trajectory
     The transition density is marginalized over the resmapling indices
     """
 
     def _log_transition(next_state, states, action):
-        logpdfs = jax.vmap(trans_model.log_prob, in_axes=(None, 0, None))(next_state, states, action)
-        return jax.nn.logsumexp(logpdfs + log_weights)
+        logpdfs = jax.vmap(trans_model.log_prob, in_axes=(None, 0, None))(
+            next_state, states, action
+        )
+        return jax.nn.logsumexp(logpdfs + inner_state.log_weights)
 
     log_transitions = jax.vmap(_log_transition, in_axes=(0, None, None))(
-        future_states, states, action
+        future_inner_state.particles, inner_state.particles, action
     )
-    return jnp.sum(log_transitions)
+    return jax.nn.logsumexp(log_transitions + future_inner_state.log_weights)
 
 
 # misc functions

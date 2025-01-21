@@ -186,7 +186,7 @@ def csmc_step(
     # 2. Resample the inner particles.
     keys = random.split(key, num_particles + 1)
     inner_state = jax.vmap(resample_inner, in_axes=(0, 0, None))(
-        keys[1:], inner_state, systematic_resampling
+        keys[1:], inner_state, multinomial_resampling
     )
 
     # 3. Sample new actions.
@@ -232,8 +232,8 @@ def csmc_step(
     )
 
     # 7. Reweight the outer particles.
-    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, 0, None, None, None))(
-        reward_fn, inner_state, actions, particles.actions, time_idx, tempering, slew_rate_penalty
+    log_potentials, rewards = jax.vmap(log_potential, in_axes=(0, 0, 0, None, None, None, None))(
+        inner_state, actions, particles.actions, time_idx, reward_fn, tempering, slew_rate_penalty
     )
     log_weights = log_potentials + outer_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
@@ -312,7 +312,7 @@ def csmc(
 
     def csmc_loop(carry, args):
         outer_state, inner_state, log_marginal = carry
-        time_idx, key, ref_step = args
+        time_idx, key, ref_state = args
 
         outer_state, inner_state, inner_info, log_marginal_incr = csmc_step(
             time_idx,
@@ -324,7 +324,7 @@ def csmc(
             reward_fn,
             tempering,
             slew_rate_penalty,
-            ref_step,
+            ref_state,
             resample,
             outer_state,
             inner_state,

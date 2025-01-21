@@ -8,7 +8,6 @@ from distrax import MultivariateNormalDiag
 
 from ppomdp.core import TransitionModel, ObservationModel
 
-# jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", True)
 
 state_dim = 1
