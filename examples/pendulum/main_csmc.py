@@ -94,18 +94,25 @@ outer_states, inner_states, inner_infos, _ = jitted_smc(
 # backward sample outer states
 key, sub_key = random.split(key)
 traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-    sub_key, num_outer_particles, outer_states, inner_states, trans_model, obs_model,
-    policy, train_state.params, reward_fn, tempering, slew_rate_penalty
+    sub_key,
+    num_outer_particles,
+    outer_states,
+    inner_states,
+    trans_model,
+    obs_model,
+    policy,
+    train_state.params,
+    reward_fn,
+    tempering,
+    slew_rate_penalty
 )
 
 # sample a new reference
 key, sub_key = random.split(key)
 idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles))
-outer_reference = jax.tree.map(lambda x: x[:, idx], traced_outer.particles)
-inner_reference = jax.tree.map(lambda x: x[:, idx], traced_inner)
 reference = Reference(
-    outer_particles=outer_reference,
-    inner_state=inner_reference
+    outer_particles=jax.tree.map(lambda x: x[:, idx], traced_outer),
+    inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
 )
 
 for i in range(1, num_epochs + 1):
@@ -139,18 +146,25 @@ for i in range(1, num_epochs + 1):
     # backward sample outer states
     key, sub_key = random.split(key)
     traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-        sub_key, num_outer_particles, outer_states, inner_states, trans_model, obs_model,
-        policy, train_state.params, reward_fn, tempering, slew_rate_penalty
+        sub_key,
+        num_outer_particles,
+        outer_states,
+        inner_states,
+        trans_model,
+        obs_model,
+        policy,
+        train_state.params,
+        reward_fn,
+        tempering,
+        slew_rate_penalty
     )
 
     # sample a new reference
     key, sub_key = random.split(key)
     idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles))
-    outer_reference = jax.tree.map(lambda x: x[:, idx], traced_outer.particles)
-    inner_reference = jax.tree.map(lambda x: x[:, idx], traced_inner)
     reference = Reference(
-        outer_particles=outer_reference,
-        inner_state=inner_reference
+        outer_particles=jax.tree.map(lambda x: x[:, idx], traced_outer),
+        inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
     )
 
     # update policy parameters
@@ -158,7 +172,7 @@ for i in range(1, num_epochs + 1):
     key, sub_key = random.split(key)
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
-        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer.particles)
+        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
         train_state, batch_loss = train_step(policy, train_state, outer_batch)
         loss += batch_loss
 

@@ -93,7 +93,7 @@ for i in range(1, num_epochs + 1):
 
     # backward sample outer states
     key, sub_key = random.split(key)
-    traced_outer, traced_inner = jitted_mcmc_backward_sampling(
+    traced_outer, traced_inner = jitted_backward_sampling(
         sub_key, num_outer_particles, outer_states, inner_states, trans_model,
         policy, train_state.params, reward_fn, tempering, slew_rate_penalty
     )
@@ -103,7 +103,7 @@ for i in range(1, num_epochs + 1):
     key, sub_key = random.split(key)
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
-        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer.particles)
+        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
         train_state, batch_loss = train_step(policy, train_state, outer_batch)
         loss += batch_loss
 
@@ -145,13 +145,13 @@ outer_states, inner_states, inner_infos, _ = \
 
 # backward sample outer states
 key, sub_key = random.split(key)
-outer_states, inner_states = jitted_mcmc_backward_sampling(
+outer_states, inner_states = jitted_backward_sampling(
     sub_key, num_outer_particles, outer_states, inner_states, trans_model,
     policy, train_state.params, reward_fn, tempering, slew_rate_penalty
 )
 
-observations = outer_states.particles[0]
-actions = outer_states.particles[1]
+observations = outer_states.observations
+actions = outer_states.actions
 state_means = inner_infos.mean
 state_covars = inner_infos.covar
 
