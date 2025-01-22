@@ -77,8 +77,8 @@ def reward_fn(s: Array, a: Array, _: int) -> Array:
     def wrap_angle(_q: float) -> float:
         return _q % (2.0 * jnp.pi)
 
-    Q = jnp.array([2e0, 1e1, 1e-1, 1e-1])
-    R = 5e-3
+    Q = jnp.array([1e0, 1e1, 1e-1, 1e-1])
+    R = 1e-3
 
     _state = jnp.array((x, wrap_angle(q), xd, qd))
     _state -= goal
@@ -93,7 +93,7 @@ obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
 @partial(jnp.vectorize, signature="(m)->(n)")
 def feature_fn(z: Array) -> Array:
-    return jnp.array((z[0], jnp.sin(z[1]), jnp.cos(z[1])))
+    return jnp.concatenate((z[:1], jnp.cos(z[1:2]), jnp.sin(z[1:2]), z[2:]))
 
 
 CartPoleEnv = Environment(
