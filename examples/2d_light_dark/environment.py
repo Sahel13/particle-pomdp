@@ -83,7 +83,7 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
     q = jax.lax.cond(
         t < num_time_steps - 1,
         lambda _: jnp.zeros((state_dim,)),
-        lambda _: jnp.array([250., 250., 0., 0.]),
+        lambda _: jnp.array([50., 50., 0., 0.]),
         operand=None
     )
     r = jnp.array([1e-4, 1e-4])

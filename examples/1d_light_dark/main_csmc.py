@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 import time
 
@@ -38,7 +38,7 @@ network = GRU(
 bijector = Chain([ScalarAffine(0.0, 3.0), Tanh()])
 policy = get_recurrent_policy(network, bijector)
 
-rng_key = random.PRNGKey(123)
+rng_key = random.PRNGKey(5)
 
 num_outer_particles = 256
 num_inner_particles = 256
@@ -46,8 +46,9 @@ tempering = 0.1
 slew_rate_penalty = 0.005
 
 learning_rate = 3e-4
-batch_size = 32
+batch_size = 256
 num_epochs = 500
+num_moves = 5
 
 # Initialize training state
 key, obs_key, param_key = random.split(rng_key, 3)
@@ -63,10 +64,8 @@ train_state = TrainState.create(
 jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 jitted_csmc = jax.jit(csmc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5,))
-jitted_mcmc_backward_sampling = \
-    jax.jit(mcmc_backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
-jitted_backward_sampling = \
-    jax.jit(backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
+jitted_backward_sampling = jax.jit(backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
+jitted_mcmc_backward_sampling = jax.jit(mcmc_backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
 
 # run init nested smc
 key, sub_key = random.split(key)
@@ -94,8 +93,16 @@ outer_states, inner_states, inner_info, log_marginal = \
 # backward sample outer states
 key, sub_key = random.split(key)
 traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-    sub_key, num_outer_particles, outer_states, inner_states, trans_model,
-    policy, train_state.params, reward_fn, tempering, slew_rate_penalty
+    sub_key,
+    num_outer_particles,
+    outer_states,
+    inner_states,
+    trans_model,
+    policy,
+    train_state.params,
+    reward_fn,
+    tempering,
+    slew_rate_penalty
 )
 
 # sample a new reference
@@ -118,8 +125,8 @@ for i in range(1, num_epochs + 1):
         jitted_smc(
             sub_key,
             num_time_steps,
-            num_outer_particles,
-            num_inner_particles,
+            int(4 * num_outer_particles),
+            int(4 * num_inner_particles),
             prior_dist,
             trans_model,
             obs_model,
@@ -131,44 +138,53 @@ for i in range(1, num_epochs + 1):
         )
     expected_reward = jnp.mean(jnp.sum(outer_states.rewards, axis=0))
 
-    # run nested conditional smc
-    key, sub_key = random.split(key)
-    outer_states, inner_states, inner_info, log_marginal = \
-        jitted_csmc(
+    for _ in range(num_moves):
+        # run nested conditional smc
+        key, sub_key = random.split(key)
+        outer_states, inner_states, inner_info, log_marginal = \
+            jitted_csmc(
+                sub_key,
+                num_time_steps,
+                num_outer_particles,
+                num_inner_particles,
+                prior_dist,
+                trans_model,
+                obs_model,
+                policy,
+                train_state.params,
+                reward_fn,
+                tempering,
+                slew_rate_penalty,
+                reference
+            )
+
+        # # trace ancestors of outer states
+        # key, sub_key = random.split(key)
+        # traced_outer, traced_inner, _ = \
+        #     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+        # backward sample outer states
+        key, sub_key = random.split(key)
+        traced_outer, traced_inner = jitted_mcmc_backward_sampling(
             sub_key,
-            num_time_steps,
             num_outer_particles,
-            num_inner_particles,
-            prior_dist,
+            outer_states,
+            inner_states,
             trans_model,
-            obs_model,
             policy,
             train_state.params,
             reward_fn,
             tempering,
-            slew_rate_penalty,
-            reference
+            slew_rate_penalty
         )
 
-    # # trace ancestors of outer states
-    # key, sub_key = random.split(key)
-    # traced_outer, traced_inner, _ = \
-    #     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-    # backward sample outer states
-    key, sub_key = random.split(key)
-    traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-        sub_key, num_outer_particles, outer_states, inner_states, trans_model,
-        policy, train_state.params, reward_fn, tempering, slew_rate_penalty
-    )
-
-    # sample a new reference
-    key, sub_key = random.split(key)
-    idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles))
-    reference = Reference(
-        outer_particles=jax.tree.map(lambda x: x[:, idx], traced_outer),
-        inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
-    )
+        # sample a new reference
+        key, sub_key = random.split(key)
+        idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles))
+        reference = Reference(
+            outer_particles=jax.tree.map(lambda x: x[:, idx], traced_outer),
+            inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
+        )
 
     # update policy parameters
     loss = 0.0
@@ -209,18 +225,6 @@ outer_states, inner_states, inner_infos, _ = \
         tempering=0.0,
         slew_rate_penalty=0.0,
     )
-
-# # trace ancestors of outer states
-# key, sub_key = random.split(key)
-# outer_states, inner_states, inner_infos = \
-#     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_infos)
-
-# # backward sample outer states
-# key, sub_key = random.split(key)
-# outer_states, inner_states = jitted_mcmc_backward_sampling(
-#     sub_key, num_outer_particles, outer_states, inner_states, trans_model,
-#     policy, train_state.params, reward_fn, tempering, slew_rate_penalty
-# )
 
 observations = outer_states.particles.observations
 actions = outer_states.particles.actions

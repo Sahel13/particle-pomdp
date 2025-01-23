@@ -1,21 +1,23 @@
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+
 import time
 
 import jax
 from jax import random
 import jax.numpy as jnp
 
+from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling, backward_sampling
 from ppomdp.bijector import Tanh
 from ppomdp.policy import GRU, get_recurrent_policy, train_step
-from ppomdp.smc import backward_tracing, smc
 from ppomdp.utils import batch_data
 
 from distrax import Chain, ScalarAffine
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 
-from copy import deepcopy
 import optax
-
+from copy import deepcopy
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -61,11 +63,35 @@ train_state = TrainState.create(
     tx=optax.adam(learning_rate)
 )
 
-jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9, 10))
+jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5,))
+jitted_backward_sampling = jax.jit(backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
+jitted_mcmc_backward_sampling = jax.jit(mcmc_backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
 
 for i in range(1, num_epochs + 1):
     start_time = time.time()
+
+    # evaluate current policy
+    eval_state = deepcopy(train_state)
+    eval_state.params["log_std"] = -20.0 * jnp.ones((action_dim,))
+
+    key, sub_key = random.split(key)
+    outer_states, _, _, _ = \
+        jitted_smc(
+            sub_key,
+            num_time_steps,
+            int(4 * num_outer_particles),
+            int(4 * num_inner_particles),
+            prior_dist,
+            trans_model,
+            obs_model,
+            policy,
+            eval_state.params,
+            reward_fn,
+            tempering=0.0,
+            slew_rate_penalty=0.0,
+        )
+    expected_reward = jnp.mean(jnp.sum(outer_states.rewards, axis=0))
 
     # run nested smc
     key, sub_key = random.split(key)
@@ -85,19 +111,32 @@ for i in range(1, num_epochs + 1):
             slew_rate_penalty
         )
 
-    # trace ancestors of outer states
-    key, sub_key = random.split(key)
-    traced_outer, traced_inner, _ = \
-        jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
+    # # trace ancestors of outer states
+    # key, sub_key = random.split(key)
+    # traced_outer, traced_inner, _ = \
+    #     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
 
-    variance = jnp.mean(jnp.var(traced_inner.particles[-1], axis=1), axis=0)
+    # backward sample outer states
+    key, sub_key = random.split(key)
+    traced_outer, traced_inner = jitted_mcmc_backward_sampling(
+        sub_key,
+        num_outer_particles,
+        outer_states,
+        inner_states,
+        trans_model,
+        policy,
+        train_state.params,
+        reward_fn,
+        tempering,
+        slew_rate_penalty
+    )
 
     # update policy parameters
     loss = 0.0
     key, sub_key = random.split(key)
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
-        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer.particles)
+        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
         train_state, batch_loss = train_step(policy, train_state, outer_batch)
         loss += batch_loss
 
@@ -107,7 +146,7 @@ for i in range(1, num_epochs + 1):
 
     print(
         f"Epoch: {i:3d}, "
-        f"Log marginal: {log_marginal:.3f}, "
+        f"Reward: {expected_reward:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )
@@ -132,13 +171,8 @@ outer_states, inner_states, inner_infos, _ = \
         slew_rate_penalty=0.0,
     )
 
-# trace ancestors of outer states
-key, sub_key = random.split(key)
-outer_states, inner_states, inner_infos = \
-    jitted_backward_tracing(sub_key, outer_states, inner_states, inner_infos)
-
-observations = outer_states.particles[0]
-actions = outer_states.particles[1]
+observations = outer_states.particles.observations
+actions = outer_states.particles.actions
 state_means = inner_infos.mean
 state_covars = inner_infos.covar
 rwrds = outer_states.rewards
@@ -198,10 +232,7 @@ for t in range(0, num_time_steps + 1, 2):
     eigvals, eigvecs = jnp.linalg.eigh(covar)
     angle = jnp.degrees(jnp.arctan2(eigvecs[0, 1], eigvecs[0, 0]))
     width, height = jnp.sqrt(eigvals)
-    ell = patches.Ellipse(
-        mean, width, height,
-        angle=angle, edgecolor='b', facecolor='none'
-    )
+    ell = patches.Ellipse(mean, width, height, angle=angle, edgecolor='b', facecolor='none')
     plt.gca().add_patch(ell)
 
 

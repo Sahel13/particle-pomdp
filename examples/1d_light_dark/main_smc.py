@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 import time
 
@@ -36,15 +36,15 @@ network = GRU(
 bijector = Chain([ScalarAffine(0.0, 3.0), Tanh()])
 policy = get_recurrent_policy(network, bijector)
 
-rng_key = random.PRNGKey(3)
+rng_key = random.PRNGKey(5)
 
 num_outer_particles = 256
 num_inner_particles = 256
-tempering = 0.15
+tempering = 0.1
 slew_rate_penalty = 0.005
 
 learning_rate = 3e-4
-batch_size = 32
+batch_size = 256
 num_epochs = 500
 
 # Initialize training state
@@ -60,13 +60,33 @@ train_state = TrainState.create(
 
 jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9, 10))
 jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5,))
-jitted_mcmc_backward_sampling = \
-    jax.jit(mcmc_backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
-jitted_backward_sampling = \
-    jax.jit(backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
+jitted_backward_sampling = jax.jit(backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
+jitted_mcmc_backward_sampling = jax.jit(mcmc_backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
 
 for i in range(1, num_epochs + 1):
     start_time = time.time()
+
+    # evaluate current policy
+    eval_state = deepcopy(train_state)
+    eval_state.params["log_std"] = -20.0 * jnp.ones((action_dim,))
+
+    key, sub_key = random.split(key)
+    outer_states, _, _, _ = \
+        jitted_smc(
+            sub_key,
+            num_time_steps,
+            int(4 * num_outer_particles),
+            int(4 * num_inner_particles),
+            prior_dist,
+            trans_model,
+            obs_model,
+            policy,
+            eval_state.params,
+            reward_fn,
+            tempering=0.0,
+            slew_rate_penalty=0.0,
+        )
+    expected_reward = jnp.mean(jnp.sum(outer_states.rewards, axis=0))
 
     # run nested smc
     key, sub_key = random.split(key)
@@ -113,7 +133,7 @@ for i in range(1, num_epochs + 1):
 
     print(
         f"Epoch: {i:3d}, "
-        f"Log marginal: {log_marginal:.3f}, "
+        f"Reward: {expected_reward:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )
@@ -122,7 +142,7 @@ eval_state = deepcopy(train_state)
 eval_state.params["log_std"] = -20.0 * jnp.ones((action_dim,))
 
 key, sub_key = random.split(key)
-outer_states, inner_states, inner_infos, _ = \
+outer_states, _, inner_infos, _ = \
     jitted_smc(
         sub_key,
         num_time_steps,
@@ -138,20 +158,8 @@ outer_states, inner_states, inner_infos, _ = \
         slew_rate_penalty=0.0,
     )
 
-# # trace ancestors of outer states
-# key, sub_key = random.split(key)
-# outer_states, inner_states, inner_infos = \
-#     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_infos)
-
-# backward sample outer states
-key, sub_key = random.split(key)
-outer_states, inner_states = jitted_backward_sampling(
-    sub_key, num_outer_particles, outer_states, inner_states, trans_model,
-    policy, train_state.params, reward_fn, tempering, slew_rate_penalty
-)
-
-observations = outer_states.observations
-actions = outer_states.actions
+observations = outer_states.particles.observations
+actions = outer_states.particles.actions
 state_means = inner_infos.mean
 state_covars = inner_infos.covar
 
