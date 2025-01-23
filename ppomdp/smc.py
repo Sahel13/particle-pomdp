@@ -2,9 +2,10 @@ from typing import Callable, Dict
 
 import jax
 import jax.numpy as jnp
+from jax import Array, random
+
 from chex import PRNGKey
 from distrax import Distribution
-from jax import Array, random
 
 from ppomdp.core import (
     InnerState,
@@ -17,196 +18,19 @@ from ppomdp.core import (
     TransitionModel,
 )
 from ppomdp.utils import (
+    resample_inner,
+    resample_outer,
+    propagate_inner,
+    reweight_inner,
+    sample_marginal_obs,
+    log_potential,
     weighted_mean,
     weighted_covar,
     effective_sample_size,
-    systematic_resampling
+    systematic_resampling,
+    policy_logpdf,
+    transition_logpdf,
 )
-
-
-def resample_inner(
-    rng_key: PRNGKey,
-    inner_state: InnerState,
-    resample_fn: Callable,
-) -> InnerState:
-    """Resample the inner particles for a single outer trajectory.
-
-    Only resamples if the effective sample size is below 75% of the number of particles.
-
-    Args:
-        rng_key: The random number generator key.
-        inner_state: The state associated with a single outer trajectory.
-            Leaves have shape (M, ...).
-        resample_fn: The resampling function.
-    """
-    num_particles = inner_state.particles.shape[0]
-
-    def true_fn(state: InnerState) -> InnerState:
-        resampling_idx = resample_fn(rng_key, state.weights, num_particles)
-        return InnerState(
-            particles=state.particles[resampling_idx],
-            log_weights=jnp.zeros(num_particles),
-            weights=jnp.ones(num_particles) / num_particles,
-            resampling_indices=resampling_idx,
-        )
-
-    def false_fn(state: InnerState) -> InnerState:
-        resampling_idx = jnp.arange(num_particles)
-        return state._replace(resampling_indices=resampling_idx)
-
-    resampled_state = jax.lax.cond(
-        effective_sample_size(inner_state.weights) < 0.75 * num_particles,
-        true_fn, false_fn, inner_state
-    )
-    return resampled_state
-
-
-def propagate_inner(
-    rng_key: PRNGKey,
-    model: TransitionModel,
-    particles: Array,
-    action: Array,
-) -> Array:
-    r"""Propagate the inner particles for a single trajectory.
-
-    Args:
-        rng_key: PRNGKey
-        model: TransitionModel
-            The transition model for the state.
-        particles: Array
-            The state particles $\{s_{t-1}^{nm}\}_{m=1}^M$ associated with
-            the n-th outer trajectory. Has shape (M, ...).
-        action: Array
-            The action $a_{t-1}^n$.
-    """
-    num_particles = particles.shape[0]
-    rng_keys = random.split(rng_key, num_particles)
-    return jax.vmap(model.sample, in_axes=(0, 0, None))(rng_keys, particles, action)
-
-
-def reweight_inner(
-    model: ObservationModel, state: InnerState, obs: Array
-) -> InnerState:
-    r"""Reweight the inner particles for a single outer trajectory.
-
-    Args:
-        model: ObservationModel
-            The observation model.
-        state: InnerState
-            The inner state associated with the n-th outer trajectory.
-            Leaves have shape (M, ...).
-        obs: Array.
-            The observation $z_t^n$.
-    """
-    log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(obs, state.particles)
-    log_weights += state.log_weights
-    logsum_weights = jax.nn.logsumexp(log_weights)
-    weights = jnp.exp(log_weights - logsum_weights)
-    return state._replace(log_weights=log_weights, weights=weights)
-
-
-def sample_marginal_obs(
-    rng_key: PRNGKey, obs_model: ObservationModel, state: InnerState
-) -> Array:
-    r"""Sample from the marginal observation distribution.
-
-    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$.
-
-    Args:
-        rng_key: PRNGKey
-        obs_model: ObservationModel
-        state: InnerState
-            The inner state associated with the n-th outer trajectory.
-            Leaves have shape (M, ...).
-    """
-    key1, key2 = random.split(rng_key)
-    x = random.choice(key1, state.particles, p=state.weights)
-    return obs_model.sample(key2, x)
-
-
-def expected_reward(
-    reward_fn: RewardFn,
-    inner_state: InnerState,
-    action: Array,
-    time_idx: int
-) -> Array:
-    """
-    Calculate the expected reward for a given particle and inner state.
-
-    Args:
-        reward_fn: RewardFn
-            The reward function, r(s_{t], a_{t-1}).
-        inner_state: InnerState
-            The inner state containing particles and weights.
-        action: Array
-            Action particle.
-        time_idx: int
-            The current time index.
-
-    Returns:
-        Array: The cumulative return for the given particle and inner state.
-    """
-    rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(inner_state.particles, action, time_idx)
-    return jnp.sum(rewards * inner_state.weights)
-
-
-def log_potential(
-    reward_fn: RewardFn,
-    inner_state: InnerState,
-    action: Array,
-    prev_action: Array,
-    time_idx: int,
-    tempering: float,
-    slew_rate_penalty: float,
-) -> tuple[Array, Array]:
-    r"""Estimate the log potential function.
-
-    The estimate for the log potential function is given by
-    .. math::
-    \log g_t^n = \eta * \sum_{m=1}^M W_{s,t}^{nm} r_t(s_t^{nm}, a_t^n).
-
-    Args:
-        reward_fn: The reward function.
-        inner_state: The inner state associated with the n-th outer trajectory.
-            Leaves have shape (M, ...).
-        action: The current action.
-        prev_action: The previous action.
-        time_idx: The current time index.
-        tempering: The tempering parameter.
-        slew_rate_penalty: The slew rate penalty.
-    """
-    rewards = expected_reward(reward_fn, inner_state, action, time_idx)
-    mod_rewards = rewards - slew_rate_penalty * jnp.dot(action - prev_action, action - prev_action)
-    return tempering * mod_rewards, rewards
-
-
-def resample_outer(
-    rng_key: PRNGKey,
-    outer_state: OuterState,
-    resample: bool,
-    resample_fn: Callable,
-) -> OuterState:
-    num_particles = outer_state.weights.shape[0]
-
-    def true_fn(state: OuterState) -> OuterState:
-        resampling_idx = resample_fn(rng_key, state.weights, num_particles)
-        resampled_particles = jax.tree.map(lambda x: x[resampling_idx], state.particles)
-        resampled_rewards = state.rewards[resampling_idx]
-        return OuterState(
-            particles=resampled_particles,
-            log_weights=jnp.zeros(num_particles),
-            weights=jnp.ones(num_particles) / num_particles,
-            resampling_indices=resampling_idx,
-            rewards=resampled_rewards,
-        )
-
-    def false_fn(state: OuterState) -> OuterState:
-        resampling_idx = jnp.arange(num_particles)
-        return state._replace(resampling_indices=resampling_idx)
-
-    predicate = resample and effective_sample_size(outer_state.weights) < 0.75 * num_particles
-    resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
-    return resampled_state
 
 
 def smc_init(
@@ -275,9 +99,9 @@ def smc_init(
     # Initialize dummy actions and policy carry.
     init_carry = policy.reset(num_outer_particles)
     dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
-    init_log_probs = jnp.zeros(num_outer_particles)
+    dummy_log_probs = jnp.zeros(num_outer_particles)
 
-    outer_particles = OuterParticles(observations, dummy_actions, init_carry, init_log_probs)
+    outer_particles = OuterParticles(observations, dummy_actions, init_carry, dummy_log_probs)
     outer_state = OuterState(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
@@ -299,7 +123,6 @@ def smc_step(
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
-    resample: bool,
     resample_fn: Callable,
     outer_state: OuterState,
     inner_state: InnerState,
@@ -322,8 +145,6 @@ def smc_step(
             The tempering parameter, $\eta$.
         slew_rate_penalty: float
             The slew rate penalty.
-        resample: bool
-            If True, resample, otherwise do not resample.
         resample_fn: Callable
             The resampling function.
         outer_state: OuterState
@@ -337,7 +158,7 @@ def smc_step(
 
     # 1. Resample the outer particles.
     key, sub_key = random.split(rng_key)
-    outer_state = resample_outer(sub_key, outer_state, resample, resample_fn)
+    outer_state = resample_outer(sub_key, outer_state, resample_fn)
     particles = outer_state.particles
     resampling_idx = outer_state.resampling_indices
     inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
@@ -378,8 +199,8 @@ def smc_step(
     )
 
     # 7. Reweight the outer particles.
-    log_potentials, rewards = jax.vmap(log_potential, in_axes=(None, 0, 0, 0, None, None, None))(
-        reward_fn, inner_state, actions, particles.actions, time_idx, tempering, slew_rate_penalty
+    log_potentials, rewards = jax.vmap(log_potential, in_axes=(0, 0, 0, None, None, None, None))(
+        inner_state, actions, particles.actions, time_idx, reward_fn, tempering, slew_rate_penalty
     )
     log_weights = log_potentials + outer_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
@@ -402,9 +223,9 @@ def smc_step(
 
 def smc(
     rng_key: PRNGKey,
+    num_time_steps: int,
     num_outer_particles: int,
     num_inner_particles: int,
-    num_time_steps: int,
     prior_dist: Distribution,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
@@ -413,8 +234,7 @@ def smc(
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
-    resample: bool = True,
-    resample_fn: Callable = systematic_resampling,
+    resample_fn: Callable = systematic_resampling
 ) -> tuple[OuterState, InnerState, InnerInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -444,8 +264,6 @@ def smc(
             The tempering parameter.
         slew_rate_penalty: float
             The slew rate penalty.
-        resample: bool
-            If True, resample, otherwise do not resample.
         resample_fn: Callable
             The resampling function.
 
@@ -469,7 +287,6 @@ def smc(
             reward_fn,
             tempering,
             slew_rate_penalty,
-            resample,
             resample_fn,
             outer_state,
             inner_state,
@@ -513,7 +330,7 @@ def backward_tracing(
     inner_infos: InnerInfo,
     resample: bool = True,
     resample_fn: Callable = systematic_resampling,
-) -> tuple[OuterState, InnerState, InnerInfo]:
+) -> tuple[OuterParticles, InnerState, InnerInfo]:
     """Genealogy tracking to get the smoothed trajectories.
 
     Args:
@@ -527,7 +344,7 @@ def backward_tracing(
     Returns:
         The traced outer and inner states.
     """
-    num_steps, num_particles = outer_states.weights.shape
+    _, num_particles = outer_states.weights.shape
 
     # Sample the states at the final time step.
     resampling_idx = jax.lax.cond(
@@ -537,29 +354,29 @@ def backward_tracing(
         None,
     )
 
-    last_outer_state = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states)
+    last_outer_particles = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states.particles)
     last_inner_state = jax.tree.map(lambda x: x[-1, resampling_idx], inner_states)
     last_inner_info = jax.tree.map(lambda x: x[-1, resampling_idx], inner_infos)
 
     # Trace the genealogy for the outer states.
     def tracing_fn(carry, args):
         idx = carry
-        states, resampling_indices = args
+        particles, resampling_indices = args
         a = resampling_indices[idx]
-        ancestors = jax.tree.map(lambda x: x[a], states)
+        ancestors = jax.tree.map(lambda x: x[a], particles)
         return a, (a, ancestors)
 
-    _, (traced_indices, traced_outer_states) = jax.lax.scan(
+    _, (traced_indices, traced_outer_particles) = jax.lax.scan(
         tracing_fn,
         resampling_idx,
         (
-            jax.tree.map(lambda x: x[:-1], outer_states),
+            jax.tree.map(lambda x: x[:-1], outer_states.particles),
             outer_states.resampling_indices[1:],
         ),
         reverse=True,
     )
 
-    # Trace the inner states.
+    # Trace the inner states.^
     def get_traced_inner(idx, state, info):
         return jax.tree.map(lambda x: x[idx], state), jax.tree.map(lambda x: x[idx], info)
 
@@ -572,7 +389,293 @@ def backward_tracing(
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
 
-    traced_outer_states = concat_trees(traced_outer_states, last_outer_state)
+    traced_outer_particles = concat_trees(traced_outer_particles, last_outer_particles)
     traced_inner_states = concat_trees(traced_inner_states, last_inner_state)
     traced_inner_infos = concat_trees(traced_inner_infos, last_inner_info)
-    return traced_outer_states, traced_inner_states, traced_inner_infos
+    return traced_outer_particles, traced_inner_states, traced_inner_infos
+
+
+def mcmc_backward_sampling_single(
+    rng_key: PRNGKey,
+    outer_states: OuterState,
+    inner_states: InnerState,
+    trans_model: TransitionModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+    slew_rate_penalty: float,
+) -> tuple[OuterParticles, OuterState]:
+    """
+    MCMC-based backward sampling from Bunch and Godsill (2013)
+    """
+    num_time_steps, num_outer_particles = outer_states.weights.shape
+
+    _, _, action_dim = outer_states.particles.actions.shape
+    _, _, observation_dim = outer_states.particles.observations.shape
+
+    # Sample the last particle
+    key, sub_key = random.split(rng_key)
+    idx = jax.random.choice(
+        sub_key, jnp.arange(num_outer_particles), p=outer_states.weights[-1]
+    )
+    last_smoothed_outer_particles = jax.tree.map(lambda x: x[-1, idx], outer_states.particles)
+    last_smoothed_inner_state = jax.tree.map(lambda x: x[-1, idx], inner_states)
+
+    smoothed_actions = jnp.zeros((num_time_steps, action_dim))
+    smoothed_observations = jnp.zeros((num_time_steps, observation_dim))
+
+    smoothed_actions = smoothed_actions.at[-1, :].set(last_smoothed_outer_particles.actions)
+    smoothed_observations = smoothed_observations.at[-1, :].set(last_smoothed_outer_particles.observations)
+
+    def body(carry, args):
+        idx, smoothed_actions, smoothed_observations = carry
+        t, key = args
+
+        ancestor_idx = outer_states.resampling_indices[t + 1, idx]
+        key, sub_key = random.split(key)
+        proposed_idx = jax.random.choice(
+            sub_key, jnp.arange(num_outer_particles), p=outer_states.weights[t]
+        )
+
+        ancestor_policy_logpdf = policy_logpdf(
+            t + 1,  # starting index of future time steps
+            smoothed_actions,
+            smoothed_observations,
+            jax.tree.map(lambda x: x[t, ancestor_idx], outer_states.particles.carry),
+            jax.tree.map(lambda x: x[t, ancestor_idx], outer_states.particles.observations),
+            policy,
+            params
+        )
+        proposed_policy_logpdf = policy_logpdf(
+            t + 1,  # starting index of future time steps
+            smoothed_actions,
+            smoothed_observations,
+            jax.tree.map(lambda x: x[t, proposed_idx], outer_states.particles.carry),
+            jax.tree.map(lambda x: x[t, proposed_idx], outer_states.particles.observations),
+            policy,
+            params
+        )
+
+        ancestor_trans_logpdf = transition_logpdf(
+            jax.tree.map(lambda x: x[t + 1, idx], inner_states),
+            jax.tree.map(lambda x: x[t, ancestor_idx], inner_states),
+            outer_states.particles.actions[t + 1, idx],
+            trans_model,
+        )
+        proposed_trans_logpdf = transition_logpdf(
+            jax.tree.map(lambda x: x[t + 1, idx], inner_states),
+            jax.tree.map(lambda x: x[t, proposed_idx], inner_states),
+            outer_states.particles.actions[t + 1, idx],
+            trans_model,
+        )
+
+        ancestor_log_potential, _ = log_potential(
+            jax.tree.map(lambda x: x[t + 1, idx], inner_states),
+            outer_states.particles.actions[t + 1, idx],
+            outer_states.particles.actions[t, ancestor_idx],
+            t + 1,
+            reward_fn,
+            tempering,
+            slew_rate_penalty
+        )
+        proposed_log_potential, _ = log_potential(
+            jax.tree.map(lambda x: x[t + 1, idx], inner_states),
+            outer_states.particles.actions[t + 1, idx],
+            outer_states.particles.actions[t, proposed_idx],
+            t + 1,
+            reward_fn,
+            tempering,
+            slew_rate_penalty
+        )
+
+        log_prob_ancestor = (
+            ancestor_policy_logpdf + ancestor_trans_logpdf + ancestor_log_potential
+        )
+        log_prob_proposed = (
+            proposed_policy_logpdf + proposed_trans_logpdf + proposed_log_potential
+        )
+
+        # accept / reject
+        key, sub_key = random.split(key)
+        log_u = jnp.log(jax.random.uniform(sub_key))
+        log_ratio = log_prob_proposed - log_prob_ancestor
+        idx = jax.lax.select(log_ratio > log_u, proposed_idx, ancestor_idx)
+
+        smoothed_outer_particles = jax.tree.map(lambda x: x[t, idx], outer_states.particles)
+        smoothed_inner_state = jax.tree.map(lambda x: x[t, idx], inner_states)
+
+        smoothed_actions = smoothed_actions.at[t, :].set(smoothed_outer_particles.actions)
+        smoothed_observations = smoothed_observations.at[t, :].set(smoothed_outer_particles.observations)
+        return (idx, smoothed_actions, smoothed_observations), \
+            (smoothed_outer_particles, smoothed_inner_state)
+
+    _, (sampled_outer_states, sampled_inner_states) = jax.lax.scan(
+        body,
+        (idx, smoothed_actions, smoothed_observations),
+        (
+            jnp.arange(num_time_steps - 1),
+            random.split(key, num_time_steps - 1)
+        ), reverse=True,
+    )
+
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
+
+    smoothed_outer_particles = concat_trees(sampled_outer_states, last_smoothed_outer_particles)
+    smoothed_inner_states = concat_trees(sampled_inner_states, last_smoothed_inner_state)
+    return smoothed_outer_particles, smoothed_inner_states
+
+
+def mcmc_backward_sampling(
+    rng_key: PRNGKey,
+    num_samples: int,
+    outer_states: OuterState,
+    inner_states: InnerState,
+    trans_model: TransitionModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+    slew_rate_penalty: float = 0.0,
+):
+    keys = random.split(rng_key, num_samples)
+    smoothed_outer_particles, smoothed_inner_states = jax.vmap(
+        lambda key: mcmc_backward_sampling_single(
+            key,
+            outer_states,
+            inner_states,
+            trans_model,
+            policy,
+            params,
+            reward_fn,
+            tempering,
+            slew_rate_penalty),
+        out_axes=1)(keys)
+    return smoothed_outer_particles, smoothed_inner_states
+
+
+
+def backward_sampling_single(
+    rng_key: PRNGKey,
+    outer_states: OuterState,
+    inner_states: InnerState,
+    trans_model: TransitionModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+    slew_rate_penalty: float,
+) -> tuple[OuterParticles, InnerState]:
+    """
+    MCMC-based backward sampling from Bunch and Godsill (2013)
+    """
+    num_time_steps, num_outer_particles = outer_states.weights.shape
+
+    _, _, action_dim = outer_states.particles.actions.shape
+    _, _, observation_dim = outer_states.particles.observations.shape
+
+    # Sample the last particle
+    key, sub_key = random.split(rng_key)
+    idx = jax.random.choice(
+        sub_key, jnp.arange(num_outer_particles), p=outer_states.weights[-1]
+    )
+    last_smoothed_outer_particles = jax.tree.map(lambda x: x[-1, idx], outer_states.particles)
+    last_smoothed_inner_state = jax.tree.map(lambda x: x[-1, idx], inner_states)
+
+    smoothed_actions = jnp.zeros((num_time_steps, action_dim))
+    smoothed_observations = jnp.zeros((num_time_steps, observation_dim))
+
+    smoothed_actions = smoothed_actions.at[-1, :].set(last_smoothed_outer_particles.actions)
+    smoothed_observations = smoothed_observations.at[-1, :].set(last_smoothed_outer_particles.observations)
+
+    vmap_policy_logpdf = jax.vmap(policy_logpdf, in_axes=(None, None, None, 0, 0, None, None))
+    vmap_transition_logpdf = jax.vmap(transition_logpdf, in_axes=(None, 0, None, None))
+    vmap_log_potential = jax.vmap(log_potential, in_axes=(None, None, 0, None, None, None, None))
+
+    def body(carry, args):
+        idx, smoothed_actions, smoothed_observations = carry
+        t, key = args
+
+        log_policy = vmap_policy_logpdf(
+            t + 1,  # starting index of future time steps
+            smoothed_actions,
+            smoothed_observations,
+            jax.tree.map(lambda x: x[t, :], outer_states.particles.carry),
+            jax.tree.map(lambda x: x[t, :], outer_states.particles.observations),
+            policy,
+            params
+        )
+
+        log_transition = vmap_transition_logpdf(
+            jax.tree.map(lambda x: x[t + 1, idx], inner_states),
+            jax.tree.map(lambda x: x[t, :], inner_states),
+            outer_states.particles.actions[t + 1, idx],
+            trans_model,
+        )
+
+        log_potentials, _ = vmap_log_potential(
+            jax.tree.map(lambda x: x[t + 1, idx], inner_states),
+            outer_states.particles.actions[t + 1, idx],
+            outer_states.particles.actions[t, :],
+            t + 1,
+            reward_fn,
+            tempering,
+            slew_rate_penalty
+        )
+
+        reweighting_ratio = log_policy + log_transition + log_potentials
+        smoothing_weights = jax.nn.softmax(reweighting_ratio + outer_states.log_weights[t])
+
+        idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles), p=smoothing_weights)
+        smoothed_outer_particles = jax.tree.map(lambda x: x[t, idx], outer_states.particles)
+        smoothed_inner_state = jax.tree.map(lambda x: x[t, idx], inner_states)
+
+        smoothed_actions = smoothed_actions.at[t, :].set(smoothed_outer_particles.actions)
+        smoothed_observations = smoothed_observations.at[t, :].set(smoothed_outer_particles.observations)
+        return (idx, smoothed_actions, smoothed_observations), \
+            (smoothed_outer_particles, smoothed_inner_state)
+
+    _, (sampled_outer_states, sampled_inner_states) = jax.lax.scan(
+        body,
+        (idx, smoothed_actions, smoothed_observations),
+        (
+            jnp.arange(num_time_steps - 1),
+            random.split(key, num_time_steps - 1)
+        ), reverse=True,
+    )
+
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
+
+    smoothed_outer_particles = concat_trees(sampled_outer_states, last_smoothed_outer_particles)
+    smoothed_inner_states = concat_trees(sampled_inner_states, last_smoothed_inner_state)
+    return smoothed_outer_particles, smoothed_inner_states
+
+
+def backward_sampling(
+    rng_key: PRNGKey,
+    num_samples: int,
+    outer_state: OuterState,
+    inner_state: InnerState,
+    trans_model: TransitionModel,
+    policy: RecurrentPolicy,
+    params: Dict,
+    reward_fn: RewardFn,
+    tempering: float,
+    slew_rate_penalty: float = 0.0,
+):
+    keys = random.split(rng_key, num_samples)
+    smoothed_outer_particles, smoothed_inner_states = jax.vmap(
+        lambda key: backward_sampling_single(
+            key,
+            outer_state,
+            inner_state,
+            trans_model,
+            policy,
+            params,
+            reward_fn,
+            tempering,
+            slew_rate_penalty),
+        out_axes=1)(keys)
+    return smoothed_outer_particles, smoothed_inner_states

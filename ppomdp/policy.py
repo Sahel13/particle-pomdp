@@ -167,6 +167,19 @@ def sample_and_log_prob_policy(
     return carry, action, log_prob
 
 
+def carry_and_log_prob_policy(
+    action: Array,
+    observation: Array,
+    carry: list[Carry],
+    params: Dict,
+    network: Union[LSTM, GRU],
+    bijector: Chain,
+) -> tuple[list[Carry], Array]:
+    next_carry, m = network.apply({"params": params}, carry, observation)
+    dist = squash_policy(m, params["log_std"], bijector)
+    return next_carry, dist.log_prob(action)
+
+
 def log_prob_policy(
     actions: Array,
     observations: Array,
@@ -198,15 +211,16 @@ def get_recurrent_policy(network: Union[LSTM, GRU], bijector: Chain):
         reset=partial(reset_policy, network=network),
         sample=partial(sample_policy, network=network, bijector=bijector),
         log_prob=partial(log_prob_policy, network=network, bijector=bijector),
-        sample_and_log_prob=partial(
-            sample_and_log_prob_policy, network=network, bijector=bijector
-        ),
+        sample_and_log_prob=partial(sample_and_log_prob_policy, network=network, bijector=bijector),
+        carry_and_log_prob=partial(carry_and_log_prob_policy, network=network, bijector=bijector),
         entropy=partial(entropy_policy, network=network, bijector=bijector),
     )
 
 
 def log_prob_policy_pathwise(
-    policy: RecurrentPolicy, params: Dict, particles: OuterParticles
+    particles: OuterParticles,
+    policy: RecurrentPolicy,
+    params: Dict
 ) -> Array:
     def body(t, log_probs):
         actions = particles.actions[t]
@@ -228,7 +242,7 @@ def train_step(
     particles: OuterParticles,
 ) -> tuple[TrainState, Array]:
     def loss_fn(params):
-        log_probs = log_prob_policy_pathwise(policy, params, particles)
+        log_probs = log_prob_policy_pathwise(particles, policy, params)
         return -1.0 * jnp.mean(log_probs)
 
     grad_fn = jax.value_and_grad(loss_fn)

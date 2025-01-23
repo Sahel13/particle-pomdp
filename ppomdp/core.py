@@ -97,6 +97,17 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
 
 
+class CarryAndLogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        action: Array,
+        observations: Array,
+        carry: list[Carry],
+        params: Dict,
+    ) -> tuple[list[Carry], Array]:
+        r"""Compute log density of action and update carry."""
+
+
 class EntropyRecurrentPolicy(Protocol):
     def __call__(
         self,
@@ -113,6 +124,7 @@ class RecurrentPolicy(NamedTuple):
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
+    carry_and_log_prob: CarryAndLogProbRecurrentPolicy
     entropy: EntropyRecurrentPolicy
 
 
@@ -166,3 +178,8 @@ class InnerInfo(NamedTuple):
     ess: Array
     mean: Array
     covar: Array
+
+
+class Reference(NamedTuple):
+    outer_particles: OuterParticles
+    inner_state: InnerState

@@ -8,7 +8,6 @@ from distrax import MultivariateNormalDiag
 
 from ppomdp.core import TransitionModel, ObservationModel
 
-jax.config.update("jax_platform_name", "cpu")
 jax.config.update("jax_enable_x64", True)
 
 state_dim = 1
@@ -69,8 +68,8 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 def reward_fn(s: Array, a: Array, t: int) -> Array:
     state_cost = jax.lax.cond(
         t < num_time_steps - 1,
-        lambda _: 0.0,
-        lambda _: 150. * jnp.dot(s, s),
+        lambda _: 0.,
+        lambda _: 50. * jnp.dot(s, s),
         operand=None
     )
     action_cost = 1e-3 * jnp.dot(a, a)
