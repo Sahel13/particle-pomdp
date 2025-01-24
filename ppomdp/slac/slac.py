@@ -11,15 +11,14 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import optax
-from brax.training.replay_buffers import UniformSamplingQueue
+from brax.training.replay_buffers import ReplayBufferState, UniformSamplingQueue
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from jax import Array, random
 
 from ppomdp import smc
 from ppomdp.core import InnerState
-from ppomdp.envs import pendulum
-from ppomdp.envs.base import Environment
+from ppomdp.envs import Environment, PendulumEnv
 from ppomdp.policy import LSTM, reset_policy
 from ppomdp.sac.sac import sample_random_actions
 from ppomdp.sac.utils import QNetworks
@@ -33,20 +32,17 @@ from ppomdp.utils import systematic_resampling
 
 
 class Args(NamedTuple):
-    """Arguments for SAC from cleanrl."""
-
     seed: int = 1
-    total_timesteps: int = int(1e5)  # int(1e6)
+    total_timesteps: int = int(1e5)
     buffer_size: int = int(1e5)
-    gamma: float = 0.99
+    gamma: float = 0.995
     tau: float = 0.005
     batch_size: int = 256
     learning_starts: int = int(5e3)
     policy_lr: float = 1e-4
     q_lr: float = 1e-3
     alpha: float = 0.2
-    num_envs: int = 1
-    num_particles: int = 2  # For the particle filter.
+    num_particles: int = 512  # For the particle filter.
 
 
 def pf_init(
@@ -128,7 +124,7 @@ def init(
     policy_state: TrainState,
     policy_network: LSTM,
     num_envs: int,
-    num_particles: int = 100,
+    num_particles: int,
     random_actions: bool = False,
 ) -> OuterState:
     """Initialize the outer state."""
@@ -267,7 +263,7 @@ def create_train_state(
         encoder_size=(256, 256),
         recurr_size=(64, 64),
         output_size=(256, 256),
-        init_log_std=constant(jnp.log(1.0)),
+        init_log_std=constant(jnp.log(2.0)),
     )
     q_networks = QNetworks(env.feature_fn)
 
@@ -374,16 +370,24 @@ def gradient_step(
     return ts, q_loss, policy_loss
 
 
-# TODO: Check if this actually needs to be jitted.
 @partial(
     jax.jit,
-    static_argnames=("env", "policy_network", "buffer"),
+    static_argnames=("env", "policy_network", "buffer", "num_steps"),
     donate_argnames=("buffer_state", "outer_state", "ts"),
 )
-def sim_and_train(rng_key, buffer_state, outer_state, ts, env, policy_network, buffer):
-    def body_fn(carry, key):
+def sim_and_train(
+    rng_key: chex.PRNGKey,
+    buffer_state: ReplayBufferState,
+    outer_state: OuterState,
+    ts: JointTrainState,
+    env: Environment,
+    policy_network: LSTM,
+    buffer: UniformSamplingQueue,
+    num_steps: int,
+):
+    def body(carry, key):
         _buffer_state, _outer_state, _ts = carry
-        step_key, trans_key, train_key = random.split(key, 3)
+        step_key, train_key = random.split(key)
         next_outer_state = step(
             step_key,
             env,
@@ -391,7 +395,7 @@ def sim_and_train(rng_key, buffer_state, outer_state, ts, env, policy_network, b
             policy_network,
             _outer_state,
         )
-        transition = get_transition(trans_key, next_outer_state, 1)
+        transition = get_transition(next_outer_state)
         next_buffer_state = buffer.insert(_buffer_state, transition)
 
         # Training
@@ -400,9 +404,7 @@ def sim_and_train(rng_key, buffer_state, outer_state, ts, env, policy_network, b
         return (next_buffer_state, next_outer_state, next_ts), None
 
     (buffer_state, outer_state, ts), _ = jax.lax.scan(
-        body_fn,
-        (buffer_state, outer_state, ts),
-        random.split(rng_key, env.num_time_steps),
+        body, (buffer_state, outer_state, ts), random.split(rng_key, num_steps)
     )
     return buffer_state, outer_state, ts
 
@@ -410,22 +412,22 @@ def sim_and_train(rng_key, buffer_state, outer_state, ts, env, policy_network, b
 if __name__ == "__main__":
     args = Args()
 
-    env = pendulum.env
+    env = PendulumEnv
     key = random.key(args.seed)
     key, sub_key = random.split(key)
     ts, policy_network = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
 
-    key, init_key, trans_key = random.split(key, 3)
+    key, init_key = random.split(key)
     outer_state = init(
         init_key,
         env,
         ts.policy_state,
         policy_network,
-        args.num_envs,
+        env.num_envs,
         args.num_particles,
         True,
     )
-    transition = get_transition(trans_key, outer_state, 1)
+    transition = get_transition(outer_state)
 
     # Set up the replay buffer from Brax.
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], transition)
@@ -440,8 +442,8 @@ if __name__ == "__main__":
     buffer_state = buffer.insert(buffer_state, transition)
 
     # Pre-fill the buffer with random actions.
-    for global_step in range(args.learning_starts):
-        key, key1, key2 = random.split(key, 3)
+    for global_step in range(1, args.learning_starts):
+        key, key1 = random.split(key)
         outer_state = step(
             key1,
             env,
@@ -450,61 +452,77 @@ if __name__ == "__main__":
             outer_state,
             True,
         )
-        transition = get_transition(key2, outer_state, 1)
+        transition = get_transition(outer_state)
         buffer_state = buffer.insert(buffer_state, transition)
         if outer_state.dones[0] == 1:
             print(
-                f"Step: {global_step:6d} | Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
+                f"Step: {global_step:6d} | "
+                + f"Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
             )
 
     # Ensure that training starts with a fresh episode.
-    outer_state = outer_state._replace(dones=jnp.ones(args.num_envs))
+    outer_state = outer_state._replace(dones=jnp.ones(env.num_envs))
+
+    print_every = 10 * env.num_time_steps
 
     # Training loop - slightly faster training with `jax.lax.scan`.
     for global_step in range(
-        args.learning_starts, args.total_timesteps, env.num_time_steps
+        args.learning_starts, args.total_timesteps + print_every, print_every
     ):
         key, sub_key = random.split(key)
         buffer_state, outer_state, ts = sim_and_train(
-            sub_key, buffer_state, outer_state, ts, env, policy_network, buffer
+            sub_key,
+            buffer_state,
+            outer_state,
+            ts,
+            env,
+            policy_network,
+            buffer,
+            print_every,
         )
-        if global_step % 200 == 0:
-            print(
-                f"Step: {global_step:6d} | Episodic reward: {outer_state.episodic_rewards.mean():6.2f}"
-            )
-
-    # Evalute the learned policy.
-    state_list, action_list = [], []
-    key, sub_key = random.split(key)
-    states = env.prior_dist.sample(seed=sub_key, sample_shape=(args.num_envs,))
-    keys = random.split(key, args.num_envs + 1)
-    observations = jax.vmap(env.obs_model.sample)(keys[1:], states)
-    carry = reset_policy(args.num_envs, policy_network)
-    state_list.append(states)
-
-    for i in range(env.num_time_steps):
-        key, sub_key = random.split(keys[0])
-        carry, _, _, actions = ts.policy_state.apply_fn(
-            sub_key, ts.policy_state.params, carry, observations
+        print(
+            f"Step: {global_step:6d} | "
+            + f"Episodic reward: {outer_state.episodic_rewards.mean():6.2f} | "
+            + f"Policy log std: {ts.policy_state.params['log_std'].mean():6.2f}"
         )
-        action_list.append(actions)
-        keys = random.split(key, args.num_envs + 1)
-        states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
-        state_list.append(states)
-        keys = random.split(keys[0], args.num_envs + 1)
-        observations = jax.vmap(env.obs_model.sample)(keys[1:], states)
 
-    states = jnp.stack(state_list[:-1], axis=0)
-    actions = jnp.stack(action_list, axis=0)
+    # Evaluate the learned policy.
+    key, state_key, obs_key = random.split(key, 3)
+    state = env.prior_dist.sample(seed=state_key)
+    observation = env.obs_model.sample(obs_key, state)
+    lstm_carry = reset_policy(1, policy_network)
+
+    def body(carry, rng_key):
+        state, observation, lstm_carry = carry
+        action_key, state_key, obs_key = random.split(rng_key, 3)
+        lstm_carry, _, _, action = ts.policy_state.apply_fn(
+            action_key, ts.policy_state.params, lstm_carry, observation
+        )
+        action = action[0]
+        state = env.trans_model.sample(state_key, state, action)
+        observation = env.obs_model.sample(obs_key, state)
+        return (state, observation, lstm_carry), (state, observation, action)
+
+    _, (states, _, actions) = jax.lax.scan(
+        body, (state, observation, lstm_carry), random.split(key, env.num_time_steps)
+    )
+    states = jnp.concatenate([state[None, ...], states], axis=0)
+
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+    fig.suptitle("Simulated trajectory")
 
-    axs[0].plot(states[:, 0, 0])
+    axs[0].plot(states[:, 0])
     axs[0].set_ylabel("Angle")
+    axs[0].grid(True)
 
-    axs[1].plot(states[:, 0, 1])
+    axs[1].plot(states[:, 1])
     axs[1].set_ylabel("Angular velocity")
+    axs[1].grid(True)
 
-    axs[2].plot(actions[:, 0, 0])
+    axs[2].plot(actions[:, 0])
     axs[2].set_ylabel("Action")
     axs[2].set_xlabel("Time")
+    axs[2].grid(True)
+
+    plt.tight_layout()
     plt.show()

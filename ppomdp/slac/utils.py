@@ -1,9 +1,8 @@
-from functools import partial
 from typing import NamedTuple, Union
 
-import chex
 import jax
 import jax.numpy as jnp
+from chex import Numeric, PRNGKey
 from distrax import Chain, ScalarAffine
 from flax.core import FrozenDict
 from jax import Array
@@ -11,7 +10,6 @@ from jax import Array
 from ppomdp.bijector import Tanh
 from ppomdp.core import InnerState
 from ppomdp.policy import GRU, LSTM, Carry, squash_policy
-from ppomdp.utils import systematic_resampling
 
 
 class OuterState(NamedTuple):
@@ -46,34 +44,18 @@ class Transition(NamedTuple):
     dones: Array
 
 
-def one_step_genealogy_tracking(
-    rng_key: chex.PRNGKey,
-    bs: InnerState,
-    next_bs: InnerState,
-    num_samples: int,
-) -> tuple[Array, Array]:
-    # resampling_idx = systematic_resampling(rng_key, next_bs.weights, num_samples)
-    # Pick the highest weighted particles.
-    resampling_idx = jnp.argsort(next_bs.weights, descending=True)[:num_samples]
-    x_tp1 = next_bs.particles[resampling_idx]
-    prev_idx = next_bs.resampling_indices[resampling_idx]
-    x_t = bs.particles[prev_idx]
-    return x_t, x_tp1
-
-
-@partial(jax.jit, static_argnames="num_samples")
-def get_transition(
-    rng_key: chex.PRNGKey, os: OuterState, num_samples: int
-) -> Transition:
+@jax.jit
+def get_transition(os: OuterState) -> Transition:
     """Get the transition data for training."""
-    num_trajs = os.belief_states.particles.shape[0]
-    keys = jax.random.split(rng_key, num_trajs)
-    states, next_states = jax.vmap(one_step_genealogy_tracking, (0, 0, 0, None))(
-        keys, os.belief_states, os.next_belief_states, num_samples
-    )
-    if num_samples == 1:
-        states = states.squeeze(1)
-        next_states = next_states.squeeze(1)
+
+    @jax.vmap
+    def belief_state_mean(bs: InnerState) -> Array:
+        """Compute the mean of a belief state."""
+        return jnp.sum(bs.particles * bs.weights[..., None], axis=0)
+
+    states = belief_state_mean(os.belief_states)
+    next_states = belief_state_mean(os.next_belief_states)
+
     return Transition(
         states=states,
         observations=os.observations,
@@ -88,16 +70,15 @@ def get_transition(
 
 
 def sample_and_log_prob(
-    rng_key: chex.PRNGKey,
+    rng_key: PRNGKey,
     params: FrozenDict,
     carry: list[Carry],
     observations: Array,
     network: Union[LSTM, GRU],
-    action_scale: chex.Numeric,
-    action_shift: chex.Numeric,
+    action_scale: Numeric,
+    action_shift: Numeric,
 ) -> tuple[list[Carry], Array, Array, Array]:
     """Sample actions and compute their log probabilities."""
-    # TODO: Decide whether to use heteroscedastic noise or not.
     carry, mean = network.apply({"params": params}, carry, observations)
     bijector = Chain([ScalarAffine(action_scale, action_shift), Tanh()])
     dist = squash_policy(mean, params["log_std"], bijector)
