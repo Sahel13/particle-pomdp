@@ -13,6 +13,12 @@ from ppomdp.core import ObservationModel, TransitionModel
 jax.config.update("jax_enable_x64", True)
 
 
+state_dim = 4
+action_dim = 1
+obs_dim = 1
+num_time_steps = 18
+
+
 def euler_step(deriv_fn: Callable, s: Array, a: Array, dt: float) -> Array:
     return s + deriv_fn(s, a) * dt
 
@@ -62,12 +68,15 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return obs_noise.log_prob(z - mean_obs)
 
 
-def reward_fn(s: Array, a: Array, t: int, num_time_steps: int) -> Array:
+def reward_fn(s: Array, a: Array, t: int) -> Array:
     x, xd, y, yd = s
     dist_to_target = x**2 + y**2
     penalty = 1e-1
     cost = jax.lax.cond(
-        t < num_time_steps - 1, lambda _: 0.0, lambda _: penalty * dist_to_target, None
+        t < num_time_steps - 1,
+        lambda _: 0.0,
+        lambda _: penalty * dist_to_target,
+        None
     )
     cost += 1e-2 * jnp.sum(jnp.square(a))
     return -1.0 * cost
@@ -75,3 +84,8 @@ def reward_fn(s: Array, a: Array, t: int, num_time_steps: int) -> Array:
 
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
+
+prior_dist = MultivariateNormalDiag(
+    loc=jnp.array([-200.0, 12.0, 100.0, -6.0]),
+    scale_diag=jnp.array([1e-8, 1.0, 1e-8, 1.0]),
+)
