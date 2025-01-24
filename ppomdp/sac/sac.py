@@ -268,7 +268,7 @@ if __name__ == "__main__":
                 + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f}"
             )
 
-    # Evalute the learned policy.
+    # Evaluate the learned policy.
     key, state_key = random.split(key)
     state = env.prior_dist.sample(seed=state_key)
 
