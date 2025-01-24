@@ -28,9 +28,9 @@ class Args(NamedTuple):
     """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = int(5e4)
-    buffer_size: int = int(5e4)
-    gamma: float = 0.99
+    total_timesteps: int = int(1e6)
+    buffer_size: int = int(1e6)
+    gamma: float = 0.995
     tau: float = 0.005
     batch_size: int = 256
     learning_starts: int = int(5e3)
@@ -232,9 +232,8 @@ if __name__ == "__main__":
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
 
-    n_envs = 1
     key, sub_key = random.split(key)
-    outer_state = init(sub_key, env, n_envs, ts.policy_state, True)
+    outer_state = init(sub_key, env, env.num_envs, ts.policy_state, True)
 
     # Set up the replay buffer from Brax.
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], outer_state)
