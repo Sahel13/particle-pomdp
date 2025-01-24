@@ -39,13 +39,13 @@ class MLP(nn.Module):
 
 
 class QNetworks(nn.Module):
-    obs_fn: Callable[[Array], Array]
+    feature_fn: Callable[[Array], Array]
     n_critics: int = 2
     hidden_sizes: tuple[int, ...] = (256, 256)
 
     @nn.compact
     def __call__(self, states: Array, actions: Array):
-        observations = self.obs_fn(states)
+        observations = self.feature_fn(states)
         hidden = jnp.concatenate([observations, actions], axis=-1)
         res = []
         for _ in range(self.n_critics):
@@ -59,14 +59,14 @@ class QNetworks(nn.Module):
 class ActorNetwork(nn.Module):
     action_dim: int
     init_log_std: Array
-    obs_fn: Callable[[Array], Array]
+    feature_fn: Callable[[Array], Array]
     hidden_sizes: tuple[int, ...] = (256, 256)
     log_std_max: float = 2
     log_std_min: float = -5
 
     @nn.compact
     def __call__(self, state: Array) -> tuple[Array, Array]:
-        y = self.obs_fn(state)
+        y = self.feature_fn(state)
         for size in self.hidden_sizes:
             y = nn.relu(nn.Dense(size)(y))
 

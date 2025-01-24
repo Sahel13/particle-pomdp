@@ -22,9 +22,9 @@ from ppomdp.envs import pendulum
 from ppomdp.envs.base import Environment
 from ppomdp.policy import LSTM, reset_policy
 from ppomdp.sac.sac import sample_random_actions
+from ppomdp.sac.utils import QNetworks
 from ppomdp.slac.utils import (
     OuterState,
-    QNetworks,
     Transition,
     get_transition,
     sample_and_log_prob,
@@ -269,7 +269,7 @@ def create_train_state(
         output_size=(256, 256),
         init_log_std=constant(jnp.log(1.0)),
     )
-    q_networks = QNetworks(feature_fn=env.feature_fn)
+    q_networks = QNetworks(env.feature_fn)
 
     key, sub_key = random.split(rng_key)
     init_states = jnp.empty((1, env.state_dim))

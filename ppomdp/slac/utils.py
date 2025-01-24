@@ -1,9 +1,7 @@
-from collections.abc import Callable
 from functools import partial
 from typing import NamedTuple, Union
 
 import chex
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from distrax import Chain, ScalarAffine
@@ -87,39 +85,6 @@ def get_transition(
         rewards=os.rewards,
         dones=os.dones,
     )
-
-
-class MLP(nn.Module):
-    """MLP module."""
-
-    layer_sizes: tuple[int, ...]
-
-    @nn.compact
-    def __call__(self, data: Array):
-        hidden = data
-        for i, hidden_size in enumerate(self.layer_sizes):
-            hidden = nn.Dense(hidden_size)(hidden)
-            if i != len(self.layer_sizes) - 1:
-                hidden = nn.relu(hidden)
-        return hidden
-
-
-class QNetworks(nn.Module):
-    n_critics: int = 2
-    hidden_sizes: tuple[int, ...] = (256, 256)
-    feature_fn: Callable[[Array], Array] = lambda x: x
-
-    @nn.compact
-    def __call__(self, states: Array, actions: Array):
-        observations = self.feature_fn(states)
-        hidden = jnp.concatenate([observations, actions], axis=-1)
-        res = []
-        for _ in range(self.n_critics):
-            q = MLP(
-                layer_sizes=self.hidden_sizes + (1,),
-            )(hidden)
-            res.append(q)
-        return jnp.concatenate(res, axis=-1)
 
 
 def sample_and_log_prob(
