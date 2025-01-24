@@ -13,8 +13,8 @@ class Environment(NamedTuple):
     action_dim: int
     obs_dim: int
     num_time_steps: int
-    action_scale: Numeric
-    action_shift: Numeric
+    action_scale: float
+    action_shift: float
     trans_model: TransitionModel
     obs_model: ObservationModel
     reward_fn: RewardFn
