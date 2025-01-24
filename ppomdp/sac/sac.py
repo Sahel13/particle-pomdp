@@ -127,7 +127,7 @@ def create_train_state(
     q_lr: float,
     policy_lr: float,
 ) -> JointTrainState:
-    actor_network = ActorNetwork(env.action_dim, jnp.array(1.0), env.feature_fn)
+    actor_network = ActorNetwork(env.action_dim, env.feature_fn)
     q_networks = QNetworks(env.feature_fn)
 
     q_key, policy_key = random.split(rng_key)

@@ -58,7 +58,6 @@ class QNetworks(nn.Module):
 
 class ActorNetwork(nn.Module):
     action_dim: int
-    init_log_std: Array
     feature_fn: Callable[[Array], Array]
     hidden_sizes: tuple[int, ...] = (256, 256)
     log_std_max: float = 2
