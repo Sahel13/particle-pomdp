@@ -71,15 +71,16 @@ def pf_step(
 
 
 def _step_atom(
-    rng_key,
-    env,
-    states,
-    observations,
-    carry,
-    belief_states,
-    policy_state,
-    random_actions,
-):
+    rng_key: chex.PRNGKey,
+    env: Environment,
+    states: Array,
+    observations: Array,
+    carry: list[Carry],
+    belief_states: InnerState,
+    policy_state: TrainState,
+    random_actions: bool,
+) -> tuple[Array, Array, Array, list[Carry], InnerState]:
+    """Sample actions and get the next states and observations."""
     num_envs = observations.shape[0]
 
     # Sample actions.
