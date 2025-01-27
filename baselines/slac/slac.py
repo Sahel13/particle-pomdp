@@ -18,11 +18,15 @@ from baselines.slac.utils import (
     get_transition,
     sample_and_log_prob,
 )
-from ppomdp import smc
 from ppomdp.core import InnerState
 from ppomdp.envs import CartPoleEnv, Environment
-from ppomdp.policy import LSTM, reset_policy
-from ppomdp.utils import systematic_resampling
+from ppomdp.policy import LSTM, Carry, reset_policy
+from ppomdp.utils import (
+    propagate_inner,
+    resample_inner,
+    reweight_inner,
+    systematic_resampling,
+)
 
 
 class Args(NamedTuple):
@@ -60,13 +64,13 @@ def pf_step(
 ) -> InnerState:
     """Single step of the particle filter to track the belief state."""
     key, sub_key = random.split(rng_key)
-    resampled_state = smc.resample_inner(sub_key, belief_state, systematic_resampling)
+    resampled_state = resample_inner(sub_key, belief_state, systematic_resampling)
     key, sub_key = random.split(key)
-    particles = smc.propagate_inner(
+    particles = propagate_inner(
         sub_key, env.trans_model, resampled_state.particles, action
     )
     resampled_state = resampled_state._replace(particles=particles)
-    belief_state = smc.reweight_inner(env.obs_model, resampled_state, observation)
+    belief_state = reweight_inner(env.obs_model, resampled_state, observation)
     return belief_state
 
 
