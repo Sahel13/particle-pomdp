@@ -1,7 +1,6 @@
 from collections.abc import Callable
 from typing import NamedTuple
 
-from chex import Numeric
 from distrax import Distribution
 
 from ppomdp.core import ObservationModel, RewardFn, TransitionModel
