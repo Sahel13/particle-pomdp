@@ -18,7 +18,7 @@ from jax import Array, random
 
 from ppomdp import smc
 from ppomdp.core import InnerState
-from ppomdp.envs import Environment, PendulumEnv
+from ppomdp.envs import Environment, CartPoleEnv
 from ppomdp.policy import LSTM, reset_policy
 from ppomdp.sac.sac import sample_random_actions
 from ppomdp.sac.utils import QNetworks
@@ -33,8 +33,8 @@ from ppomdp.utils import systematic_resampling
 
 class Args(NamedTuple):
     seed: int = 1
-    total_timesteps: int = int(1e5)
-    buffer_size: int = int(1e5)
+    total_timesteps: int = int(1e6)
+    buffer_size: int = int(1e6)
     gamma: float = 0.995
     tau: float = 0.005
     batch_size: int = 256
@@ -412,7 +412,7 @@ def sim_and_train(
 if __name__ == "__main__":
     args = Args()
 
-    env = PendulumEnv
+    env = CartPoleEnv
     key = random.key(args.seed)
     key, sub_key = random.split(key)
     ts, policy_network = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
