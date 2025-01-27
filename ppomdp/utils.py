@@ -1,9 +1,6 @@
-from typing import Dict
-
-from functools import partial
-
 import math
-from typing import Callable
+from functools import partial
+from typing import Callable, Dict
 
 import jax
 from chex import PRNGKey
@@ -12,12 +9,12 @@ from jax import numpy as jnp
 
 from ppomdp.core import (
     Carry,
-    OuterState,
     InnerState,
-    TransitionModel,
     ObservationModel,
-    RewardFn,
+    OuterState,
     RecurrentPolicy,
+    RewardFn,
+    TransitionModel,
 )
 
 
@@ -36,6 +33,9 @@ def resample_inner(
         inner_state: The state associated with a single outer trajectory.
             Leaves have shape (M, ...).
         resample_fn: The resampling function.
+
+    Returns:
+        The new `InnerState` after resampling.
     """
     num_particles = inner_state.particles.shape[0]
 
@@ -53,8 +53,10 @@ def resample_inner(
         return state._replace(resampling_indices=resampling_idx)
 
     resampled_state = jax.lax.cond(
-        effective_sample_size(inner_state.weights) < 0.75 * num_particles,
-        true_fn, false_fn, inner_state
+        ess(inner_state.log_weights) < 0.75 * num_particles,
+        true_fn,
+        false_fn,
+        inner_state,
     )
     return resampled_state
 
@@ -123,10 +125,7 @@ def sample_marginal_obs(
 
 
 def expected_reward(
-    inner_state: InnerState,
-    action: Array,
-    time_idx: int,
-    reward_fn: RewardFn
+    inner_state: InnerState, action: Array, time_idx: int, reward_fn: RewardFn
 ) -> Array:
     """
     Calculate the expected reward for a given particle and inner state.
@@ -144,7 +143,9 @@ def expected_reward(
     Returns:
         Array: The cumulative return for the given particle and inner state.
     """
-    rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(inner_state.particles, action, time_idx)
+    rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(
+        inner_state.particles, action, time_idx
+    )
     return jnp.sum(rewards * inner_state.weights)
 
 
@@ -155,7 +156,7 @@ def log_potential(
     time_idx: int,
     reward_fn: RewardFn,
     tempering: float,
-    slew_rate_penalty: float
+    slew_rate_penalty: float,
 ) -> tuple[Array, Array]:
     r"""Estimate the log potential function.
 
@@ -174,7 +175,9 @@ def log_potential(
         slew_rate_penalty: The slew rate penalty.
     """
     rewards = expected_reward(inner_state, action, time_idx, reward_fn)
-    mod_rewards = rewards - slew_rate_penalty * jnp.dot(action - prev_action, action - prev_action)
+    mod_rewards = rewards - slew_rate_penalty * jnp.dot(
+        action - prev_action, action - prev_action
+    )
     return tempering * mod_rewards, rewards
 
 
@@ -182,18 +185,15 @@ def resample_outer(
     rng_key: PRNGKey,
     outer_state: OuterState,
     resample_fn: Callable,
-    conditional: bool = False
+    conditional: bool = False,
 ) -> OuterState:
     num_particles = outer_state.weights.shape[0]
 
     def true_fn(state: OuterState) -> OuterState:
         resampling_idx = resample_fn(rng_key, state.weights, num_particles)
-        # set zeroth resampling index to zero if conditional resampling is enabled
-        resampling_idx = jax.lax.cond(
-            conditional,
-            lambda _: resampling_idx.at[0].set(0),
-            lambda _: resampling_idx,
-            None
+        # Set zeroth resampling index to zero if conditional resampling is enabled
+        resampling_idx = jax.lax.select(
+            conditional, resampling_idx.at[0].set(0), resampling_idx
         )
         resampled_particles = jax.tree.map(lambda x: x[resampling_idx], state.particles)
         resampled_rewards = state.rewards[resampling_idx]
@@ -268,9 +268,7 @@ def marginal_observation_logpdf(
             The observation model.
     """
     num_particles = states.shape[0]
-    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(
-        observation, states
-    )
+    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(observation, states)
     return jax.nn.logsumexp(log_probs) - jnp.log(num_particles)
 
 
@@ -309,8 +307,9 @@ def transition_logpdf(
     action: Array,
     trans_model: TransitionModel,
 ):
-    """" Transition probability of the inner particles for a single trajectory
-    The transition density is marginalized over the resmapling indices
+    """Computes the transition probability of the inner particles for a single trajectory.
+
+    The transition density is marginalized over the resampling indices.
     """
 
     def _log_transition(next_state, states, action):
@@ -338,7 +337,7 @@ def weighted_mean(particles: Array, weights: Array):
     Returns:
         Array: The weighted mean of the particles of shape (h,).
     """
-    return jnp.einsum('mh,m->h', particles, weights) / jnp.sum(weights)
+    return jnp.einsum("mh,m->h", particles, weights) / jnp.sum(weights)
 
 
 @partial(jnp.vectorize, signature="(m,h),(m)->(h,h)")
@@ -354,13 +353,38 @@ def weighted_covar(particles: Array, weights: Array) -> Array:
         Array: The weighted covariance matrix of shape (h, h).
     """
     centered = particles - weighted_mean(particles, weights)
-    return jnp.einsum('mh,ml,m->hl', centered, centered, weights) / jnp.sum(weights)
+    return jnp.einsum("mh,ml,m->hl", centered, centered, weights) / jnp.sum(weights)
 
 
 @partial(jnp.vectorize, signature="(m)->()")
 def effective_sample_size(weights: Array) -> Array:
     """Compute the effective sample size."""
+    # TODO: Replace instances of this function with the more numerically stable `ess()`.
     return 1.0 / jnp.sum(jnp.square(weights))
+
+
+def log_ess(log_weights: Array) -> Array:
+    """Computes the log of the effective sample size.
+
+    Args:
+        log_weights: Log-weights of particles.
+
+    Returns:
+        The logarithm of the effective sample size.
+    """
+    return 2 * jax.nn.logsumexp(log_weights) - jax.nn.logsumexp(2 * log_weights)
+
+
+def ess(log_weights: Array) -> Array:
+    """Computes the effective sample size.
+
+    Args:
+        log_weights: Log-weights of particles.
+
+    Returns:
+        The effective sample size.
+    """
+    return jnp.exp(log_ess(log_weights))
 
 
 def batch_data(
