@@ -15,8 +15,12 @@ dependencies = [
   "chex",
   "distrax",
   "optax",
+  "brax",
   "matplotlib"
 ]
+
+[tool.setuptools]
+packages = ["ppomdp", "baselines"]
 
 [project.optional-dependencies]
 test = ["pytest"]

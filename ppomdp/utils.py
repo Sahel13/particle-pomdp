@@ -231,7 +231,7 @@ def systematic_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) ->
     cumsum = jnp.cumsum(weights)
     linspace = (jnp.arange(num_samples, dtype=weights.dtype) + u) / num_samples
     idx = jnp.searchsorted(cumsum, linspace)
-    return jnp.clip(idx, 0, n - 1).astype(jnp.int_)
+    return jnp.clip(idx, 0, n - 1).astype(jnp.int32)
 
 
 def multinomial_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
