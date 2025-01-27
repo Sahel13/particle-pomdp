@@ -1,8 +1,3 @@
-import os
-
-# If running on Wong, specify the GPU to use (0-4).
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-
 from functools import partial
 from typing import Dict, NamedTuple
 
@@ -15,21 +10,21 @@ from brax.training.replay_buffers import UniformSamplingQueue
 from flax.training.train_state import TrainState
 from jax import Array, random
 
-from ppomdp.envs import Environment, PendulumEnv
-from ppomdp.sac.utils import (
+from baselines.sac.utils import (
     ActorNetwork,
     OuterState,
     QNetworks,
     sample_and_log_prob,
 )
+from ppomdp.envs import Environment, PendulumEnv
 
 
 class Args(NamedTuple):
     """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = int(1e6)
-    buffer_size: int = int(1e6)
+    total_timesteps: int = int(1e5)
+    buffer_size: int = int(1e5)
     gamma: float = 0.995
     tau: float = 0.005
     batch_size: int = 256

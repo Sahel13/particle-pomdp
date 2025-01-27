@@ -1,8 +1,3 @@
-import os
-
-# If running on Wong, specify the GPU to use (0-4).
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-
 from functools import partial
 from typing import Dict, NamedTuple
 
@@ -16,18 +11,17 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from jax import Array, random
 
-from ppomdp import smc
-from ppomdp.core import InnerState
-from ppomdp.envs import Environment, CartPoleEnv
-from ppomdp.policy import LSTM, reset_policy
-from ppomdp.sac.sac import sample_random_actions
-from ppomdp.sac.utils import QNetworks
-from ppomdp.slac.utils import (
+from baselines.sac import QNetworks, sample_random_actions
+from baselines.slac.utils import (
     OuterState,
     Transition,
     get_transition,
     sample_and_log_prob,
 )
+from ppomdp import smc
+from ppomdp.core import InnerState
+from ppomdp.envs import CartPoleEnv, Environment
+from ppomdp.policy import LSTM, reset_policy
 from ppomdp.utils import systematic_resampling
 
 
@@ -511,11 +505,11 @@ if __name__ == "__main__":
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
     fig.suptitle("Simulated trajectory")
 
-    axs[0].plot(states[:, 0])
+    axs[0].plot(states[:, 1])
     axs[0].set_ylabel("Angle")
     axs[0].grid(True)
 
-    axs[1].plot(states[:, 1])
+    axs[1].plot(states[:, 3])
     axs[1].set_ylabel("Angular velocity")
     axs[1].grid(True)
 

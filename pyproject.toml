@@ -19,5 +19,8 @@ dependencies = [
   "matplotlib"
 ]
 
+[tool.setuptools]
+packages = ["ppomdp", "baselines"]
+
 [project.optional-dependencies]
 test = ["pytest"]
