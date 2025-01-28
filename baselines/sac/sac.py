@@ -1,3 +1,4 @@
+import argparse
 from functools import partial
 from typing import Dict, NamedTuple
 
@@ -16,15 +17,16 @@ from baselines.sac.utils import (
     QNetworks,
     sample_and_log_prob,
 )
-from ppomdp.envs import Environment, PendulumEnv
+from ppomdp import envs
+from ppomdp.envs import Environment
 
 
 class Args(NamedTuple):
     """Arguments for SAC from cleanrl."""
 
     seed: int = 1
-    total_timesteps: int = int(1e5)
-    buffer_size: int = int(1e5)
+    total_timesteps: int = int(2e5)
+    buffer_size: int = int(2e5)
     gamma: float = 0.995
     tau: float = 0.005
     batch_size: int = 256
@@ -222,7 +224,23 @@ def gradient_step(
 if __name__ == "__main__":
     args = Args()
 
-    env = PendulumEnv
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--env",
+        type=str,
+        help="Environment name",
+        choices=["pendulum", "cartpole", "lightdark2d"],
+        default="lightdark2d",
+    )
+    cmd_args = parser.parse_args()
+
+    if cmd_args.env == "pendulum":
+        env = envs.PendulumEnv
+    elif cmd_args.env == "cartpole":
+        env = envs.CartPoleEnv
+    else:
+        env = envs.LightDarkTwoEnv
+
     key = random.key(args.seed)
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.q_lr, args.policy_lr)
@@ -259,8 +277,9 @@ if __name__ == "__main__":
 
         if outer_state.dones[0] == 1:
             print(
-                f"Step: {global_step:6d} | "
-                + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f}"
+                f"Step: {global_step:7d} | "
+                + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f} | "
+                + f"Policy log std: {ts.policy_state.params['log_std'][0]:6.2f}"
             )
 
     # Evaluate the learned policy.
@@ -280,22 +299,54 @@ if __name__ == "__main__":
     )
     states = jnp.concatenate([state[None, ...], states], axis=0)
 
-    # For the pendulum environment.
-    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
-    fig.suptitle("Simulated trajectory")
+    if cmd_args.env == "pendulum":
+        fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+        fig.suptitle("Simulated trajectory")
 
-    axs[0].plot(states[:, 0])
-    axs[0].set_ylabel("Angle")
-    axs[0].grid(True)
+        axs[0].plot(states[:, 0])
+        axs[0].set_ylabel("Angle")
+        axs[0].grid(True)
 
-    axs[1].plot(states[:, 1])
-    axs[1].set_ylabel("Angular velocity")
-    axs[1].grid(True)
+        axs[1].plot(states[:, 1])
+        axs[1].set_ylabel("Angular velocity")
+        axs[1].grid(True)
 
-    axs[2].plot(actions[:, 0])
-    axs[2].set_ylabel("Action")
-    axs[2].set_xlabel("Time")
-    axs[2].grid(True)
+        axs[2].plot(actions[:, 0])
+        axs[2].set_ylabel("Action")
+        axs[2].set_xlabel("Time")
+        axs[2].grid(True)
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
+    elif cmd_args.env == "cartpole":
+        fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+        fig.suptitle("Simulated trajectory")
+
+        axs[0].plot(states[:, 1])
+        axs[0].set_ylabel("Angle")
+        axs[0].grid(True)
+
+        axs[1].plot(states[:, 3])
+        axs[1].set_ylabel("Angular velocity")
+        axs[1].grid(True)
+
+        axs[2].plot(actions[:, 0])
+        axs[2].set_ylabel("Action")
+        axs[2].set_xlabel("Time")
+        axs[2].grid(True)
+
+        plt.tight_layout()
+        plt.show()
+    elif cmd_args.env == "lightdark2d":
+        plt.figure()
+        plt.title("Simulated trajectory")
+        plt.plot(states[:, 0], states[:, 1], "g-")
+        plt.plot(2, 2, "ro", label="Starting location")
+        plt.plot(0, 0, "rx", label="Target location")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.axis("equal")
+        plt.show()
