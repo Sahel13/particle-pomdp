@@ -59,23 +59,20 @@ class QNetworks(nn.Module):
 class ActorNetwork(nn.Module):
     action_dim: int
     feature_fn: Callable[[Array], Array]
+    init_log_std: float = 2.0
     hidden_sizes: tuple[int, ...] = (256, 256)
-    log_std_max: float = 2
-    log_std_min: float = -5
 
     @nn.compact
-    def __call__(self, state: Array) -> tuple[Array, Array]:
+    def __call__(self, state: Array) -> Array:
+        log_std = self.param(
+            "log_std", nn.initializers.constant(self.init_log_std), self.action_dim
+        )
+
         y = self.feature_fn(state)
         for size in self.hidden_sizes:
             y = nn.relu(nn.Dense(size)(y))
 
-        mean = nn.Dense(self.action_dim)(y)
-        log_std = nn.tanh(nn.Dense(self.action_dim)(y))
-        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            log_std + 1
-        )
-
-        return mean, log_std
+        return nn.Dense(self.action_dim)(y)
 
 
 def sample_and_log_prob(
@@ -87,9 +84,9 @@ def sample_and_log_prob(
     action_shift: ArrayLike,
 ) -> tuple[Array, Array, Array]:
     """Sample actions and compute their log probabilities."""
-    mean, log_std = network.apply({"params": params}, states)
+    mean = network.apply({"params": params}, states)
     bijector = Chain([ScalarAffine(action_scale, action_shift), Tanh()])
-    dist = squash_policy(mean, log_std, bijector)
+    dist = squash_policy(mean, params["log_std"], bijector)
     sampled_action, log_prob = dist.sample_and_log_prob(seed=rng_key)
     mean_action = bijector.forward(mean)
     return sampled_action, log_prob, mean_action
