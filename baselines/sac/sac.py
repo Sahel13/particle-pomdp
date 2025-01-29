@@ -206,7 +206,6 @@ def q_target_update(ts: JointTrainState, tau: float) -> JointTrainState:
     return ts._replace(q_target_params=updated_params)
 
 
-@partial(jax.jit, donate_argnums=1)
 def gradient_step(
     rng_key: chex.PRNGKey,
     ts: JointTrainState,
@@ -253,34 +252,69 @@ if __name__ == "__main__":
     buffer = UniformSamplingQueue(
         args.buffer_size, buffer_entry_prototype, sample_batch_size=args.batch_size
     )
-    buffer.insert_internal = jax.jit(buffer.insert_internal)
-    buffer.sample_internal = jax.jit(buffer.sample_internal)
+
+    @partial(jax.jit, static_argnames="num_steps")
+    def step_and_train(
+        rng_key, init_buffer_state, init_train_state, init_outer_state, num_steps
+    ):
+        """Train the policy and Q-functions for `num_steps` many steps using a `lax.scan`."""
+
+        def body(carry, rng_keys):
+            buffer_state, train_state, outer_state = carry
+            step_key, train_key = rng_keys
+
+            outer_state = step(step_key, env, train_state.policy_state, outer_state)
+            buffer_state = buffer.insert(buffer_state, outer_state)
+
+            buffer_state, data = buffer.sample(buffer_state)
+            train_state, _, _ = gradient_step(
+                train_key, train_state, data, args.alpha, args.gamma
+            )
+
+            return (buffer_state, train_state, outer_state), None
+
+        out, _ = jax.lax.scan(
+            body,
+            (init_buffer_state, init_train_state, init_outer_state),
+            random.split(rng_key, num_steps * 2).reshape((num_steps, 2)),
+        )
+        return out
 
     key, sub_key = random.split(key)
     buffer_state = buffer.init(sub_key)
+    buffer.insert_internal = jax.jit(buffer.insert_internal)
     buffer_state = buffer.insert(buffer_state, outer_state)
 
-    for global_step in range(1, args.total_timesteps):
+    # Pre-populate the buffer with random trajectories.
+    for global_step in range(1, args.learning_starts):
         key, sub_key = random.split(key)
-        if global_step < args.learning_starts:
-            outer_state = step(sub_key, env, ts.policy_state, outer_state, True)
-        else:
-            outer_state = step(sub_key, env, ts.policy_state, outer_state)
+        outer_state = step(sub_key, env, ts.policy_state, outer_state, True)
         buffer_state = buffer.insert(buffer_state, outer_state)
-
-        if global_step > args.learning_starts:
-            buffer_state, data = buffer.sample(buffer_state)
-            key, sub_key = random.split(key)
-            ts, q_loss, policy_loss = gradient_step(
-                sub_key, ts, data, args.alpha, args.gamma
-            )
-
         if outer_state.dones[0] == 1:
             print(
                 f"Step: {global_step:7d} | "
-                + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f} | "
-                + f"Policy log std: {ts.policy_state.params['log_std'][0]:6.2f}"
+                + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f}"
             )
+
+    # Ensure that training starts with a fresh episode.
+    outer_state = outer_state._replace(dones=jnp.ones(env.num_envs))
+
+    # Number of steps to take using the `lax.scan` loop (and how often to print training info).
+    steps_per_epoch = 10 * env.num_time_steps
+
+    # Training loop.
+    for global_step in range(
+        args.learning_starts, args.total_timesteps, steps_per_epoch
+    ):
+        key, sub_key = random.split(key)
+        buffer_state, ts, outer_state = step_and_train(
+            sub_key, buffer_state, ts, outer_state, steps_per_epoch
+        )
+        print(
+            f"Step: {global_step + steps_per_epoch:7d} | "
+            + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f} | "
+            + f"Policy log std: {ts.policy_state.params['log_std'][0]:6.2f}"
+        )
 
     # Evaluate the learned policy.
     key, state_key = random.split(key)
