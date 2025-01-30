@@ -27,7 +27,7 @@ class Args(NamedTuple):
     seed: int = 1
     total_timesteps: int = int(2e5)
     buffer_size: int = int(2e5)
-    gamma: float = 0.995
+    gamma: float = 0.95
     tau: float = 0.005
     batch_size: int = 256
     learning_starts: int = int(5e3)
@@ -383,4 +383,12 @@ if __name__ == "__main__":
         plt.grid(True)
         plt.tight_layout()
         plt.axis("equal")
+        plt.show()
+
+        # Plot actions.
+        plt.figure()
+        plt.plot(actions[:, 0])
+        plt.plot(actions[:, 1])
+        plt.xlabel("Time")
+        plt.ylabel("Action")
         plt.show()
