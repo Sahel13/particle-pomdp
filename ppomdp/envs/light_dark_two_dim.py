@@ -1,13 +1,9 @@
-"""A stochastic pendulum environment.
-
-The reward function is from the Pendulum-v1 environment from gymnasium:
-https://gymnasium.farama.org/environments/classic_control/pendulum/.
-"""
+"""A 2d light-dark environment."""
 
 import jax
 import jax.numpy as jnp
 from chex import PRNGKey
-from distrax import MultivariateNormalDiag, Deterministic
+from distrax import Deterministic, MultivariateNormalDiag
 from jax import Array
 
 from ppomdp.core import ObservationModel, TransitionModel
@@ -46,11 +42,12 @@ def mean_obs(s: Array) -> Array:
 
 
 def stddev_obs(s: Array) -> Array:
-    # beacon at along y-axis at x=5
-    return jnp.sqrt(jnp.array([5.0 - s[0], 0.0]) ** 2 / 2.0 + 1e-4 * jnp.ones(obs_dim))
+    # light region along y-axis around x=5
+    dist = (s[0] - 5.0) ** 2 / 2.0
+    return jnp.sqrt(dist * jnp.ones(obs_dim) + 1e-4 * jnp.ones(obs_dim))
 
 
-def sample_obs(rng_key: Array, s: Array) -> Array:
+def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
     dist = MultivariateNormalDiag(loc=mean_obs(s), scale_diag=stddev_obs(s))
     return dist.sample(seed=rng_key)
 
@@ -62,11 +59,13 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 def reward_fn(s: Array, a: Array, t: int) -> Array:
     q = jax.lax.select(
-        t < num_time_steps, jnp.zeros(state_dim), jnp.array([250.0, 250.0, 0.0, 0.0])
+        t < num_time_steps,
+        jnp.array([1.0, 1.0, 0.0, 0.0]),
+        jnp.array([50.0, 50.0, 5.0, 5.0]),
     )
-    r = jnp.array([1e-4, 1e-4])
-    state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(q), s)
-    action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
+    r = jnp.array([1e-5, 1e-5])
+    state_cost = jnp.dot(s * q, s)
+    action_cost = jnp.dot(a * r, a)
     return -0.5 * state_cost - 0.5 * action_cost
 
 
@@ -80,7 +79,7 @@ action_shift = 0.0
 
 
 # prior_dist = MultivariateNormalDiag(
-#     loc=jnp.array([2.0, 2.0, 0.0, 0.0]), scale_diag=jnp.array([2.5, 1e-2, 1e-4, 1e-4])
+#     loc=jnp.array([2.0, 2.0, 0.0, 0.0]), scale_diag=jnp.array([2.5, 2.5, 1e-4, 1e-4])
 # )
 prior_dist = Deterministic(jnp.array([2.0, 2.0, 0.0, 0.0]))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
