@@ -55,14 +55,16 @@ def init(
     """Initialize the outer state."""
     key, state_key, action_key = random.split(rng_key, 3)
     states = env.prior_dist.sample(seed=state_key, sample_shape=(num_outer_particles,))
+    time_steps = jnp.ones(num_outer_particles)
     if random_actions:
         actions = sample_random_actions(action_key, env, num_outer_particles)
     else:
-        actions, _, _ = policy_state.apply_fn(action_key, policy_state.params, states)
+        actions, _, _ = policy_state.apply_fn(
+            action_key, policy_state.params, states, time_steps
+        )
     keys = random.split(key, num_outer_particles)
     next_states = jax.vmap(env.trans_model.sample)(keys, states, actions)
-    rewards = jax.vmap(env.reward_fn, in_axes=(0, 0, None))(next_states, actions, 1)
-    time_steps = jnp.ones(num_outer_particles)
+    rewards = jax.vmap(env.reward_fn)(next_states, actions, time_steps)
     dones = jnp.zeros(num_outer_particles)
 
     outer_state = OuterState(
@@ -84,12 +86,14 @@ def step(
     def true_fn(_outer_state: OuterState) -> OuterState:
         keys = random.split(rng_key, num_particles + 1)
         states = _outer_state.next_states
+        time_steps = _outer_state.time_steps + 1
         if random_actions:
             actions = sample_random_actions(keys[0], env, num_particles)
         else:
-            actions, _, _ = policy_state.apply_fn(keys[0], policy_state.params, states)
+            actions, _, _ = policy_state.apply_fn(
+                keys[0], policy_state.params, states, time_steps
+            )
         next_states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
-        time_steps = _outer_state.time_steps + 1
         dones = jax.lax.select(
             time_steps[0] == env.num_time_steps,
             jnp.ones(num_particles),
@@ -124,16 +128,17 @@ def create_train_state(
     q_lr: float,
     policy_lr: float,
 ) -> JointTrainState:
-    actor_network = ActorNetwork(env.action_dim, env.feature_fn)
-    q_networks = QNetworks(env.feature_fn)
+    actor_network = ActorNetwork(env.action_dim, env.feature_fn, env.num_time_steps)
+    q_networks = QNetworks(env.feature_fn, env.num_time_steps)
 
     q_key, policy_key = random.split(rng_key)
     init_states = jnp.empty((1, env.state_dim))
     init_actions = jnp.empty((1, env.action_dim))
-    q_params = q_networks.init(q_key, init_states, init_actions)
+    init_time = jnp.empty((1,))
+    q_params = q_networks.init(q_key, init_states, init_actions, init_time)
     q_target_params = jax.tree.map(lambda x: x.copy(), q_params)
 
-    policy_params = actor_network.init(policy_key, init_states)["params"]
+    policy_params = actor_network.init(policy_key, init_states, init_time)["params"]
 
     q_optimizer = optax.adam(q_lr)
     policy_optimizer = optax.adam(policy_lr)
@@ -162,14 +167,16 @@ def q_train_step(
     gamma: float,
 ) -> tuple[JointTrainState, Array]:
     next_actions, next_log_probs, _ = ts.policy_state.apply_fn(
-        rng_key, ts.policy_state.params, data.next_states
+        rng_key, ts.policy_state.params, data.next_states, data.time_steps
     )
-    next_q = ts.q_state.apply_fn(ts.q_target_params, data.next_states, next_actions)
+    next_q = ts.q_state.apply_fn(
+        ts.q_target_params, data.next_states, next_actions, data.time_steps + 1
+    )
     next_v = jnp.min(next_q, axis=-1) - alpha * next_log_probs
     target_q = data.rewards + (1 - data.dones) * gamma * next_v
 
     def critic_loss(params):
-        q_old = ts.q_state.apply_fn(params, data.states, data.actions)
+        q_old = ts.q_state.apply_fn(params, data.states, data.actions, data.time_steps)
         q_error = q_old - jnp.expand_dims(target_q, -1)
         q_loss = 0.5 * jnp.mean(jnp.square(q_error))
         return q_loss
@@ -185,8 +192,12 @@ def policy_train_step(
     rng_key: chex.PRNGKey, ts: JointTrainState, data: OuterState, alpha: float
 ) -> tuple[JointTrainState, Array]:
     def actor_loss(params):
-        actions, log_probs, _ = ts.policy_state.apply_fn(rng_key, params, data.states)
-        q_vals = ts.q_state.apply_fn(ts.q_state.params, data.states, actions)
+        actions, log_probs, _ = ts.policy_state.apply_fn(
+            rng_key, params, data.states, data.time_steps
+        )
+        q_vals = ts.q_state.apply_fn(
+            ts.q_state.params, data.states, actions, data.time_steps
+        )
         min_qf_pi = jnp.min(q_vals, axis=-1)
         return jnp.mean(alpha * log_probs - min_qf_pi)
 
@@ -320,16 +331,17 @@ if __name__ == "__main__":
     key, state_key = random.split(key)
     state = env.prior_dist.sample(seed=state_key)
 
-    def body_fn(state, rng_key):
+    def body_fn(carry, rng_key):
         action_key, state_key = random.split(rng_key)
+        state, t = carry
         _, _, action = ts.policy_state.apply_fn(
-            action_key, ts.policy_state.params, state
+            action_key, ts.policy_state.params, state, t
         )
         state = env.trans_model.sample(state_key, state, action)
-        return state, (state, action)
+        return (state, t + 1), (state, action)
 
     _, (states, actions) = jax.lax.scan(
-        body_fn, state, random.split(key, env.num_time_steps)
+        body_fn, (state, 1), random.split(key, env.num_time_steps)
     )
     states = jnp.concatenate([state[None, ...], states], axis=0)
 
