@@ -40,6 +40,7 @@ class Transition(NamedTuple):
     next_states: Array
     next_observations: Array
     next_carry: list[Carry]
+    time_steps: Array
     rewards: Array
     dones: Array
 
@@ -64,6 +65,7 @@ def get_transition(os: OuterState) -> Transition:
         next_states=next_states,
         next_observations=os.next_observations,
         next_carry=os.next_carry,
+        time_steps=os.time_steps,
         rewards=os.rewards,
         dones=os.dones,
     )

@@ -264,12 +264,13 @@ def create_train_state(
         output_size=(256, 256),
         init_log_std=constant(jnp.log(2.0)),
     )
-    q_networks = QNetworks(env.feature_fn)
+    q_networks = QNetworks(env.feature_fn, env.num_time_steps)
 
     key, sub_key = random.split(rng_key)
     init_states = jnp.empty((1, env.state_dim))
     init_actions = jnp.empty((1, env.action_dim))
-    q_params = q_networks.init(sub_key, init_states, init_actions)
+    init_time = jnp.empty((1,))
+    q_params = q_networks.init(sub_key, init_states, init_actions, init_time)
     q_target_params = jax.tree.map(lambda x: x.copy(), q_params)
 
     key, policy_key = random.split(key)
@@ -311,12 +312,14 @@ def q_train_step(
     _, next_actions, next_log_probs, _ = ts.policy_state.apply_fn(
         rng_key, ts.policy_state.params, data.next_carry, data.next_observations
     )
-    next_q = ts.q_state.apply_fn(ts.q_target_params, data.next_states, next_actions)
+    next_q = ts.q_state.apply_fn(
+        ts.q_target_params, data.next_states, next_actions, data.time_steps + 1
+    )
     next_v = jnp.min(next_q, axis=-1) - alpha * next_log_probs
     target_q = data.rewards + (1 - data.dones) * gamma * next_v
 
     def critic_loss(params):
-        q_old = ts.q_state.apply_fn(params, data.states, data.actions)
+        q_old = ts.q_state.apply_fn(params, data.states, data.actions, data.time_steps)
         q_error = q_old - jnp.expand_dims(target_q, -1)
         q_loss = 0.5 * jnp.mean(jnp.square(q_error))
         return q_loss
@@ -335,7 +338,9 @@ def policy_train_step(
         _, actions, log_probs, _ = ts.policy_state.apply_fn(
             rng_key, params, data.carry, data.observations
         )
-        q_vals = ts.q_state.apply_fn(ts.q_state.params, data.states, actions)
+        q_vals = ts.q_state.apply_fn(
+            ts.q_state.params, data.states, actions, data.time_steps
+        )
         min_qf_pi = jnp.min(q_vals, axis=-1)
         return jnp.mean(alpha * log_probs - min_qf_pi)
 
