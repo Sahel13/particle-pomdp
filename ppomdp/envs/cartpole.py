@@ -1,5 +1,6 @@
 from functools import partial
 
+import jax
 import jax.numpy as jnp
 from chex import PRNGKey
 from distrax import MultivariateNormalDiag, Deterministic
@@ -70,7 +71,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return obs_noise.log_prob(z - mean_obs)
 
 
-def reward_fn(s: Array, a: Array, _: int) -> Array:
+def reward_fn(s: Array, a: Array, t: Array) -> Array:
     x, q, xd, qd = s
     goal = jnp.array([0.0, jnp.pi, 0.0, 0.0])
 
@@ -83,7 +84,7 @@ def reward_fn(s: Array, a: Array, _: int) -> Array:
     _state = jnp.array((x, wrap_angle(q), xd, qd))
     _state -= goal
     cost = jnp.dot(_state * Q, _state) + R * jnp.dot(a, a)
-    return -0.5 * cost
+    return jax.lax.select(t == 0, 0.0, -0.5 * cost)
 
 
 prior_dist = Deterministic(jnp.zeros(state_dim))

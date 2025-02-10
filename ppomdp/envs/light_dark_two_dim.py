@@ -57,7 +57,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return dist.log_prob(z)
 
 
-def reward_fn(s: Array, a: Array, t: int) -> Array:
+def reward_fn(s: Array, a: Array, t: Array) -> Array:
     q = jax.lax.select(
         t < num_time_steps,
         jnp.array([1.0, 1.0, 0.0, 0.0]),
@@ -66,7 +66,7 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
     r = jnp.array([1e-5, 1e-5])
     state_cost = jnp.dot(s * q, s)
     action_cost = jnp.dot(a * r, a)
-    return -0.5 * state_cost - 0.5 * action_cost
+    return jax.lax.select(t == 0, 0.0, -0.5 * state_cost - 0.5 * action_cost)
 
 
 num_envs = 1

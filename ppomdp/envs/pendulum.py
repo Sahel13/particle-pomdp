@@ -6,6 +6,7 @@ https://gymnasium.farama.org/environments/classic_control/pendulum/.
 
 from functools import partial
 
+import jax
 import jax.numpy as jnp
 from chex import PRNGKey
 from distrax import Deterministic, Distribution, MultivariateNormalDiag
@@ -56,7 +57,7 @@ def get_observation_model(noise_dist: Distribution) -> ObservationModel:
     return ObservationModel(sample=sample, log_prob=log_prob)
 
 
-def reward_fn(s: Array, a: Array, t: int) -> Array:
+def reward_fn(s: Array, a: Array, t: Array) -> Array:
     def angle_normalize(x):
         return x % (2 * jnp.pi)
 
@@ -65,7 +66,7 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
         + 0.1 * jnp.square(s[1])
         + 0.001 * jnp.square(a[0])
     )
-    return -cost
+    return jax.lax.select(t == 0, 0.0, -cost)
 
 
 num_envs = 1

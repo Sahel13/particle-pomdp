@@ -55,16 +55,16 @@ def init(
     """Initialize the outer state."""
     key, state_key, action_key = random.split(rng_key, 3)
     states = env.prior_dist.sample(seed=state_key, sample_shape=(num_outer_particles,))
-    time_steps = jnp.ones(num_outer_particles)
+    time_steps = jnp.zeros(num_outer_particles, dtype=jnp.int32)
     if random_actions:
         actions = sample_random_actions(action_key, env, num_outer_particles)
     else:
         actions, _, _ = policy_state.apply_fn(
             action_key, policy_state.params, states, time_steps
         )
+    rewards = jax.vmap(env.reward_fn)(states, actions, time_steps)
     keys = random.split(key, num_outer_particles)
     next_states = jax.vmap(env.trans_model.sample)(keys, states, actions)
-    rewards = jax.vmap(env.reward_fn)(next_states, actions, time_steps)
     dones = jnp.zeros(num_outer_particles)
 
     outer_state = OuterState(
@@ -93,14 +93,14 @@ def step(
             actions, _, _ = policy_state.apply_fn(
                 keys[0], policy_state.params, states, time_steps
             )
+        rewards = jax.vmap(env.reward_fn)(states, actions, time_steps)
+        eps_rewards = _outer_state.episodic_rewards + rewards
         next_states = jax.vmap(env.trans_model.sample)(keys[1:], states, actions)
         dones = jax.lax.select(
             time_steps[0] == env.num_time_steps,
             jnp.ones(num_particles),
             jnp.zeros(num_particles),
         )
-        rewards = jax.vmap(env.reward_fn)(next_states, actions, time_steps)
-        eps_rewards = _outer_state.episodic_rewards + rewards
 
         return OuterState(
             states, actions, next_states, rewards, time_steps, dones, eps_rewards
@@ -311,7 +311,7 @@ if __name__ == "__main__":
     outer_state = outer_state._replace(dones=jnp.ones(env.num_envs))
 
     # Number of steps to take using the `lax.scan` loop (and how often to print training info).
-    steps_per_epoch = 10 * env.num_time_steps
+    steps_per_epoch = 10 * (env.num_time_steps + 1)
 
     # Training loop.
     for global_step in range(
@@ -341,7 +341,7 @@ if __name__ == "__main__":
         return (state, t + 1), (state, action)
 
     _, (states, actions) = jax.lax.scan(
-        body_fn, (state, 1), random.split(key, env.num_time_steps)
+        body_fn, (state, 0), random.split(key, env.num_time_steps)
     )
     states = jnp.concatenate([state[None, ...], states], axis=0)
 
