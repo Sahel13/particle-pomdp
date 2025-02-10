@@ -152,10 +152,9 @@ def init(
             random_actions,
         )
     )
-
-    rewards = jax.vmap(env.reward_fn, (0, 0, None))(states, actions, 0)
+    time_steps = jnp.zeros(num_envs, dtype=jnp.int32)
+    rewards = jax.vmap(env.reward_fn)(states, actions, time_steps)
     episodic_rewards = rewards.copy()
-    time_steps = jnp.ones(num_envs)
     dones = jnp.zeros(num_envs)
 
     outer_state = OuterState(
@@ -205,14 +204,11 @@ def step(
                 random_actions,
             )
         )
-
-        rewards = jax.vmap(env.reward_fn)(
-            _outer_state.states, actions, _outer_state.time_steps
-        )
-        episodic_rewards = _outer_state.episodic_rewards + rewards
         time_steps = _outer_state.time_steps + 1
+        rewards = jax.vmap(env.reward_fn)(states, actions, time_steps)
+        episodic_rewards = _outer_state.episodic_rewards + rewards
         dones = jax.lax.select(
-            time_steps[0] >= env.num_time_steps, jnp.ones(num_envs), jnp.zeros(num_envs)
+            time_steps[0] == env.num_time_steps, jnp.ones(num_envs), jnp.zeros(num_envs)
         )
 
         outer_state = OuterState(
@@ -467,11 +463,12 @@ if __name__ == "__main__":
     # Ensure that training starts with a fresh episode.
     outer_state = outer_state._replace(dones=jnp.ones(env.num_envs))
 
-    print_every = 10 * env.num_time_steps
+    # Number of steps to take using the `lax.scan` loop (and how often to print training info).
+    steps_per_epoch = 10 * (env.num_time_steps + 1)
 
     # Training loop - slightly faster training with `jax.lax.scan`.
     for global_step in range(
-        args.learning_starts, args.total_timesteps + print_every, print_every
+        args.learning_starts, args.total_timesteps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
         buffer_state, outer_state, ts = sim_and_train(
@@ -482,12 +479,12 @@ if __name__ == "__main__":
             env,
             policy_network,
             buffer,
-            print_every,
+            steps_per_epoch,
         )
         print(
-            f"Step: {global_step:6d} | "
-            + f"Episodic reward: {outer_state.episodic_rewards.mean():6.2f} | "
-            + f"Policy log std: {ts.policy_state.params['log_std'].mean():6.2f}"
+            f"Step: {global_step + steps_per_epoch:7d} | "
+            + f"Episodic reward: {outer_state.episodic_rewards.mean():10.2f} | "
+            + f"Policy log std: {ts.policy_state.params['log_std'][0]:6.2f}"
         )
 
     # Evaluate the learned policy.
