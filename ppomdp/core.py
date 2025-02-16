@@ -1,136 +1,15 @@
-from typing import Dict, NamedTuple, Protocol, Union
+from typing import Dict, NamedTuple, Protocol, Union, Any
 
 from chex import PRNGKey
 from jax import Array
 
+from flax.core import FrozenDict
+from flax.training.train_state import TrainState
+
 LSTMCarry = tuple[Array, Array]
 GRUCarry = Array
 Carry = Union[LSTMCarry, GRUCarry]
-
-
-class SampleTransition(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array, a: Array) -> Array:
-        r"""Sample from $f(s_t \mid s_{t-1}, a_{t-1})$."""
-
-
-class LogProbTransition(Protocol):
-    def __call__(self, sn: Array, s: Array, a: Array) -> Array:
-        r"""Compute the log density of $f(s_t \mid s_{t-1}, a_{t-1})$."""
-
-
-class TransitionModel(NamedTuple):
-    r"""The transition kernel $f(s_t \mid s_{t-1}, a_{t-1})$."""
-
-    sample: SampleTransition
-    log_prob: LogProbTransition
-
-
-class SampleObservation(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array) -> Array:
-        r"""Sample from $h(z_t \mid s_t)$."""
-
-
-class LogProbObservation(Protocol):
-    def __call__(self, z: Array, s: Array) -> Array:
-        r"""Compute the log density of $h(z_t \mid s_t)$."""
-
-
-class ObservationModel(NamedTuple):
-    r"""The observation model $h(z_t \mid s_t)$."""
-
-    sample: SampleObservation
-    log_prob: LogProbObservation
-
-
-class SamplePolicy(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array, params: Dict) -> Array:
-        r"""Sample from $\pi_\phi(a_t \mid s_t)$."""
-
-
-class LogProbPolicy(Protocol):
-    def __call__(self, a: Array, s: Array, params: Dict) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t)$."""
-
-
-class Policy(NamedTuple):
-    r"""The stochastic recurrent policy $\pi_\phi$."""
-
-    sample: SamplePolicy
-    log_prob: LogProbPolicy
-
-
-class ResetRecurrentPolicy(Protocol):
-    def __call__(self, batch_size: int) -> list[Carry]:
-        r"""Reset the recurrent state of the policy."""
-
-
-class SampleRecurrentPolicy(Protocol):
-    def __call__(
-        self,
-        rng_key: PRNGKey,
-        observations: Array,
-        carry: list[Carry],
-        params: Dict,
-    ) -> tuple[list[Carry], Array]:
-        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
-
-
-class LogProbRecurrentPolicy(Protocol):
-    def __call__(
-        self,
-        actions: Array,
-        observations: Array,
-        carry: list[Carry],
-        params: Dict
-    ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
-
-
-class SampleAndLogProbRecurrentPolicy(Protocol):
-    def __call__(
-        self,
-        rng_key: PRNGKey,
-        observations: Array,
-        carry: list[Carry],
-        params: Dict,
-    ) -> tuple[list[Carry], Array, Array]:
-        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
-
-
-class CarryAndLogProbRecurrentPolicy(Protocol):
-    def __call__(
-        self,
-        action: Array,
-        observations: Array,
-        carry: list[Carry],
-        params: Dict,
-    ) -> tuple[list[Carry], Array]:
-        r"""Compute log density of action and update carry."""
-
-
-class EntropyRecurrentPolicy(Protocol):
-    def __call__(
-        self,
-        params: Dict,
-    ) -> Array:
-        r"""Compute the entropy of $\pi_\phi$."""
-
-
-class RecurrentPolicy(NamedTuple):
-    r"""The stochastic recurrent policy $\pi_\phi$."""
-
-    dim: int
-    reset: ResetRecurrentPolicy
-    sample: SampleRecurrentPolicy
-    log_prob: LogProbRecurrentPolicy
-    sample_and_log_prob: SampleAndLogProbRecurrentPolicy
-    carry_and_log_prob: CarryAndLogProbRecurrentPolicy
-    entropy: EntropyRecurrentPolicy
-
-
-class RewardFn(Protocol):
-    def __call__(self, s: Array, a: Array, t: int) -> Array:
-        r"""The  reward function $r(s_t, a_t)$."""
+Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
 class OuterParticles(NamedTuple):
@@ -183,3 +62,150 @@ class InnerInfo(NamedTuple):
 class Reference(NamedTuple):
     outer_particles: OuterParticles
     inner_state: InnerState
+
+
+class SampleTransition(Protocol):
+    def __call__(self, rng_key: PRNGKey, s: Array, a: Array) -> Array:
+        r"""Sample from $f(s_t \mid s_{t-1}, a_{t-1})$."""
+
+
+class LogProbTransition(Protocol):
+    def __call__(self, sn: Array, s: Array, a: Array) -> Array:
+        r"""Compute the log density of $f(s_t \mid s_{t-1}, a_{t-1})$."""
+
+
+class TransitionModel(NamedTuple):
+    r"""The transition kernel $f(s_t \mid s_{t-1}, a_{t-1})$."""
+
+    sample: SampleTransition
+    log_prob: LogProbTransition
+
+
+class SampleObservation(Protocol):
+    def __call__(self, rng_key: PRNGKey, s: Array) -> Array:
+        r"""Sample from $h(z_t \mid s_t)$."""
+
+
+class LogProbObservation(Protocol):
+    def __call__(self, z: Array, s: Array) -> Array:
+        r"""Compute the log density of $h(z_t \mid s_t)$."""
+
+
+class ObservationModel(NamedTuple):
+    r"""The observation model $h(z_t \mid s_t)$."""
+
+    sample: SampleObservation
+    log_prob: LogProbObservation
+
+
+class SamplePolicy(Protocol):
+    def __call__(self, rng_key: PRNGKey, s: Array, params: Parameters) -> Array:
+        r"""Sample from $\pi_\phi(a_t \mid s_t)$."""
+
+
+class LogProbPolicy(Protocol):
+    def __call__(self, a: Array, s: Array, params: Parameters) -> Array:
+        r"""Compute the log density of $\pi_\phi(a_t \mid s_t)$."""
+
+
+class Policy(NamedTuple):
+    r"""The stochastic recurrent policy $\pi_\phi$."""
+
+    sample: SamplePolicy
+    log_prob: LogProbPolicy
+
+
+class ResetRecurrentPolicy(Protocol):
+    def __call__(self, batch_size: int) -> list[Carry]:
+        r"""Reset the recurrent state of the policy."""
+
+
+class SampleRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        observations: Array,
+        carry: list[Carry],
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
+
+
+class LogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        actions: Array,
+        observations: Array,
+        carry: list[Carry],
+        params: Parameters
+    ) -> Array:
+        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
+
+
+class PathwiseLogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        particles: OuterParticles,
+        params: Parameters
+    ) -> Array:
+        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
+
+
+class SampleAndLogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        observations: Array,
+        carry: list[Carry],
+        params: Parameters,
+    ) -> tuple[list[Carry], Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
+
+
+class CarryAndLogProbRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        action: Array,
+        observations: Array,
+        carry: list[Carry],
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        r"""Compute log density of action and update carry."""
+
+
+class EntropyRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        params: Parameters,
+    ) -> Array:
+        r"""Compute the entropy of $\pi_\phi$."""
+
+
+class InitializeRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        batch_size: int,
+        input_size: int,
+        learning_rate: float,
+    ) -> TrainState:
+        r"""Initialize the recurrent state of the policy."""
+
+
+class RecurrentPolicy(NamedTuple):
+    r"""The stochastic recurrent policy $\pi_\phi$."""
+
+    dim: int
+    reset: ResetRecurrentPolicy
+    sample: SampleRecurrentPolicy
+    log_prob: LogProbRecurrentPolicy
+    pathwise_log_prob: PathwiseLogProbRecurrentPolicy
+    sample_and_log_prob: SampleAndLogProbRecurrentPolicy
+    carry_and_log_prob: CarryAndLogProbRecurrentPolicy
+    entropy: EntropyRecurrentPolicy
+    init: InitializeRecurrentPolicy
+
+
+class RewardFn(Protocol):
+    def __call__(self, s: Array, a: Array, t: int) -> Array:
+        r"""The  reward function $r(s_t, a_t)$."""

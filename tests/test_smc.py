@@ -25,7 +25,7 @@ from ppomdp.smc import (
 from ppomdp.utils import resample_inner, propagate_inner, reweight_inner
 from ppomdp.policy import (
     LSTM,
-    get_recurrent_policy,
+    create_policy,
     log_prob_policy_pathwise
 )
 from ppomdp.bijector import Tanh
@@ -153,7 +153,7 @@ def test_nested_smc():
     prior_dist = distrax.MultivariateNormalDiag(loc=jnp.zeros((dim_state,)), scale_diag=jnp.ones((dim_state,)))
     trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
-    policy = get_recurrent_policy(lstm, bijector)
+    policy = create_policy(lstm, bijector)
 
     def reward_fn(x, u, t):
         return -0.1 * jnp.sum(x**2 + u**2)
@@ -247,7 +247,7 @@ def test_policy_log_prob(seed):
     prior_dist = distrax.MultivariateNormalDiag(loc=jnp.zeros((state_dim,)), scale_diag=jnp.ones((state_dim,)))
     trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
     obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
-    policy = get_recurrent_policy(lstm, bijector)
+    policy = create_policy(lstm, bijector)
 
     def reward_fn(x, u, t):
         return -0.1 * jnp.sum(x**2 + u**2)

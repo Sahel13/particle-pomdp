@@ -10,15 +10,14 @@ import jax.numpy as jnp
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling, backward_sampling
 from ppomdp.csmc import csmc
 from ppomdp.core import Reference
-from ppomdp.policy import GRU, get_recurrent_policy, train_step
+from ppomdp.policy import GRUEncoding, NeuralPolicy
+from ppomdp.policy import create_neural_policy, train_neural_policy
 from ppomdp.bijector import Tanh
 from ppomdp.utils import batch_data
 
 from distrax import Chain, MultivariateNormalDiag, ScalarAffine
 from flax.linen.initializers import constant
-from flax.training.train_state import TrainState
 
-import optax
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
@@ -27,16 +26,6 @@ from environment import state_dim, action_dim, obs_dim, num_time_steps
 
 jax.config.update("jax_enable_x64", True)
 
-network = GRU(
-    dim=action_dim,
-    feature_fn=lambda x: x,
-    encoder_size=[256, 256],
-    recurr_size=[64, 64],
-    output_size=[256, 256],
-    init_log_std=constant(jnp.log(1.0)),
-)
-bijector = Chain([ScalarAffine(0.0, 3.0), Tanh()])
-policy = get_recurrent_policy(network, bijector)
 
 rng_key = random.PRNGKey(5)
 
@@ -50,16 +39,24 @@ batch_size = 256
 num_epochs = 500
 num_moves = 5
 
-# Initialize training state
-key, obs_key, param_key = random.split(rng_key, 3)
-init_carry = policy.reset(num_outer_particles)
-init_obs = random.normal(obs_key, (num_outer_particles, obs_dim))
-init_params = network.init(param_key, init_carry, init_obs)["params"]
-train_state = TrainState.create(
-    apply_fn=network.apply,
-    params=init_params,
-    tx=optax.adam(learning_rate)
+gru = GRUEncoding(
+    feature_fn=lambda x: x,
+    encoder_size=[256, 256],
+    recurr_size=[64, 64],
 )
+
+network = NeuralPolicy(
+    encoder=gru,
+    decoder_size=[256, 256],
+    output_size=action_dim,
+    init_log_std=constant(jnp.log(1.0)),
+)
+
+bijector = Chain([ScalarAffine(0.0, 3.0), Tanh()])
+
+key, sub_key = random.split(rng_key, 2)
+policy = create_neural_policy(network, bijector)
+train_state = policy.init(sub_key, obs_dim, num_outer_particles, learning_rate)
 
 jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 jitted_csmc = jax.jit(csmc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
@@ -192,7 +189,7 @@ for i in range(1, num_epochs + 1):
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
         outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
-        train_state, batch_loss = train_step(policy, train_state, outer_batch)
+        train_state, batch_loss = train_neural_policy(policy, train_state, outer_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)

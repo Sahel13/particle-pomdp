@@ -10,7 +10,7 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 
 from ppomdp.bijector import Tanh
-from ppomdp.policy import LSTM, get_recurrent_policy, train_step
+from ppomdp.policy import LSTM, create_policy, train_policy
 from ppomdp.smc import backward_tracing, smc
 from ppomdp.utils import batch_data, weighted_mean
 
@@ -37,7 +37,7 @@ lstm = LSTM(
     init_log_std=constant(jnp.log(2.0)),
 )
 bijector = Chain([ScalarAffine(0.0, 50.0), Tanh()])
-policy = get_recurrent_policy(lstm, bijector)
+policy = create_policy(lstm, bijector)
 
 rng_key = random.PRNGKey(1)
 learning_rate = 1e-3
@@ -141,7 +141,7 @@ for i in range(1, num_epochs + 1):
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
         outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer.particles)
-        train_state, batch_loss = train_step(policy, train_state, outer_batch)
+        train_state, batch_loss = train_policy(policy, train_state, outer_batch)
         loss += batch_loss
 
     log_std = train_state.params["log_std"][0]

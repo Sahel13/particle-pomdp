@@ -555,7 +555,6 @@ def mcmc_backward_sampling(
     return smoothed_outer_particles, smoothed_inner_states
 
 
-
 def backward_sampling_single(
     rng_key: PRNGKey,
     outer_states: OuterState,
@@ -567,9 +566,6 @@ def backward_sampling_single(
     tempering: float,
     slew_rate_penalty: float,
 ) -> tuple[OuterParticles, InnerState]:
-    """
-    MCMC-based backward sampling from Bunch and Godsill (2013)
-    """
     num_time_steps, num_outer_particles = outer_states.weights.shape
 
     _, _, action_dim = outer_states.particles.actions.shape
