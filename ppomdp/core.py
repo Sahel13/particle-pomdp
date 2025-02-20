@@ -1,15 +1,17 @@
 from typing import Dict, NamedTuple, Protocol, Union, Any
 
-from chex import PRNGKey
+import chex
 from jax import Array
 
 from flax.core import FrozenDict
 from flax.training.train_state import TrainState
+from distrax import Distribution
 
 LSTMCarry = tuple[Array, Array]
 GRUCarry = Array
 Carry = Union[LSTMCarry, GRUCarry]
 Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
+PRNGKey = chex.PRNGKey
 
 
 class OuterParticles(NamedTuple):
@@ -124,22 +126,22 @@ class SampleRecurrentPolicy(Protocol):
     def __call__(
         self,
         rng_key: PRNGKey,
-        observations: Array,
         carry: list[Carry],
+        observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
-        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$."""
+        r"""Sample from $\pi_\phi(a_t, carry, \mid s_t)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
         actions: Array,
-        observations: Array,
         carry: list[Carry],
+        observations: Array,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
+        r"""Compute the log density of $\pi_\phi(a_t, carry, \mid s_t,)$."""
 
 
 class PathwiseLogProbRecurrentPolicy(Protocol):
@@ -155,19 +157,19 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
         rng_key: PRNGKey,
-        observations: Array,
         carry: list[Carry],
+        observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
-        r"""Sample from $\pi_\phi(a_t \mid s_t, carry)$ and compute its log density."""
+        r"""Sample from $\pi_\phi(a_t, carry, \mid s_t)$ and compute its log density."""
 
 
 class CarryAndLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
         action: Array,
-        observations: Array,
         carry: list[Carry],
+        observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
         r"""Compute log density of action and update carry."""
@@ -185,8 +187,9 @@ class InitializeRecurrentPolicy(Protocol):
     def __call__(
         self,
         rng_key: PRNGKey,
-        batch_size: int,
-        input_size: int,
+        input_dim: int,
+        output_dim: int,
+        batch_dim: int,
         learning_rate: float,
     ) -> TrainState:
         r"""Initialize the recurrent state of the policy."""
@@ -209,3 +212,14 @@ class RecurrentPolicy(NamedTuple):
 class RewardFn(Protocol):
     def __call__(self, s: Array, a: Array, t: int) -> Array:
         r"""The  reward function $r(s_t, a_t)$."""
+
+
+class Environment(NamedTuple):
+    state_dim: int
+    action_dim: int
+    obs_dim: int
+    prior_dist: Distribution
+    trans_model: TransitionModel
+    obs_model: ObservationModel
+    reward_fn: RewardFn
+    num_time_steps: int

@@ -10,9 +10,9 @@ import jax.numpy as jnp
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.csmc import csmc
 from ppomdp.core import Reference
+from ppomdp.gauss import RecurrentNeuralGauss, create_recurrent_gauss_policy, train_gaussian_policy
 from ppomdp.bijector import Tanh
-from ppomdp.policy import GRUEncoding, NeuralPolicy
-from ppomdp.policy import create_neural_policy, train_neural_policy
+from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.utils import batch_data
 
 from distrax import Chain, ScalarAffine
@@ -31,24 +31,28 @@ rng_key = random.PRNGKey(10)
 
 num_outer_particles = 256
 num_inner_particles = 256
-tempering = 0.1
-slew_rate_penalty = 0.05
+tempering = 0.05
+slew_rate_penalty = 0.01
 
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 400
+num_epochs = 150
 num_moves = 1
 
-gru = GRUEncoding(
+encoder = GRUEncoder(
     feature_fn=lambda x: x,
     encoder_size=[256, 256],
     recurr_size=[64, 64],
 )
 
-network = NeuralPolicy(
-    encoder=gru,
+decoder = MLPDecoder(
     decoder_size=[256, 256],
-    output_size=action_dim,
+    output_dim=action_dim,
+)
+
+network = RecurrentNeuralGauss(
+    encoder=encoder,
+    decoder=decoder,
     init_log_std=constant(jnp.log(1.0)),
 )
 
@@ -57,7 +61,7 @@ scale = jnp.array([2.5])
 bijector = Chain([ScalarAffine(shift, scale), Tanh()])
 
 key, sub_key = random.split(rng_key, 2)
-policy = create_neural_policy(network, bijector)
+policy = create_recurrent_gauss_policy(network, bijector)
 train_state = policy.init(sub_key, obs_dim, num_outer_particles, learning_rate)
 
 jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
@@ -82,26 +86,26 @@ outer_states, inner_states, inner_infos, _ = jitted_smc(
     slew_rate_penalty
 )
 
-# trace ancestors of outer states
-key, sub_key = random.split(key)
-traced_outer, traced_inner, _ = jitted_backward_tracing(
-    sub_key, outer_states, inner_states, inner_infos
-)
-
-# # backward sample outer states
+# # trace ancestors of outer states
 # key, sub_key = random.split(key)
-# traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-#     sub_key,
-#     num_outer_particles,
-#     outer_states,
-#     inner_states,
-#     trans_model,
-#     policy,
-#     train_state.params,
-#     reward_fn,
-#     tempering,
-#     slew_rate_penalty
+# traced_outer, traced_inner, _ = jitted_backward_tracing(
+#     sub_key, outer_states, inner_states, inner_infos
 # )
+
+# backward sample outer states
+key, sub_key = random.split(key)
+traced_outer, traced_inner = jitted_mcmc_backward_sampling(
+    sub_key,
+    num_outer_particles,
+    outer_states,
+    inner_states,
+    trans_model,
+    policy,
+    train_state.params,
+    reward_fn,
+    tempering,
+    slew_rate_penalty
+)
 
 # sample a new reference
 key, sub_key = random.split(key)
@@ -156,25 +160,25 @@ for i in range(1, num_epochs + 1):
                 reference
             )
 
-        # trace ancestors of outer states
-        key, sub_key = random.split(key)
-        traced_outer, traced_inner, _ = \
-            jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-        # # backward sample outer states
+        # # trace ancestors of outer states
         # key, sub_key = random.split(key)
-        # traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-        #     sub_key,
-        #     num_outer_particles,
-        #     outer_states,
-        #     inner_states,
-        #     trans_model,
-        #     policy,
-        #     train_state.params,
-        #     reward_fn,
-        #     tempering,
-        #     slew_rate_penalty
-        # )
+        # traced_outer, traced_inner, _ = \
+        #     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+        # backward sample outer states
+        key, sub_key = random.split(key)
+        traced_outer, traced_inner = jitted_mcmc_backward_sampling(
+            sub_key,
+            num_outer_particles,
+            outer_states,
+            inner_states,
+            trans_model,
+            policy,
+            train_state.params,
+            reward_fn,
+            tempering,
+            slew_rate_penalty
+        )
 
         # sample a new reference
         key, sub_key = random.split(key)
@@ -190,7 +194,7 @@ for i in range(1, num_epochs + 1):
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
         outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
-        train_state, batch_loss = train_neural_policy(policy, train_state, outer_batch)
+        train_state, batch_loss = train_gaussian_policy(policy, train_state, outer_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)

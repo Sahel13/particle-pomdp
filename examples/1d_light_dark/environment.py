@@ -1,12 +1,14 @@
 import jax
-from jax import Array
-import jax.numpy as jnp
+from jax import Array, numpy as jnp
 
-from chex import PRNGKey
-import distrax
 from distrax import MultivariateNormalDiag
 
-from ppomdp.core import TransitionModel, ObservationModel
+from ppomdp.core import (
+    PRNGKey,
+    TransitionModel,
+    ObservationModel,
+    Environment
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -76,9 +78,20 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = distrax.MultivariateNormalDiag(
+prior_dist = MultivariateNormalDiag(
     loc=2.0 * jnp.ones((state_dim,)),
     scale_diag=1.25 * jnp.ones((state_dim,))
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
+
+pendulum = Environment(
+    state_dim=state_dim,
+    action_dim=action_dim,
+    obs_dim=obs_dim,
+    prior_dist=prior_dist,
+    trans_model=trans_model,
+    obs_model=obs_model,
+    reward_fn=reward_fn,
+    num_time_steps=num_time_steps,
+)

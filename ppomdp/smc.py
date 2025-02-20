@@ -1,10 +1,9 @@
+from functools import partial
 from typing import Callable, Dict
 
 import jax
-import jax.numpy as jnp
-from jax import Array, random
+from jax import Array, random, numpy as jnp
 
-from chex import PRNGKey
 from distrax import Distribution
 
 from ppomdp.core import (
@@ -16,6 +15,8 @@ from ppomdp.core import (
     RecurrentPolicy,
     RewardFn,
     TransitionModel,
+    Parameters,
+    PRNGKey
 )
 from ppomdp.utils import (
     resample_inner,
@@ -40,7 +41,7 @@ def smc_init(
     prior_dist: Distribution,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
 ) -> tuple[OuterState, InnerState, InnerInfo]:
     r"""Initialize the outer and inner states for the nested SMC algorithm.
 
@@ -64,7 +65,7 @@ def smc_init(
             The observation model.
         policy: RecurrentPolicy
             The recurrent policy.
-        params: Dict
+        params: Parameters
             Parameters of the recurrent policy.
     """
     key, sub_key = random.split(rng_key)
@@ -119,7 +120,7 @@ def smc_step(
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
@@ -137,7 +138,7 @@ def smc_step(
             The observation model, $g(z_t \mid s_t)$.
         policy: RecurrentPolicy
             The stochastic policy, $\pi_\phi$.
-        params: Dict
+        params: Parameters
             Parameters of recurrent policy $\phi$.
         reward_fn: RewardFn
             The reward function, $r(s_t, a_t)$.
@@ -172,7 +173,7 @@ def smc_step(
     # 3. Sample new actions.
     key, sub_key = random.split(keys[0])
     carry, actions, log_probs = policy.sample_and_log_prob(
-        sub_key, particles.observations, particles.carry, params
+        sub_key, particles.carry, particles.observations, params
     )
 
     # 4. Propagate the inner particles.
@@ -221,6 +222,7 @@ def smc_step(
     return outer_state, inner_state, inner_info, log_marginal
 
 
+@partial(jax.jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 def smc(
     rng_key: PRNGKey,
     num_time_steps: int,
@@ -230,7 +232,7 @@ def smc(
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
@@ -256,7 +258,7 @@ def smc(
             The observation model.
         policy: RecurrentPolicy
             The recurrent policy.
-        params: Dict
+        params: Parameters
             Parameters of the recurrent policy.
         reward_fn: RewardFn
             The reward function.
@@ -323,6 +325,7 @@ def smc(
     return outer_states, inner_states, inner_infos, log_marginal
 
 
+@partial(jax.jit, static_argnums=(5,))
 def backward_tracing(
     rng_key: Array,
     outer_states: OuterState,
@@ -401,7 +404,7 @@ def mcmc_backward_sampling_single(
     inner_states: InnerState,
     trans_model: TransitionModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
@@ -527,6 +530,7 @@ def mcmc_backward_sampling_single(
     return smoothed_outer_particles, smoothed_inner_states
 
 
+@partial(jax.jit, static_argnums=(1, 4, 5, 7, 8, 9))
 def mcmc_backward_sampling(
     rng_key: PRNGKey,
     num_samples: int,
@@ -534,7 +538,7 @@ def mcmc_backward_sampling(
     inner_states: InnerState,
     trans_model: TransitionModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float = 0.0,
@@ -561,7 +565,7 @@ def backward_sampling_single(
     inner_states: InnerState,
     trans_model: TransitionModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
@@ -649,6 +653,7 @@ def backward_sampling_single(
     return smoothed_outer_particles, smoothed_inner_states
 
 
+@partial(jax.jit, static_argnums=(1, 4, 5, 7, 8, 9))
 def backward_sampling(
     rng_key: PRNGKey,
     num_samples: int,
@@ -656,7 +661,7 @@ def backward_sampling(
     inner_state: InnerState,
     trans_model: TransitionModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float = 0.0,

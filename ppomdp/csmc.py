@@ -1,10 +1,9 @@
-from typing import Dict
+from functools import partial
 
 import jax
-import jax.numpy as jnp
-from chex import PRNGKey
+from jax import Array, random, numpy as jnp
+
 from distrax import Distribution
-from jax import Array, random
 
 from ppomdp.core import (
     InnerState,
@@ -16,6 +15,8 @@ from ppomdp.core import (
     RecurrentPolicy,
     RewardFn,
     TransitionModel,
+    Parameters,
+    PRNGKey
 )
 from ppomdp.utils import (
     resample_inner,
@@ -39,7 +40,7 @@ def csmc_init(
     prior_dist: Distribution,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reference: Reference,
 ) -> tuple[OuterState, InnerState, InnerInfo]:
     r"""Initialize the outer and inner states for the nested CSMC algorithm.
@@ -64,7 +65,7 @@ def csmc_init(
             The observation model.
         policy: RecurrentPolicy
             The recurrent policy.
-        params: Dict
+        params: Parameters
             Parameters of the recurrent policy.
         reference: Reference
             Reference state of the conditional particle filter.
@@ -109,12 +110,12 @@ def csmc_init(
     # Initialize dummy actions and policy carry.
     init_carry = policy.reset(num_outer_particles)
     dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
-    init_log_probs = jnp.zeros(num_outer_particles)
+    dummy_log_probs = jnp.zeros(num_outer_particles)
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
     init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.outer_particles.carry)
     dummy_actions = dummy_actions.at[0].set(reference.outer_particles.actions)
-    dummy_log_probs = init_log_probs.at[0].set(reference.outer_particles.log_probs)
+    dummy_log_probs = dummy_log_probs.at[0].set(reference.outer_particles.log_probs)
 
     outer_particles = OuterParticles(observations, dummy_actions, init_carry, dummy_log_probs)
     outer_state = OuterState(
@@ -133,7 +134,7 @@ def csmc_step(
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
@@ -153,7 +154,7 @@ def csmc_step(
             The observation model, $g(z_t \mid s_t)$.
         policy: RecurrentPolicy
             The stochastic policy, $\pi_\phi$.
-        params: Dict
+        params: Parameters
             Parameters of recurrent policy $\phi$.
         reward_fn: RewardFn
             The reward function, $r(s_t, a_t)$.
@@ -188,7 +189,7 @@ def csmc_step(
     # 3. Sample new actions.
     key, sub_key = random.split(keys[0])
     carry, actions, log_probs = policy.sample_and_log_prob(
-        sub_key, particles.observations, particles.carry, params
+        sub_key, particles.carry, particles.observations, params
     )
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
@@ -250,6 +251,7 @@ def csmc_step(
     return outer_state, inner_state, inner_info, log_marginal
 
 
+@partial(jax.jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 def csmc(
     rng_key: PRNGKey,
     num_time_steps: int,
@@ -259,7 +261,7 @@ def csmc(
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Dict,
+    params: Parameters,
     reward_fn: RewardFn,
     tempering: float,
     slew_rate_penalty: float,
@@ -285,7 +287,7 @@ def csmc(
             The observation model.
         policy: RecurrentPolicy
             The recurrent policy.
-        params: Dict
+        params: Parameters
             Parameters of the recurrent policy.
         reward_fn: RewardFn
             The reward function.
