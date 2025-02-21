@@ -12,7 +12,7 @@ from ppomdp.core import (
 
 class LSTMEncoder(nn.Module):
     """
-    LSTM module for processing sequences with optional feature extraction and encoding layers.
+    LSTM module for processing sequences with recurrent layers.
 
     Attributes:
         feature_fn (Callable): Function to extract features from the input sequence.
@@ -38,6 +38,7 @@ class LSTMEncoder(nn.Module):
         for k, size in enumerate(self.recurr_size):
             carry[k], y = nn.LSTMCell(size)(carry[k], y)
 
+
         return carry, y
 
     def reset(self, batch_size) -> list[LSTMCarry]:
@@ -51,7 +52,7 @@ class LSTMEncoder(nn.Module):
 
 class GRUEncoder(nn.Module):
     """
-    GRU module for processing sequences with optional feature extraction and encoding layers.
+    GRU module for processing sequences with recurrent layers.
 
     Attributes:
         feature_fn (Callable): Function to extract features from the input sequence.
@@ -109,6 +110,17 @@ class MLPDecoder(nn.Module):
 
 
 class MLPConditioner(nn.Module):
+    """
+    MLPConditioner is a module that conditions an input array `x` with a context array `context`
+    to produce parameters for a bijector. It uses a series of hidden layers to process the input
+    and context, and outputs a reshaped array suitable for use in a bijector.
+
+    Attributes:
+        event_dim (int): Dimensionality of the event space.
+        hidden_size (Sequence[int]): Sizes of the hidden layers.
+        num_params (int): Number of parameters per bijector.
+    """
+
     event_dim: int
     hidden_size: Sequence[int]
     num_params: int  # number of parameters per bijector
@@ -119,7 +131,7 @@ class MLPConditioner(nn.Module):
 
         x = jnp.hstack([x, context])
         for size in self.hidden_size:
-            x = nn.gelu(nn.Dense(size)(x))
+            x = nn.relu(nn.Dense(size)(x))
         x = nn.Dense(
             self.event_dim * self.num_params,
             # kernel_init=nn.initializers.zeros,

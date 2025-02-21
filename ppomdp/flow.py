@@ -21,7 +21,8 @@ from ppomdp.core import (
 from ppomdp.arch import (
     LSTMEncoder,
     GRUEncoder,
-    MLPConditioner
+    MLPConditioner,
+    MLPDecoder
 )
 from ppomdp.bijector import (
     ChainConditional,
@@ -32,8 +33,22 @@ from ppomdp.bijector import (
 
 
 class RecurrentNeuralFlow(nn.Module):
+    """
+    Recurrent neural flow module for processing sequences with recurrent encoding and dense decoding layers.
+
+    Attributes:
+        dim (int): Dimensionality of the output.
+        encoder (Union[LSTMEncoder, GRUEncoder]): Recurrent encoder module.
+        decoder (MLPDecoder): Dense decoder module.
+        conditioners (list[MLPConditioner]): List of conditioner modules for the masked coupling layers.
+        inner_bijector (Callable): Inner bijector function for the masked coupling layers.
+        outer_bijector (Bijector): Outer bijector function for the transformed distribution.
+        init_log_std (Callable): Initializer for the log standard deviation parameter.
+    """
+
     dim: int
     encoder: Union[LSTMEncoder, GRUEncoder]
+    decoder: MLPDecoder
     conditioners: list[MLPConditioner]
     inner_bijector: Callable
     outer_bijector: Bijector
@@ -57,32 +72,41 @@ class RecurrentNeuralFlow(nn.Module):
             )
         bijector_list.append(self.outer_bijector)
 
+        from distrax import Transformed, Block
+        from ppomdp.bijector import Tanh
+
         log_std = self.param("log_std", self.init_log_std, self.dim)
-        self.base = MultivariateNormalDiag(jnp.zeros(self.dim), jnp.exp(log_std))
+        _base = MultivariateNormalDiag(jnp.zeros(self.dim), jnp.exp(log_std))
+        self.base = Transformed(_base, Block(Tanh(), ndims=self.dim))
 
         self.bijector = InverseConditional(ChainConditional(bijector_list))
         self.dist = TransformedConditional(self.base, self.bijector)
 
     def __call__(self, x: Array, carry: list[Carry], s: Array) -> Array:
         _, s = self.encoder(carry, s)
+        s = self.decoder(s)
         return self.dist.log_prob(x, context=s)
 
     def sample(self, rng_key: PRNGKey, carry: list[Carry], s: Array) -> tuple[list[Carry], Array]:
         carry, s = self.encoder(carry, s)
+        s = self.decoder(s)
         x = self.dist.sample(seed=rng_key, context=s, sample_shape=s.shape[0])
         return carry, x
 
     def sample_and_log_prob(self, rng_key: PRNGKey, carry: list[Carry], s: Array) -> tuple[list[Carry], Array, Array]:
         carry, s = self.encoder(carry, s)
+        s = self.decoder(s)
         x, log_prob = self.dist.sample_and_log_prob(seed=rng_key, context=s, sample_shape=s.shape[0])
         return carry, x, log_prob
 
     def carry_and_log_prob(self, x: Array, carry: list[Carry], s: Array) -> tuple[list[Carry], Array]:
         carry, s = self.encoder(carry, s)
+        s = self.decoder(s)
         return carry, self.dist.log_prob(x, context=s)
 
     def log_prob(self, x: Array, carry: list[Carry], s: Array) -> Array:
         _, s = self.encoder(carry, s)
+        s = self.decoder(s)
         return self.dist.log_prob(x, context=s)
 
     def reset(self, batch_dim: int) -> list[Carry]:

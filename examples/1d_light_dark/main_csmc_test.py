@@ -5,6 +5,7 @@ import time
 
 import jax
 from jax import random, numpy as jnp
+from flax import linen as nn
 
 from distrax import MultivariateNormalDiag, RationalQuadraticSpline
 
@@ -12,15 +13,13 @@ from ppomdp.core import Reference
 from ppomdp.csmc import csmc
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 
-from ppomdp.arch import GRUEncoder, MLPConditioner
+from ppomdp.arch import GRUEncoder, MLPDecoder, MLPConditioner
 from ppomdp.flow import RecurrentNeuralFlow
 from ppomdp.flow import create_recurrent_flow_policy, train_recurrent_flow_policy
 
 from ppomdp.bijector import (
-    ChainConditional,
     BlockConditional,
     InverseConditional,
-    TanhConditional,
     ScalarAffineConditional,
 )
 from ppomdp.utils import batch_data
@@ -38,21 +37,26 @@ rng_key = random.PRNGKey(123)
 num_outer_particles = 256
 num_inner_particles = 256
 tempering = 0.1
-slew_rate_penalty = 0.005
+slew_rate_penalty = 0.01
 
 num_moves = 5
 
 learning_rate = 3e-4
 batch_size = 64
-num_epochs = 500
+num_epochs = 1000
 
-num_bins = 32
-num_transforms = 3
+num_bins = 16
+num_transforms = 4
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
     encoder_size=[256, 256],
     recurr_size=[64, 64],
+)
+
+decoder = MLPDecoder(
+    decoder_size=[256, 256],
+    output_dim=env.action_dim,
 )
 
 conditioners = [
@@ -65,28 +69,23 @@ conditioners = [
 
 
 def inner_bijector(params):
-    return RationalQuadraticSpline(params, range_min=-3.0, range_max=3.0)
-
+    return RationalQuadraticSpline(params, range_min=-1.0, range_max=1.0)
 
 outer_bijector = InverseConditional(
     BlockConditional(
-        ChainConditional(
-            [ScalarAffineConditional(0.0, 3.0), TanhConditional()]
-        ),
+        ScalarAffineConditional(0.0, 3.0),
         ndims=env.action_dim
     )
 )
 
-base = MultivariateNormalDiag(
-    loc=jnp.zeros(env.action_dim),
-    scale_diag=jnp.ones(env.action_dim)
-)
 flow = RecurrentNeuralFlow(
     dim=env.action_dim,
     encoder=encoder,
+    decoder=decoder,
     conditioners=conditioners,
     inner_bijector=inner_bijector,
     outer_bijector=outer_bijector,
+    init_log_std=nn.initializers.constant(jnp.log(1.0)),
 )
 
 key, sub_key = random.split(rng_key, 2)
