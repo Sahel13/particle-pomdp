@@ -80,7 +80,7 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
 
 prior_dist = MultivariateNormalDiag(
     loc=2.0 * jnp.ones((state_dim,)),
-    scale_diag=1.25 * jnp.ones((state_dim,))
+    scale_diag=1.0 * jnp.ones((state_dim,))
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)

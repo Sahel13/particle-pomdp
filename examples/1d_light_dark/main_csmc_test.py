@@ -283,7 +283,6 @@ for n in range(num_outer_particles):
 plt.tight_layout()
 plt.show()
 
-
 states = []
 actions = []
 observations = []
