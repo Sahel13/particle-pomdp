@@ -129,7 +129,7 @@ class RecurrentPolicy(NamedTuple):
 
 
 class RewardFn(Protocol):
-    def __call__(self, s: Array, a: Array, t: int) -> Array:
+    def __call__(self, s: Array, a: Array, t: Array) -> Array:
         r"""The  reward function $r(s_t, a_t)$."""
 
 
