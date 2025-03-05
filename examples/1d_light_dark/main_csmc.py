@@ -4,20 +4,28 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import time
 
 import jax
-from jax import random
-import jax.numpy as jnp
+from jax import random, numpy as jnp
+from flax.linen.initializers import constant
 
+from ppomdp.core import Reference
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.csmc import csmc
-from ppomdp.core import Reference
-from ppomdp.gauss import RecurrentNeuralGauss
+
 from ppomdp.bijector import Tanh
-from ppomdp.gauss import create_recurrent_gauss_policy, train_recurrent_gauss_policy
 from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.utils import batch_data
+from ppomdp.gauss import (
+    RecurrentNeuralGauss,
+    create_recurrent_gauss_policy,
+    train_recurrent_gauss_policy
+)
 
-from distrax import Chain, MultivariateNormalDiag, ScalarAffine
-from flax.linen.initializers import constant
+from distrax import (
+    Chain,
+    Block,
+    ScalarAffine,
+    MultivariateNormalDiag
+)
 
 from copy import deepcopy
 import matplotlib.pyplot as plt
@@ -57,6 +65,7 @@ network = RecurrentNeuralGauss(
 )
 
 bijector = Chain([ScalarAffine(0.0, 3.0), Tanh()])
+bijector = Block(bijector, ndims=env.action_dim)
 
 key, sub_key = random.split(rng_key, 2)
 policy = create_recurrent_gauss_policy(network, bijector)

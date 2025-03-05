@@ -38,7 +38,6 @@ class LSTMEncoder(nn.Module):
         for k, size in enumerate(self.recurr_size):
             carry[k], y = nn.LSTMCell(size)(carry[k], y)
 
-
         return carry, y
 
     def reset(self, batch_size) -> list[LSTMCarry]:
@@ -134,8 +133,8 @@ class MLPConditioner(nn.Module):
             x = nn.relu(nn.Dense(size)(x))
         x = nn.Dense(
             self.event_dim * self.num_params,
-            # kernel_init=nn.initializers.zeros,
-            # bias_init=nn.initializers.zeros
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.zeros
         )(x)
 
         x = x.reshape(*batch_shape, self.event_dim, self.num_params)
