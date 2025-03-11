@@ -59,15 +59,15 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 
 def reward_fn(s: Array, a: Array, _: int) -> Array:
-    Q = jnp.array([10.0, 1.0])
-    R = 1e-2
-    goal = jnp.array([jnp.pi, 0.0])
-
     def wrap_angle(q: Array) -> Array:
         return jnp.array((q[0] % (2 * jnp.pi), q[1]))
 
+    g = jnp.array([jnp.pi, 0.0])
+    q = jnp.array([10.0, 1.0])
+    r = jnp.array([1e-2])
+
     s = wrap_angle(s)
-    cost = jnp.dot((s - goal) * Q, (s - goal)) + R * jnp.dot(a, a)
+    cost = jnp.dot((s - g) * q, (s - g)) + r * jnp.dot(a, a)
     return -0.5 * cost
 
 

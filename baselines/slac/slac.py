@@ -19,7 +19,7 @@ from baselines.slac.utils import (
     sample_and_log_prob,
 )
 from ppomdp.core import InnerState
-from ppomdp.envs import CartPoleEnv, Environment
+from baselines.sac.envs import CartPoleEnv, Environment
 from ppomdp.policy import LSTM, Carry, reset_policy
 from ppomdp.utils import (
     propagate_inner,
