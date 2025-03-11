@@ -75,7 +75,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     dist_to_target = x**2 + y**2
     penalty = 1e-1
     cost = jax.lax.select(t < num_time_steps, 0.0, penalty * dist_to_target)
-    cost += 1e-2 * jnp.sum(jnp.square(a))
+    cost += 1e-2 * jnp.square(a[0])
     return -1.0 * cost
 
 

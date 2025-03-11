@@ -146,6 +146,8 @@ def expected_reward(
     rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(
         inner_state.particles, action, time_idx
     )
+    if rewards.ndim != 1:
+        raise ValueError("The reward function must return a scalar value.")
     return jnp.sum(rewards * inner_state.weights)
 
 
