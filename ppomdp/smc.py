@@ -77,7 +77,7 @@ def smc_init(
         particles=inner_particles,
         log_weights=jnp.zeros((num_outer_particles, num_inner_particles)),
         weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
-        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
+        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int32),
     )
 
     # sample marginal observations
@@ -106,7 +106,7 @@ def smc_init(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
-        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int_),
+        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int32),
         rewards=jnp.zeros(num_outer_particles),
     )
 
@@ -341,17 +341,17 @@ def backward_tracing(
         resample: If True, sample the genealogy, otherwise trace back all final
           particles.
         resample_fn: The resampling function.
+
     Returns:
         The traced outer and inner states.
     """
     _, num_particles = outer_states.weights.shape
 
     # Sample the states at the final time step.
-    resampling_idx = jax.lax.cond(
+    resampling_idx = jax.lax.select(
         resample,
-        lambda _: resample_fn(rng_key, outer_states.weights[-1], num_particles),
-        lambda _: jnp.arange(num_particles),
-        None,
+        resample_fn(rng_key, outer_states.weights[-1], num_particles),
+        jnp.arange(num_particles, dtype=jnp.int32),
     )
 
     last_outer_particles = jax.tree.map(lambda x: x[-1, resampling_idx], outer_states.particles)
