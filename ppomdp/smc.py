@@ -306,7 +306,7 @@ def smc(
         params,
     )
 
-    time_indices = jnp.arange(num_time_steps)
+    time_indices = jnp.arange(1, num_time_steps + 1)
     keys = random.split(loop_key, num_time_steps)
     (_, _, log_marginal), (outer_states, inner_states, inner_infos) = jax.lax.scan(
         smc_loop,
