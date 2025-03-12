@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 from chex import PRNGKey
-from distrax import Deterministic, MultivariateNormalDiag
+from distrax import MultivariateNormalDiag
 from jax import Array
 
 from ppomdp.core import ObservationModel, TransitionModel
@@ -78,16 +78,15 @@ action_scale = 100.0
 action_shift = 0.0
 
 
-# prior_dist = MultivariateNormalDiag(
-#     loc=jnp.array([2.0, 2.0, 0.0, 0.0]), scale_diag=jnp.array([2.5, 2.5, 1e-4, 1e-4])
-# )
-prior_dist = Deterministic(jnp.array([2.0, 2.0, 0.0, 0.0]))
+prior_dist = MultivariateNormalDiag(
+    loc=jnp.array([2.0, 2.0, 0.0, 0.0]), scale_diag=jnp.array([2.5, 2.5, 1e-4, 1e-4])
+)
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 feature_fn = lambda x: x
 
 
-LightDarkTwoEnv = Environment(
+LightDarkEnv = Environment(
     num_envs,
     state_dim,
     action_dim,

@@ -1,50 +1,33 @@
 import time
-from functools import partial
 
-import environment as env
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import optax
-from distrax import Chain, MultivariateNormalDiag, ScalarAffine
+from distrax import Chain, ScalarAffine
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from jax import random
 
 from ppomdp.bijector import Tanh
+from ppomdp.envs import TargetInterceptionEnv
 from ppomdp.policy import LSTM, get_recurrent_policy, train_step
 from ppomdp.smc import backward_tracing, smc
 from ppomdp.utils import batch_data, weighted_mean
 
-jax.config.update("jax_enable_x64", True)
-
-state_dim = 4
-action_dim = 1
-obs_dim = 1
-action_lim = 9.0 / 180 * jnp.pi
-prior_dist = MultivariateNormalDiag(
-    loc=jnp.array([-200.0, 12.0, 100.0, -6.0]),
-    scale_diag=jnp.array([1e-8, 1.0, 1e-8, 1.0]),
-)
-
-
-@partial(jnp.vectorize, signature="(m)->(n)")
-def feature_fn(z: jax.Array) -> jax.Array:
-    return jnp.array((jnp.sin(z[0]), jnp.cos(z[0])))
-
-
+env = TargetInterceptionEnv
 lstm = LSTM(
-    dim=action_dim,
-    feature_fn=feature_fn,
+    dim=env.action_dim,
+    feature_fn=env.feature_fn,
     encoder_size=[256, 256],
     recurr_size=[32, 32],
     output_size=[256, 256],
     init_log_std=constant(jnp.log(1.0)),
 )
-bijector = Chain([ScalarAffine(0.0, action_lim), Tanh()])
+bijector = Chain([ScalarAffine(0.0, env.action_scale), Tanh()])
 policy = get_recurrent_policy(lstm, bijector)
 
-rng_key = random.PRNGKey(1)
+key = random.key(123)
 learning_rate = 1e-3
 batch_size = 32
 num_epochs = 500
@@ -52,14 +35,11 @@ tempering = 0.1
 slew_rate_penalty = 0.0
 num_outer_particles = 512
 num_inner_particles = 256
-num_time_steps = 18
-
-reward_fn = partial(env.reward_fn, num_time_steps=num_time_steps)
 
 # Initialize training state
-key, obs_key, param_key = random.split(rng_key, 3)
+key, obs_key, param_key = random.split(key, 3)
 init_carry = policy.reset(num_outer_particles)
-init_obs = random.normal(obs_key, (num_outer_particles, obs_dim))
+init_obs = random.normal(obs_key, (num_outer_particles, env.obs_dim))
 init_params = lstm.init(param_key, init_carry, init_obs)["params"]
 scheduler = optax.constant_schedule(learning_rate)
 tx = optax.adam(scheduler)
@@ -72,15 +52,15 @@ jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5))
 key, sub_key = random.split(key)
 outer_states, inner_states, inner_infos, log_marginal = jitted_smc(
     sub_key,
-    num_time_steps,
+    env.num_time_steps,
     num_outer_particles,
     num_inner_particles,
-    prior_dist,
+    env.prior_dist,
     env.trans_model,
     env.obs_model,
     policy,
     train_state.params,
-    reward_fn,
+    env.reward_fn,
     tempering,
     slew_rate_penalty,
 )
@@ -94,7 +74,7 @@ traced_outer_states, traced_inner_states, _ = jitted_backward_tracing(
 mean_particles = weighted_mean(
     traced_inner_states.particles, traced_inner_states.weights
 )
-actions = traced_outer_states.particles.actions[:, :, 0]
+actions = traced_outer_states.actions[:, :, 0]
 
 plt.figure()
 plt.plot(mean_particles[:, :, 0], mean_particles[:, :, 2])
@@ -113,15 +93,15 @@ for i in range(1, num_epochs + 1):
     key, sub_key = random.split(key)
     outer_states, inner_states, inner_infos, log_marginal = jitted_smc(
         sub_key,
-        num_time_steps,
+        env.num_time_steps,
         num_outer_particles,
         num_inner_particles,
-        prior_dist,
+        env.prior_dist,
         env.trans_model,
         env.obs_model,
         policy,
         train_state.params,
-        reward_fn,
+        env.reward_fn,
         tempering,
         slew_rate_penalty,
     )
@@ -137,7 +117,7 @@ for i in range(1, num_epochs + 1):
     key, sub_key = random.split(key)
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
-        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer.particles)
+        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
         train_state, batch_loss = train_step(policy, train_state, outer_batch)
         loss += batch_loss
 
@@ -159,14 +139,14 @@ observations = []
 key = random.PRNGKey(21)
 key, state_key, obs_key = random.split(key, 3)
 
-state = prior_dist.sample(seed=state_key)
+state = env.prior_dist.sample(seed=state_key)
 obs = env.obs_model.sample(obs_key, state)
 carry = policy.reset(1)
 
 states.append(state)
 observations.append(obs)
 
-for _ in range(num_time_steps):
+for _ in range(env.num_time_steps):
     key, state_key, obs_key, action_key = random.split(key, 4)
 
     carry, action = policy.sample(action_key, obs, carry, train_state.params)
@@ -180,7 +160,6 @@ for _ in range(num_time_steps):
 # Convert lists to arrays for plotting
 states = jnp.squeeze(jnp.array(states))
 actions = jnp.squeeze(jnp.array(actions))
-observations = jnp.squeeze(jnp.array(observations))
 
 # Plot the results
 plt.figure()
