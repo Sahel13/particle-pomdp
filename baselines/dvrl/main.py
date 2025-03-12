@@ -1,16 +1,16 @@
 from functools import partial
-from typing import Dict, NamedTuple
+from typing import NamedTuple
 
 import chex
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import optax
 from brax.training.replay_buffers import UniformSamplingQueue
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from jax import Array, random
 
+from baselines import common
 from baselines.dvrl.utils import (
     OuterState,
     PolicyNetwork,
@@ -19,15 +19,15 @@ from baselines.dvrl.utils import (
     get_transition,
     sample_and_log_prob,
 )
-from baselines.sac import sample_random_actions
+from baselines.sac import JointTrainState, q_target_update, sample_random_actions
 from baselines.slac.slac import pf_init, pf_step
 from ppomdp.core import InnerState
-from ppomdp.envs import CartPoleEnv, Environment
+from ppomdp.envs import Environment
 
 
 class Args(NamedTuple):
     seed: int = 1
-    total_timesteps: int = int(1e5)
+    total_timesteps: int = int(1e4)
     buffer_size: int = int(1e5)
     gamma: float = 0.995
     tau: float = 0.005
@@ -36,7 +36,7 @@ class Args(NamedTuple):
     policy_lr: float = 1e-4
     q_lr: float = 1e-3
     alpha: float = 0.2
-    num_particles: int = 30
+    num_particles: int = 64
 
 
 def _step_atom(
@@ -167,12 +167,6 @@ def step(
     return outer_state
 
 
-class JointTrainState(NamedTuple):
-    policy_state: TrainState
-    q_state: TrainState
-    q_target_params: Dict
-
-
 def create_train_state(
     rng_key: chex.PRNGKey,
     env: Environment,
@@ -267,15 +261,6 @@ def policy_train_step(
     return ts, loss
 
 
-def q_target_update(ts: JointTrainState, tau: float = 0.005) -> JointTrainState:
-    updated_params = jax.tree.map(
-        lambda p, tp: tau * p + (1 - tau) * tp,
-        ts.q_state.params,
-        ts.q_target_params,
-    )
-    return ts._replace(q_target_params=updated_params)
-
-
 @jax.jit
 def gradient_step(
     rng_key: chex.PRNGKey,
@@ -293,8 +278,9 @@ def gradient_step(
 
 if __name__ == "__main__":
     args = Args()
+    cmd_args = common.get_cmd_args()
+    env = common.get_env(cmd_args.env)
 
-    env = CartPoleEnv
     key = random.key(args.seed)
     key, sub_key = random.split(key)
     ts = create_train_state(sub_key, env, args.num_particles, args.q_lr, args.policy_lr)
@@ -347,10 +333,10 @@ if __name__ == "__main__":
             )
 
     # Evaluate the learned policy.
-    key, state_key, obs_key = random.split(key, 3)
-    state = env.prior_dist.sample(seed=state_key)
+    key, obs_key, belief_key = random.split(key)
+    state = env.prior_dist.mean()
     observation = env.obs_model.sample(obs_key, state)
-    belief_state = pf_init(key, env, observation, args.num_particles)
+    belief_state = pf_init(belief_key, env, observation, args.num_particles)
 
     def body(carry, rng_key):
         state, belief_state = carry
@@ -361,7 +347,6 @@ if __name__ == "__main__":
             belief_state.particles,
             belief_state.weights,
         )
-        action = action[0]
         state = env.trans_model.sample(state_key, state, action)
         observation = env.obs_model.sample(obs_key, state)
         belief_state = pf_step(pf_key, env, observation, action, belief_state)
@@ -371,22 +356,5 @@ if __name__ == "__main__":
         body, (state, belief_state), random.split(key, env.num_time_steps)
     )
     states = jnp.concatenate([state[None, ...], states], axis=0)
+    common.plot_trajectory(cmd_args.env, states, actions)
 
-    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
-    fig.suptitle("Simulated trajectory")
-
-    axs[0].plot(states[:, 1])
-    axs[0].set_ylabel("Angle")
-    axs[0].grid(True)
-
-    axs[1].plot(states[:, 3])
-    axs[1].set_ylabel("Angular velocity")
-    axs[1].grid(True)
-
-    axs[2].plot(actions)
-    axs[2].set_ylabel("Action")
-    axs[2].set_xlabel("Time")
-    axs[2].grid(True)
-
-    plt.tight_layout()
-    plt.show()
