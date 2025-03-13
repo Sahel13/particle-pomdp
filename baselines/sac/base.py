@@ -3,7 +3,7 @@ from typing import Any, Dict, Union, Callable, NamedTuple
 import chex
 
 from jax import Array
-from distrax import Distribution, Bijector
+from distrax import Distribution
 from flax.training.train_state import TrainState
 from flax.core import FrozenDict
 
@@ -27,7 +27,6 @@ class SACEnv(NamedTuple):
     trans_model: TransitionModel
     obs_model: ObservationModel
     reward_fn: RewardFn
-    action_trans: Bijector
     feature_fn: Callable
 
 
@@ -36,6 +35,7 @@ class SACEnvState(NamedTuple):
     action: Array
     next_state: Array
     reward: Array
+    total_reward: Array
     time: Array
     done: Array
 
@@ -48,8 +48,8 @@ class SACTrainState(NamedTuple):
 
 class SACConfig(NamedTuple):
     seed: int = 1
-    total_timesteps: int = int(2e5)
-    buffer_size: int = int(2e5)
+    total_timesteps: int = int(1e5)
+    buffer_size: int = int(1e5)
     batch_size: int = 256
     learning_starts: int = int(5e3)
     policy_lr: float = 3e-4

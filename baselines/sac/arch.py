@@ -34,9 +34,9 @@ class CriticNetwork(nn.Module):
     def __call__(self, state: Array, action: Array, time: Array):
         feat = self.feature_fn(state)
         time = time / self.time_norm
-        x = jnp.concatenate([feat, action, time[:, None]], -1)
-        value = [MLP(self.layer_sizes + (1,))(x) for _ in range(self.num_critics)]
-        return jnp.hstack(value)
+        x = jnp.concatenate([feat, action, time[..., None]], -1)
+        values = [MLP(self.layer_sizes + (1,))(x) for _ in range(self.num_critics)]
+        return jnp.concatenate(values, axis=-1)
 
 
 class PolicyNetwork(nn.Module):
@@ -51,7 +51,7 @@ class PolicyNetwork(nn.Module):
 
         feat = self.feature_fn(state)
         time = time / self.time_norm
-        x = jnp.concatenate([feat, time[:, None]], -1)
+        x = jnp.concatenate([feat, time[..., None]], -1)
         for size in self.layer_sizes[:-1]:
             x = nn.relu(nn.Dense(size)(x))
         return nn.Dense(self.layer_sizes[-1])(x), log_std

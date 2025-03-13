@@ -1,4 +1,4 @@
-import argparse
+from argparse import ArgumentParser
 from functools import partial
 
 import jax
@@ -8,12 +8,12 @@ from jax import Array, random, numpy as jnp
 from flax import linen as nn
 from flax.training.train_state import TrainState
 
-from distrax import Chain, Block
+from distrax import Block
 from ppomdp.bijector import Tanh
 
 from baselines.sac.base import PRNGKey, SACEnv, SACEnvState, SACTrainState, SACConfig
 from baselines.sac.arch import PolicyNetwork, CriticNetwork, policy_sample_and_log_prob
-from baselines.sac.envs import PendulumEnv
+from baselines.sac.envs import PendulumEnv, CartPoleEnv, LightDark2DEnv
 
 from brax.training.replay_buffers import UniformSamplingQueue
 
@@ -27,13 +27,12 @@ def sample_random_actions(
     rng_key: PRNGKey,
     env: SACEnv,
 ) -> Array:
-    rnds = random.uniform(
+    return random.uniform(
         key=rng_key,
         shape=(env.num_envs, env.action_dim),
         minval=-1.0,
         maxval=1.0
     )
-    return env.action_trans.forward(rnds)
 
 
 def init_env(
@@ -61,8 +60,9 @@ def init_env(
         action=action,
         next_state=next_state,
         reward=reward,
+        total_reward=reward.copy(),
         time=time,
-        done=done
+        done=done,
     )
 
 
@@ -86,6 +86,7 @@ def step_env(
 
         state_keys = random.split(key, num_samples)
         reward = jax.vmap(env.reward_fn)(state, action, time)
+        total_reward = _env_state.total_reward + reward
         next_state = jax.vmap(env.trans_model.sample)(state_keys, state, action)
         done = jnp.where(time == env.num_time_steps, 1., 0.)
 
@@ -94,6 +95,7 @@ def step_env(
             action=action,
             next_state=next_state,
             reward=reward,
+            total_reward=total_reward,
             time=time,
             done=done
         )
@@ -102,7 +104,7 @@ def step_env(
         return init_env(rng_key, env, policy_state, random_actions)
 
     return jax.lax.cond(
-        jnp.all(env_state.done == 0), _true_fn, _false_fn, env_state
+        jnp.all(env_state.done == 0.), _true_fn, _false_fn, env_state
     )
 
 
@@ -116,7 +118,7 @@ def create_train_state(
         feature_fn=env.feature_fn,
         time_norm=env.num_time_steps,
         layer_sizes=(256, 256, env.action_dim),
-        init_log_std=nn.initializers.constant(2.0),
+        init_log_std=nn.initializers.constant(1.0),
     )
     critic_networks = CriticNetwork(
         feature_fn=env.feature_fn,
@@ -125,16 +127,16 @@ def create_train_state(
         num_critics=2,
     )
 
-    critic_key, policy_key = random.split(rng_key)
     dummy_states = jnp.empty((1, env.state_dim))
     dummy_actions = jnp.empty((1, env.action_dim))
     dummy_time = jnp.empty((1,))
 
+    critic_key, policy_key = random.split(rng_key)
     policy_params = policy_network.init(policy_key, dummy_states, dummy_time)["params"]
     critic_params = critic_networks.init(critic_key, dummy_states, dummy_actions, dummy_time)
     critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
 
-    policy_bijector = Block(Chain([env.action_trans, Tanh()]), ndims=env.action_dim)
+    policy_bijector = Block(Tanh(), ndims=1)
     policy_apply_fn = partial(
         policy_sample_and_log_prob,
         network=policy_network,
@@ -253,29 +255,29 @@ def gradient_step(
 if __name__ == "__main__":
     config = SACConfig()
 
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument(
-    #     "--env",
-    #     type=str,
-    #     help="Environment name",
-    #     choices=["pendulum", "cartpole", "lightdark2d"],
-    #     default="lightdark2d",
-    # )
-    # args = parser.parse_args()
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--env",
+        type=str,
+        help="Environment name",
+        choices=["pendulum", "cartpole", "lightdark2d"],
+        default="cartpole",
+    )
+    args = parser.parse_args()
 
-    # if args.env == "pendulum":
-    #     env = envs.PendulumEnv
-    # elif args.env == "cartpole":
-    #     env = envs.CartPoleEnv
-    # else:
-    #     env = envs.LightDarkTwoEnv
+    if args.env == "pendulum":
+        env = PendulumEnv
+    elif args.env == "cartpole":
+        env = CartPoleEnv
+    else:
+        env = LightDark2DEnv
 
     key = random.key(config.seed)
     key, sub_key = random.split(key)
-    train_state = create_train_state(sub_key, PendulumEnv, config.critic_lr, config.policy_lr)
+    train_state = create_train_state(sub_key, env, config.policy_lr, config.critic_lr)
 
     key, sub_key = random.split(key)
-    env_state = init_env(sub_key, PendulumEnv, train_state.policy_state, True)
+    env_state = init_env(sub_key, env, train_state.policy_state, True)
 
     # Set up the replay buffer from Brax.
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], env_state)
@@ -298,12 +300,18 @@ if __name__ == "__main__":
             train_state, env_state, buffer_state = carry
             step_key, train_key = rng_keys
 
-            env_state = step_env(step_key, PendulumEnv, env_state, train_state.policy_state)
+            env_state = step_env(step_key, env, env_state, train_state.policy_state)
             buffer_state = buffer.insert(buffer_state, env_state)
 
             buffer_state, _env_state_sample = buffer.sample(buffer_state)
             train_state, _, _ = \
-                gradient_step(train_key, train_state, _env_state_sample, config.alpha, config.gamma)
+                gradient_step(
+                    rng_key=train_key,
+                    train_state=train_state,
+                    env_state=_env_state_sample,
+                    alpha=config.alpha,
+                    gamma=config.gamma
+                )
 
             return (train_state, env_state, buffer_state), None
 
@@ -321,19 +329,19 @@ if __name__ == "__main__":
     # Pre-populate the buffer with random trajectories.
     for global_step in range(1, config.learning_starts):
         key, sub_key = random.split(key)
-        env_state = step_env(sub_key, PendulumEnv, env_state, train_state.policy_state, True)
+        env_state = step_env(sub_key, env, env_state, train_state.policy_state, True)
         buffer_state = buffer.insert(buffer_state, env_state)
         if jnp.all(env_state.done == 1):
             print(
                 f"Step: {global_step:7d} | "
-                + f"Episodic reward: {env_state.reward.sum(axis=0).mean():10.2f}"
+                + f"Episodic reward: {env_state.total_reward.mean():10.2f}"
             )
 
     # Ensure that training starts with a fresh episode.
-    env_state = env_state._replace(done=jnp.ones(PendulumEnv.num_envs))
+    env_state = env_state._replace(done=jnp.ones(env.num_envs))
 
     # Number of steps to take using the `lax.scan` loop (and how often to print training info).
-    steps_per_epoch = 10 * (PendulumEnv.num_time_steps + 1)
+    steps_per_epoch = 10 * (env.num_time_steps + 1)
 
     # Training loop.
     for global_step in range(
@@ -345,84 +353,86 @@ if __name__ == "__main__":
 
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "
-            + f"Episodic reward: {env_state.reward.sum(axis=0).mean():10.2f} | "
+            + f"Episodic reward: {env_state.total_reward.mean():10.2f} | "
             + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
         )
 
     # Evaluate the learned policy.
     key, state_key = random.split(key)
-    state = PendulumEnv.prior_dist.sample(seed=state_key)
+    state = env.prior_dist.sample(seed=state_key)
 
     def body_fn(carry, rng_key):
         action_key, state_key = random.split(rng_key)
         state, time = carry
         _, _, action = train_state.policy_state.apply_fn(
-            action_key, train_state.policy_state.params, state, time
+            rng_key=action_key,
+            params=train_state.policy_state.params,
+            state=state,
+            time=time
         )
-        state = PendulumEnv.trans_model.sample(state_key, state, action)
+        state = env.trans_model.sample(state_key, state, action)
         return (state, time + 1), (state, action)
 
     _, (states, actions) = jax.lax.scan(
-        body_fn, (state, 0), random.split(key, PendulumEnv.num_time_steps)
+        body_fn, (state, 0), random.split(key, env.num_time_steps)
     )
     states = jnp.concatenate([state[None, ...], states], axis=0)
 
-    # if args.env == "pendulum":
-    #     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
-    #     fig.suptitle("Simulated trajectory")
-    #
-    #     axs[0].plot(states[:, 0])
-    #     axs[0].set_ylabel("Angle")
-    #     axs[0].grid(True)
-    #
-    #     axs[1].plot(states[:, 1])
-    #     axs[1].set_ylabel("Angular velocity")
-    #     axs[1].grid(True)
-    #
-    #     axs[2].plot(actions[:, 0])
-    #     axs[2].set_ylabel("Action")
-    #     axs[2].set_xlabel("Time")
-    #     axs[2].grid(True)
-    #
-    #     plt.tight_layout()
-    #     plt.show()
-    # elif args.env == "cartpole":
-    #     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
-    #     fig.suptitle("Simulated trajectory")
-    #
-    #     axs[0].plot(states[:, 1])
-    #     axs[0].set_ylabel("Angle")
-    #     axs[0].grid(True)
-    #
-    #     axs[1].plot(states[:, 3])
-    #     axs[1].set_ylabel("Angular velocity")
-    #     axs[1].grid(True)
-    #
-    #     axs[2].plot(actions[:, 0])
-    #     axs[2].set_ylabel("Action")
-    #     axs[2].set_xlabel("Time")
-    #     axs[2].grid(True)
-    #
-    #     plt.tight_layout()
-    #     plt.show()
-    # elif args.env == "lightdark2d":
-    #     plt.figure()
-    #     plt.title("Simulated trajectory")
-    #     plt.plot(states[:, 0], states[:, 1], "g-")
-    #     plt.plot(2, 2, "ro", label="Starting location")
-    #     plt.plot(0, 0, "rx", label="Target location")
-    #     plt.xlabel("x")
-    #     plt.ylabel("y")
-    #     plt.legend()
-    #     plt.grid(True)
-    #     plt.tight_layout()
-    #     plt.axis("equal")
-    #     plt.show()
-    #
-    #     # Plot actions.
-    #     plt.figure()
-    #     plt.plot(actions[:, 0])
-    #     plt.plot(actions[:, 1])
-    #     plt.xlabel("Time")
-    #     plt.ylabel("Action")
-    #     plt.show()
+    if args.env == "pendulum":
+        fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+        fig.suptitle("Simulated trajectory")
+
+        axs[0].plot(states[:, 0])
+        axs[0].set_ylabel("Angle")
+        axs[0].grid(True)
+
+        axs[1].plot(states[:, 1])
+        axs[1].set_ylabel("Angular velocity")
+        axs[1].grid(True)
+
+        axs[2].plot(actions[:, 0])
+        axs[2].set_ylabel("Action")
+        axs[2].set_xlabel("Time")
+        axs[2].grid(True)
+
+        plt.tight_layout()
+        plt.show()
+    elif args.env == "cartpole":
+        fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+        fig.suptitle("Simulated trajectory")
+
+        axs[0].plot(states[:, 1])
+        axs[0].set_ylabel("Angle")
+        axs[0].grid(True)
+
+        axs[1].plot(states[:, 3])
+        axs[1].set_ylabel("Angular velocity")
+        axs[1].grid(True)
+
+        axs[2].plot(actions[:, 0])
+        axs[2].set_ylabel("Action")
+        axs[2].set_xlabel("Time")
+        axs[2].grid(True)
+
+        plt.tight_layout()
+        plt.show()
+    elif args.env == "lightdark2d":
+        plt.figure()
+        plt.title("Simulated trajectory")
+        plt.plot(states[:, 0], states[:, 1], "g-")
+        plt.plot(2, 2, "ro", label="Starting location")
+        plt.plot(0, 0, "rx", label="Target location")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.axis("equal")
+        plt.show()
+
+        plt.figure()
+        plt.plot(actions[:, 0])
+        plt.plot(actions[:, 1])
+        plt.xlabel("Time")
+        plt.ylabel("Action")
+        plt.show()

@@ -4,6 +4,7 @@ import jax
 from jax import Array, numpy as jnp
 
 from distrax import (
+    Block,
     ScalarAffine,
     Deterministic,
     MultivariateNormalDiag
@@ -13,14 +14,22 @@ from ppomdp.core import TransitionModel, ObservationModel
 from baselines.sac.base import PRNGKey, SACEnv
 
 
-num_envs = 5
 state_dim = 2
 action_dim = 1
 obs_dim = 2
 
+num_envs = 1
 num_time_steps = 100
 action_scale = 2.0
 action_shift = 0.0
+
+action_trans = Block(
+    ScalarAffine(
+        scale=action_scale,
+        shift=action_shift
+    ),
+    ndims=1
+)
 
 
 def ode(s: Array, a: Array) -> Array:
@@ -35,10 +44,12 @@ def ode(s: Array, a: Array) -> Array:
 
 def mean_trans(s: Array, a: Array) -> Array:
     dt = 0.05
+    a = action_trans.forward(a)
     return s + dt * ode(s, a)
 
 
 def stddev_trans(s: Array, a: Array) -> Array:
+    a = action_trans.forward(a)
     return jnp.array([1e-4, 0.025])
 
 
@@ -85,20 +96,22 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     def wrap_angle(s: Array) -> Array:
-        return jnp.array((s[0] % (2 * jnp.pi), s[1]))
+        q, dq = s
+        _q = q % (2 * jnp.pi)
+        return jnp.hstack((_q, dq))
 
     g = jnp.array([jnp.pi, 0.0])
-    q = jax.lax.select(
+    h = jax.lax.select(
         t > 0,
-        jnp.array([0.0, 0.0]),
-        jnp.array([10., 1.]),
+        jnp.array([1., 0.1]),
+        jnp.array([0., 0.]),
     )
     r = jnp.array([1e-2])
 
     s = wrap_angle(s)
-    state_cost = jnp.einsum("k,kh,h->", s - g, jnp.diag(q), s - g)
+    state_cost = jnp.einsum("k,kh,h->", s - g, jnp.diag(h), s - g)
     action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
-    return -0.5 * state_cost - 0.5 * action_cost
+    return - 0.5 * state_cost - 0.5 * action_cost
 
 
 prior_dist = Deterministic(jnp.zeros(state_dim))
@@ -108,10 +121,10 @@ obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
 @partial(jnp.vectorize, signature="(n)->(m)")
 def feature_fn(state: Array) -> Array:
-    return jnp.array([jnp.cos(state[0]), jnp.sin(state[0]), state[1]])
+    q, dq = state
+    sin_q, cos_q = jnp.sin(q), jnp.cos(q)
+    return jnp.array([sin_q, cos_q, dq])
 
-
-action_trans = ScalarAffine(scale=action_scale, shift=action_shift)
 
 PendulumEnv = SACEnv(
     num_envs,
@@ -123,6 +136,5 @@ PendulumEnv = SACEnv(
     trans_model,
     obs_model,
     reward_fn,
-    action_trans,
     feature_fn,
 )
