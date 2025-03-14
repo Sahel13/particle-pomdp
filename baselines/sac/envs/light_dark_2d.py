@@ -100,6 +100,18 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return -0.5 * state_cost - 0.5 * action_cost
 
 
+# def reward_fn(s: Array, a: Array, t: Array) -> Array:
+#     h = jax.lax.select(
+#         t < num_time_steps,
+#         jnp.array([0.0, 0.0, 0.0, 0.0]),
+#         jnp.array([1.0, 1.0, 1e-1, 1e-1]),
+#     )
+#     r = jnp.array([1e-2, 1e-2])
+#     state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(h), s)
+#     action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
+#     return -0.5 * state_cost - 0.5 * action_cost
+
+
 prior_dist = Deterministic(jnp.array([2.0, 2.0, 0.0, 0.0]))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)

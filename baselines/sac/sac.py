@@ -261,7 +261,7 @@ if __name__ == "__main__":
         type=str,
         help="Environment name",
         choices=["pendulum", "cartpole", "lightdark2d"],
-        default="cartpole",
+        default="lightdark2d",
     )
     args = parser.parse_args()
 
