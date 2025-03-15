@@ -11,16 +11,16 @@ from distrax import (
 )
 
 from ppomdp.core import TransitionModel, ObservationModel
-from baselines.sac.base import PRNGKey, SACEnv
+from baselines.sac.core import PRNGKey, Env
 
 
-state_dim = 2
+state_dim = 4
 action_dim = 1
-obs_dim = 2
+obs_dim = 4
 
 num_envs = 1
 num_time_steps = 100
-action_scale = 2.0
+action_scale = 50.0
 action_shift = 0.0
 
 action_trans = Block(
@@ -33,13 +33,21 @@ action_trans = Block(
 
 
 def ode(s: Array, a: Array) -> Array:
-    m, l = 1.0, 1.0
-    g, d = 9.81, 1e-3
+    g = 9.81  # gravity
+    l = 0.5  # pole length
+    mc = 10.0  # cart mass
+    mp = 1.0  # pole mass
 
-    q, dq = s[0], s[1]
-    ddq = -3.0 * g / (2.0 * l) * jnp.sin(q)
-    ddq += (a[0] - d * dq) * 3.0 / (m * l**2)
-    return jnp.array([dq, ddq])
+    x, q, xd, qd = s
+
+    sth = jnp.sin(q)
+    cth = jnp.cos(q)
+
+    xdd = (a + mp * sth * (l * qd**2 + g * cth)) / (mc + mp * sth**2)
+    qdd = (-a * cth - mp * l * qd**2 * cth * sth - (mc + mp) * g * sth) / (
+        l * mc + l * mp * sth**2
+    )
+    return jnp.hstack((xd, qd, xdd, qdd))
 
 
 def mean_trans(s: Array, a: Array) -> Array:
@@ -50,7 +58,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-4, 0.025])
+    return jnp.array([1e-4, 1e-4, 1e-3, 1e-3])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -70,12 +78,11 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 
 def mean_obs(s: Array) -> Array:
-    H = jnp.array([[1., 0.], [0., 1.]])
-    return H @ s
+    return s
 
 
 def stddev_obs(s: Array) -> Array:
-    return jnp.array([1e-4, 1e-2])
+    return jnp.array([1e-4, 1e-4, 1e-4, 1e-4])
 
 
 def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
@@ -96,17 +103,17 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     def wrap_angle(s: Array) -> Array:
-        q, dq = s
+        x, q, xd, qd = s
         _q = q % (2 * jnp.pi)
-        return jnp.hstack((_q, dq))
+        return jnp.hstack((x, _q, xd, qd))
 
-    g = jnp.array([jnp.pi, 0.0])
+    g = jnp.array([0.0, jnp.pi, 0.0, 0.0])
     h = jax.lax.select(
         t > 0,
-        jnp.array([1., 0.1]),
-        jnp.array([0., 0.]),
+        jnp.array([1e0, 1e1, 1e-1, 1e-1]),
+        jnp.array([0., 0., 0., 0.]),
     )
-    r = jnp.array([1e-2])
+    r = jnp.array([1e-3])
 
     s = wrap_angle(s)
     state_cost = jnp.einsum("k,kh,h->", s - g, jnp.diag(h), s - g)
@@ -119,14 +126,14 @@ trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
 
-@partial(jnp.vectorize, signature="(n)->(m)")
+@partial(jnp.vectorize, signature="(m)->(n)")
 def feature_fn(state: Array) -> Array:
-    q, dq = state
+    x, q, xd, qd = state
     sin_q, cos_q = jnp.sin(q), jnp.cos(q)
-    return jnp.array([sin_q, cos_q, dq])
+    return jnp.array([x, sin_q, cos_q, xd, qd])
 
 
-PendulumEnv = SACEnv(
+CartPoleEnv = Env(
     num_envs,
     state_dim,
     action_dim,

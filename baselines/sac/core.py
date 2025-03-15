@@ -4,8 +4,8 @@ import chex
 
 from jax import Array
 from distrax import Distribution
-from flax.training.train_state import TrainState
 from flax.core import FrozenDict
+from flax.training.train_state import TrainState
 
 from ppomdp.core import (
     ObservationModel,
@@ -17,7 +17,7 @@ Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 PRNGKey = chex.PRNGKey
 
 
-class SACEnv(NamedTuple):
+class Env(NamedTuple):
     num_envs: int
     state_dim: int
     action_dim: int
@@ -30,7 +30,7 @@ class SACEnv(NamedTuple):
     feature_fn: Callable
 
 
-class SACEnvState(NamedTuple):
+class EnvState(NamedTuple):
     state: Array
     action: Array
     next_state: Array
@@ -40,13 +40,13 @@ class SACEnvState(NamedTuple):
     done: Array
 
 
-class SACTrainState(NamedTuple):
+class JointTrainState(NamedTuple):
     policy_state: TrainState
     critic_state: TrainState
     critic_target_params: Dict
 
 
-class SACConfig(NamedTuple):
+class Config(NamedTuple):
     seed: int = 1
     total_timesteps: int = int(1e5)
     buffer_size: int = int(1e5)
