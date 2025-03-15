@@ -262,9 +262,9 @@ def step_and_train(
     gamma: float,
 ):
 
-    def body(carry, rng_keys):
+    def body(carry, keys):
         _env_state, _buffer_state, _train_state = carry
-        _step_key, _train_key = rng_keys
+        _step_key, _train_key = keys
 
         _env_state = step_env(_step_key, env_obj, _env_state, _train_state.policy_state)
         _buffer_state = buffer_obj.insert(_buffer_state, _env_state)
