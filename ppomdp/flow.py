@@ -42,7 +42,6 @@ class RecurrentNeuralFlow(nn.Module):
         decoder (MLPDecoder): Dense decoder module.
         conditioners (list[MLPConditioner]): List of conditioner modules for the masked coupling layers.
         inner_bijector (Callable): Inner bijector function for the masked coupling layers.
-        outer_bijector (Bijector): Outer bijector function for the transformed distribution.
         init_log_std (Callable): Initializer for the log standard deviation parameter.
     """
 
@@ -51,7 +50,6 @@ class RecurrentNeuralFlow(nn.Module):
     decoder: MLPDecoder
     conditioners: list[MLPConditioner]
     inner_bijector: Callable
-    outer_bijector: Bijector
     init_log_std: Callable = nn.initializers.ones
 
     def setup(self):
@@ -70,14 +68,13 @@ class RecurrentNeuralFlow(nn.Module):
                     conditioner=conditioner
                 )
             )
-        bijector_list.append(self.outer_bijector)
 
         from distrax import Transformed, Block
         from ppomdp.bijector import Tanh
 
         log_std = self.param("log_std", self.init_log_std, self.dim)
         _base = MultivariateNormalDiag(jnp.zeros(self.dim), jnp.exp(log_std))
-        self.base = Transformed(_base, Block(Tanh(), ndims=self.dim))
+        self.base = Transformed(_base, Block(Tanh(), ndims=1))
 
         self.bijector = InverseConditional(ChainConditional(bijector_list))
         self.dist = TransformedConditional(self.base, self.bijector)

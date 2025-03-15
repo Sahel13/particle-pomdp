@@ -1,11 +1,9 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
-import time
-
 import jax
 from jax import random, numpy as jnp
-from flax import linen as nn
+from flax.linen.initializers import constant
 
 from distrax import MultivariateNormalDiag, RationalQuadraticSpline
 
@@ -14,31 +12,30 @@ from ppomdp.csmc import csmc
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 
 from ppomdp.arch import GRUEncoder, MLPDecoder, MLPConditioner
-from ppomdp.flow import RecurrentNeuralFlow
-from ppomdp.flow import create_recurrent_flow_policy, train_recurrent_flow_policy
-
-from ppomdp.bijector import (
-    BlockConditional,
-    InverseConditional,
-    ScalarAffineConditional,
-)
 from ppomdp.utils import batch_data
+from ppomdp.flow import (
+    RecurrentNeuralFlow,
+    create_recurrent_flow_policy,
+    train_recurrent_flow_policy
+)
 
-from environment import pendulum as env
-
+import time
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
+from environment import lightdark1d as env
+
 jax.config.update("jax_enable_x64", True)
 # jax.config.update("jax_disable_jit", True)
+
 
 rng_key = random.PRNGKey(123)
 
 num_outer_particles = 256
 num_inner_particles = 256
-tempering = 0.1
-slew_rate_penalty = 0.01
 
+slew_rate_penalty = 0.0015
+tempering = 8.
 num_moves = 5
 
 learning_rate = 3e-4
@@ -71,21 +68,13 @@ conditioners = [
 def inner_bijector(params):
     return RationalQuadraticSpline(params, range_min=-1.0, range_max=1.0)
 
-outer_bijector = InverseConditional(
-    BlockConditional(
-        ScalarAffineConditional(0.0, 3.0),
-        ndims=env.action_dim
-    )
-)
-
 flow = RecurrentNeuralFlow(
     dim=env.action_dim,
     encoder=encoder,
     decoder=decoder,
     conditioners=conditioners,
     inner_bijector=inner_bijector,
-    outer_bijector=outer_bijector,
-    init_log_std=nn.initializers.constant(jnp.log(1.0)),
+    init_log_std=constant(jnp.log(1.0)),
 )
 
 key, sub_key = random.split(rng_key, 2)
@@ -116,25 +105,25 @@ outer_states, inner_states, inner_info, _ = \
         slew_rate_penalty,
     )
 
-# trace ancestors of outer states
-key, sub_key = random.split(key)
-traced_outer, traced_inner, _ = \
-    backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-# # backward sample outer states
+# # trace ancestors of outer states
 # key, sub_key = random.split(key)
-# traced_outer, traced_inner = mcmc_backward_sampling(
-#     sub_key,
-#     num_outer_particles,
-#     outer_states,
-#     inner_states,
-#     env.trans_model,
-#     policy,
-#     train_state.params,
-#     env.reward_fn,
-#     tempering,
-#     slew_rate_penalty
-# )
+# traced_outer, traced_inner, _ = \
+#     backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+# backward sample outer states
+key, sub_key = random.split(key)
+traced_outer, traced_inner = mcmc_backward_sampling(
+    sub_key,
+    num_outer_particles,
+    outer_states,
+    inner_states,
+    env.trans_model,
+    policy,
+    train_state.params,
+    env.reward_fn,
+    tempering,
+    slew_rate_penalty
+)
 
 # sample a new reference
 key, sub_key = random.split(key)
@@ -186,25 +175,25 @@ for i in range(1, num_epochs + 1):
                 reference
             )
 
-        # trace ancestors of outer states
-        key, sub_key = random.split(key)
-        traced_outer, traced_inner, _ = \
-            backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-        # # backward sample outer states
+        # # trace ancestors of outer states
         # key, sub_key = random.split(key)
-        # traced_outer, traced_inner = mcmc_backward_sampling(
-        #     sub_key,
-        #     num_outer_particles,
-        #     outer_states,
-        #     inner_states,
-        #     env.trans_model,
-        #     policy,
-        #     train_state.params,
-        #     env.reward_fn,
-        #     tempering,
-        #     slew_rate_penalty
-        # )
+        # traced_outer, traced_inner, _ = \
+        #     backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+        # backward sample outer states
+        key, sub_key = random.split(key)
+        traced_outer, traced_inner = mcmc_backward_sampling(
+            sub_key,
+            num_outer_particles,
+            outer_states,
+            inner_states,
+            env.trans_model,
+            policy,
+            train_state.params,
+            env.reward_fn,
+            tempering,
+            slew_rate_penalty
+        )
 
         # sample a new reference
         key, sub_key = random.split(key)
@@ -237,7 +226,7 @@ eval_state = deepcopy(train_state)
 eval_state.params["log_std"] = -20.0 * jnp.ones((env.action_dim,))
 
 key, sub_key = random.split(key)
-outer_states, inner_states, inner_infos, _ = \
+outer_states, inner_states, inner_info, _ = \
     smc(
         sub_key,
         env.num_time_steps,
@@ -255,8 +244,8 @@ outer_states, inner_states, inner_infos, _ = \
 
 observations = outer_states.particles.observations
 actions = outer_states.particles.actions
-state_means = inner_infos.mean
-state_covars = inner_infos.covar
+state_means = inner_info.mean
+state_covars = inner_info.covar
 
 fig, axs = plt.subplots(4, 1, figsize=(10, 8))
 for n in range(num_outer_particles):
