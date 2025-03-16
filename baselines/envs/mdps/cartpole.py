@@ -10,8 +10,8 @@ from distrax import (
     MultivariateNormalDiag
 )
 
-from ppomdp.core import TransitionModel
-from baselines.envs.core import PRNGKey, MDPEnv
+from ppomdp.core import PRNGKey, TransitionModel
+from baselines.envs.core import MDPEnv
 
 
 state_dim = 4

@@ -1,11 +1,15 @@
-from typing import Dict, NamedTuple, Protocol, Union
+from typing import Any, Dict, NamedTuple, Protocol, Union
 
-from chex import PRNGKey
+import chex
 from jax import Array
+from flax.core import FrozenDict
 
 LSTMCarry = tuple[Array, Array]
 GRUCarry = Array
 Carry = Union[LSTMCarry, GRUCarry]
+
+PRNGKey = chex.PRNGKey
+Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
 class SampleTransition(Protocol):

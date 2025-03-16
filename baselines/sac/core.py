@@ -1,12 +1,6 @@
-from typing import Any, Dict, Union, NamedTuple
+from typing import Dict, NamedTuple
 
-import chex
-
-from flax.core import FrozenDict
 from flax.training.train_state import TrainState
-
-PRNGKey = chex.PRNGKey
-Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
 class JointTrainState(NamedTuple):

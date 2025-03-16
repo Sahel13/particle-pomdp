@@ -9,10 +9,11 @@ from flax.training.train_state import TrainState
 from brax.training.replay_buffers import UniformSamplingQueue, ReplayBufferState
 from distrax import Block
 
+from ppomdp.core import PRNGKey
 from ppomdp.bijector import Tanh
 
 from baselines.envs.core import MDPEnv, MDPState
-from baselines.sac.core import PRNGKey, JointTrainState
+from baselines.sac.core import JointTrainState
 from baselines.sac.arch import PolicyNetwork, CriticNetwork
 from baselines.sac.utils import sample_random_actions, policy_sample_and_log_prob
 
@@ -29,26 +30,26 @@ def mdp_init(
 ) -> MDPState:
 
     key, state_key, action_key = random.split(rng_key, 3)
-    state = env_obj.prior_dist.sample(seed=state_key, sample_shape=(env_obj.num_envs,))
-    time = jnp.zeros(env_obj.num_envs)
+    states = env_obj.prior_dist.sample(seed=state_key, sample_shape=(env_obj.num_envs,))
+    time_steps = jnp.zeros(env_obj.num_envs)
 
-    action = sample_random_actions(action_key, env_obj) if random_actions \
-        else policy_state.apply_fn(action_key, params=policy_state.params, state=state, time=time)[0]
+    actions = sample_random_actions(action_key, env_obj) if random_actions \
+        else policy_state.apply_fn(action_key, params=policy_state.params, state=states, time_step=time_steps)[0]
 
-    reward = jax.vmap(env_obj.reward_fn)(state, action, time)
+    rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_steps)
 
     keys = random.split(key, env_obj.num_envs)
-    next_state = jax.vmap(env_obj.trans_model.sample)(keys, state, action)
-    done = jnp.zeros(env_obj.num_envs)
+    next_states = jax.vmap(env_obj.trans_model.sample)(keys, states, actions)
+    done_flags = jnp.zeros(env_obj.num_envs)
 
     return MDPState(
-        state=state,
-        action=action,
-        next_state=next_state,
-        reward=reward,
-        total_reward=reward.copy(),
-        time=time,
-        done=done,
+        states=states,
+        actions=actions,
+        next_states=next_states,
+        rewards=rewards,
+        total_rewards=rewards.copy(),
+        time_steps=time_steps,
+        done_flags=done_flags,
     )
 
 
@@ -63,33 +64,33 @@ def mdp_step(
 
     def _true_fn(_mdp_state):
         key, action_key = random.split(rng_key, 2)
-        state = _mdp_state.next_state
-        time = (_mdp_state.time + 1)
+        states = _mdp_state.next_states
+        time_steps = _mdp_state.time_steps + 1.
 
-        action = sample_random_actions(action_key, env_obj) if random_actions \
-            else policy_state.apply_fn(action_key, params=policy_state.params, state=state, time=time)[0]
+        actions = sample_random_actions(action_key, env_obj) if random_actions \
+            else policy_state.apply_fn(action_key, params=policy_state.params, state=states, time_step=time_steps)[0]
 
         state_keys = random.split(key, env_obj.num_envs)
-        reward = jax.vmap(env_obj.reward_fn)(state, action, time)
-        total_reward = _mdp_state.total_reward + reward
-        next_state = jax.vmap(env_obj.trans_model.sample)(state_keys, state, action)
-        done = jnp.where(time == env_obj.num_time_steps, 1., 0.)
+        rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_steps)
+        total_rewards = _mdp_state.total_rewards + rewards
+        next_states = jax.vmap(env_obj.trans_model.sample)(state_keys, states, actions)
+        done_flags = jnp.where(time_steps == env_obj.num_time_steps, 1., 0.)
 
         return MDPState(
-            state=state,
-            action=action,
-            next_state=next_state,
-            reward=reward,
-            total_reward=total_reward,
-            time=time,
-            done=done
+            states=states,
+            actions=actions,
+            next_states=next_states,
+            rewards=rewards,
+            total_rewards=total_rewards,
+            time_steps=time_steps,
+            done_flags=done_flags
         )
 
     def _false_fn(_outer_state):
         return mdp_init(rng_key, env_obj, policy_state, random_actions)
 
     return jax.lax.cond(
-        jnp.all(mdp_state.done == 0.), _true_fn, _false_fn, mdp_state
+        jnp.all(mdp_state.done_flags == 0.), _true_fn, _false_fn, mdp_state
     )
 
 
@@ -116,11 +117,11 @@ def create_train_state(
 
     dummy_states = jnp.empty((1, env_obj.state_dim))
     dummy_actions = jnp.empty((1, env_obj.action_dim))
-    dummy_time = jnp.empty((1,))
+    dummy_time_steps = jnp.empty((1,))
 
     critic_key, policy_key = random.split(rng_key)
-    policy_params = policy_network.init(policy_key, dummy_states, dummy_time)["params"]
-    critic_params = critic_networks.init(critic_key, dummy_states, dummy_actions, dummy_time)
+    policy_params = policy_network.init(policy_key, dummy_states, dummy_time_steps)["params"]
+    critic_params = critic_networks.init(critic_key, dummy_states, dummy_actions, dummy_time_steps)
     critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
 
     policy_bijector = Block(Tanh(), ndims=1)
@@ -153,32 +154,32 @@ def critic_train_step(
     alpha: float,
     gamma: float,
 ) -> tuple[JointTrainState, Array]:
-    next_action, next_log_prob, _ = \
+    next_actions, next_log_probs, _ = \
         train_state.policy_state.apply_fn(
             rng_key=rng_key,
             params=train_state.policy_state.params,
-            state=mdp_state.next_state,
-            time=mdp_state.time,
+            state=mdp_state.next_states,
+            time_step=mdp_state.time_steps,
         )
     _next_values = \
         train_state.critic_state.apply_fn(
             train_state.critic_target_params,
-            mdp_state.next_state,
-            next_action,
-            mdp_state.time + 1,
+            mdp_state.next_states,
+            next_actions,
+            mdp_state.time_steps + 1.
         )
-    next_value = jnp.min(_next_values, axis=-1) - alpha * next_log_prob
-    target_value = mdp_state.reward + (1 - mdp_state.done) * gamma * next_value
+    next_values = jnp.min(_next_values, axis=-1) - alpha * next_log_probs
+    target_values = mdp_state.rewards + (1 - mdp_state.done_flags) * gamma * next_values
 
     def critic_loss(params):
-        _value = \
+        _values = \
             train_state.critic_state.apply_fn(
                 params,
-                mdp_state.state,
-                mdp_state.action,
-                mdp_state.time
+                mdp_state.states,
+                mdp_state.actions,
+                mdp_state.time_steps
             )
-        _error = _value - jnp.expand_dims(target_value, -1)
+        _error = _values - jnp.expand_dims(target_values, -1)
         return 0.5 * jnp.mean(jnp.square(_error))
 
     grad_fn = jax.value_and_grad(critic_loss)
@@ -195,22 +196,22 @@ def policy_train_step(
     alpha: float
 ) -> tuple[JointTrainState, Array]:
     def policy_loss(params):
-        action, log_prob, _ = \
+        actions, log_probs, _ = \
             train_state.policy_state.apply_fn(
                 rng_key=rng_key,
                 params=params,
-                state=mdp_state.state,
-                time=mdp_state.time
+                state=mdp_state.states,
+                time_step=mdp_state.time_steps
             )
         values = \
             train_state.critic_state.apply_fn(
                 train_state.critic_state.params,
-                mdp_state.state,
-                action,
-                mdp_state.time,
+                mdp_state.states,
+                actions,
+                mdp_state.time_steps,
             )
-        min_value = jnp.min(values, axis=-1)
-        return jnp.mean(alpha * log_prob - min_value)
+        min_values = jnp.min(values, axis=-1)
+        return jnp.mean(alpha * log_probs - min_values)
 
     grad_fn = jax.value_and_grad(policy_loss)
     loss, grads = grad_fn(train_state.policy_state.params)
@@ -258,14 +259,19 @@ def step_and_train(
     gamma: float,
 ):
 
-    def body(carry, keys):
+    def body(carry, key):
         _mdp_state, _buffer_state, _train_state = carry
-        _step_key, _train_key = keys
+        _step_key, _train_key = random.split(key)
 
-        _mdp_state = mdp_step(_step_key, env_obj, _mdp_state, _train_state.policy_state)
+        _mdp_state = mdp_step(
+            rng_key=_step_key,
+            env_obj=env_obj,
+            mdp_state=_mdp_state,
+            policy_state=_train_state.policy_state
+        )
         _buffer_state = buffer_obj.insert(_buffer_state, _mdp_state)
-
         _buffer_state, _mdp_state_sample = buffer_obj.sample(_buffer_state)
+
         _train_state, _, _ = \
             gradient_step(
                 rng_key=_train_key,
@@ -274,10 +280,9 @@ def step_and_train(
                 alpha=alpha,
                 gamma=gamma
             )
-
         return (_mdp_state, _buffer_state, _train_state), None
 
-    keys = random.split(rng_key, num_steps * 2).reshape((num_steps, 2))
+    keys = random.split(rng_key, num_steps)
     (mdp_state, buffer_state, train_state), _ = \
         jax.lax.scan(
             body, (mdp_state, buffer_state, train_state), keys

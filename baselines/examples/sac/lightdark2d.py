@@ -42,14 +42,14 @@ if __name__ == "__main__":
         key, sub_key = random.split(key)
         mdp_state = mdp_step(sub_key, env_obj, mdp_state, train_state.policy_state, True)
         buffer_state = buffer_obj.insert(buffer_state, mdp_state)
-        if jnp.all(mdp_state.done == 1):
+        if jnp.all(mdp_state.done_flags == 1):
             print(
                 f"Step: {global_step:7d} | "
-                + f"Episodic reward: {mdp_state.total_reward.mean():10.2f}"
+                + f"Episodic reward: {mdp_state.total_rewards.mean():10.2f}"
             )
 
     # Ensure that training starts with a fresh episode.
-    mdp_state = mdp_state._replace(done=jnp.ones(env_obj.num_envs))
+    mdp_state = mdp_state._replace(done_flags=jnp.ones(env_obj.num_envs))
 
     # Number of steps to take using the `lax.scan` loop (and how often to print training info).
     steps_per_epoch = 10 * (env_obj.num_time_steps + 1)
@@ -74,14 +74,13 @@ if __name__ == "__main__":
 
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "
-            + f"Episodic reward: {mdp_state.total_reward.mean():10.2f} | "
+            + f"Episodic reward: {mdp_state.total_rewards.mean():10.2f} | "
             + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
         )
 
     # Evaluate the learned policy.
     key, state_key = random.split(key)
     state = env_obj.prior_dist.sample(seed=state_key)
-
 
     def body_fn(carry, rng_key):
         _action_key, _state_key = random.split(rng_key)
