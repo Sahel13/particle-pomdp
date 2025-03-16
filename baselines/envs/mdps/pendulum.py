@@ -10,13 +10,12 @@ from distrax import (
     MultivariateNormalDiag
 )
 
-from ppomdp.core import TransitionModel, ObservationModel
-from baselines.sac.core import PRNGKey, Env
+from ppomdp.core import TransitionModel
+from baselines.envs.core import PRNGKey, MDPEnv
 
 
 state_dim = 2
 action_dim = 1
-obs_dim = 2
 
 num_envs = 1
 num_time_steps = 100
@@ -69,31 +68,6 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
     return dist.log_prob(sn)
 
 
-def mean_obs(s: Array) -> Array:
-    H = jnp.array([[1., 0.], [0., 1.]])
-    return H @ s
-
-
-def stddev_obs(s: Array) -> Array:
-    return jnp.array([1e-4, 1e-2])
-
-
-def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
-    dist = MultivariateNormalDiag(
-        loc=mean_obs(s),
-        scale_diag=stddev_obs(s)
-    )
-    return dist.sample(seed=rng_key)
-
-
-def log_prob_obs(z: Array, s: Array) -> Array:
-    dist = MultivariateNormalDiag(
-        loc=mean_obs(s),
-        scale_diag=stddev_obs(s)
-    )
-    return dist.log_prob(z)
-
-
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     def wrap_angle(s: Array) -> Array:
         q, dq = s
@@ -116,7 +90,6 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
 
 prior_dist = Deterministic(jnp.zeros(state_dim))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
-obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
 
 @partial(jnp.vectorize, signature="(n)->(m)")
@@ -126,15 +99,13 @@ def feature_fn(state: Array) -> Array:
     return jnp.array([sin_q, cos_q, dq])
 
 
-PendulumEnv = Env(
+PendulumMDP = MDPEnv(
     num_envs,
     state_dim,
     action_dim,
-    obs_dim,
     num_time_steps,
     prior_dist,
     trans_model,
-    obs_model,
     reward_fn,
     feature_fn,
 )

@@ -1,43 +1,12 @@
-from typing import Any, Dict, Union, Callable, NamedTuple
+from typing import Any, Dict, Union, NamedTuple
 
 import chex
 
-from jax import Array
-from distrax import Distribution
 from flax.core import FrozenDict
 from flax.training.train_state import TrainState
 
-from ppomdp.core import (
-    ObservationModel,
-    TransitionModel,
-    RewardFn
-)
-
-Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 PRNGKey = chex.PRNGKey
-
-
-class Env(NamedTuple):
-    num_envs: int
-    state_dim: int
-    action_dim: int
-    obs_dim: int
-    num_time_steps: int
-    prior_dist: Distribution
-    trans_model: TransitionModel
-    obs_model: ObservationModel
-    reward_fn: RewardFn
-    feature_fn: Callable
-
-
-class EnvState(NamedTuple):
-    state: Array
-    action: Array
-    next_state: Array
-    reward: Array
-    total_reward: Array
-    time: Array
-    done: Array
+Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
 class JointTrainState(NamedTuple):
@@ -46,7 +15,7 @@ class JointTrainState(NamedTuple):
     critic_target_params: Dict
 
 
-class Config(NamedTuple):
+class SACConfig(NamedTuple):
     seed: int = 1
     total_timesteps: int = int(1e5)
     buffer_size: int = int(1e5)

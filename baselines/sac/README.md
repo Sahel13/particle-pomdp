@@ -11,7 +11,7 @@ implementations, although it differs from these in the following respects:
 
 Run
 ```bash
-$ python utils.py --env <env_id>
+$ python sac.py --env <env_id>
 ```
 where '<env_id>' is one of the following:
 1. pendulum

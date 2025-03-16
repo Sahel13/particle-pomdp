@@ -1,32 +1,31 @@
 import jax
 from jax import random, numpy as jnp
+from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.sac.core import Config
-from baselines.sac.utils import (
-    init_env,
-    step_env,
+from baselines.sac.core import SACConfig
+from baselines.sac.sac import (
+    mdp_init,
+    mdp_step,
     create_train_state,
     step_and_train
 )
-from brax.training.replay_buffers import UniformSamplingQueue
+from baselines.envs.mdps import PendulumMDP as env_obj
 
 import matplotlib.pyplot as plt
 
-from baselines.envs import PendulumEnv as env_obj
-
 
 if __name__ == "__main__":
-    config = Config()
+    config = SACConfig()
 
     key = random.key(config.seed)
     key, sub_key = random.split(key)
     train_state = create_train_state(sub_key, env_obj, config.policy_lr, config.critic_lr)
 
     key, sub_key = random.split(key)
-    env_state = init_env(sub_key, env_obj, train_state.policy_state, True)
+    mdp_state = mdp_init(sub_key, env_obj, train_state.policy_state, True)
 
     # Set up the replay buffer from Brax.
-    buffer_entry_prototype = jax.tree.map(lambda x: x[0], env_state)
+    buffer_entry_prototype = jax.tree.map(lambda x: x[0], mdp_state)
     buffer_obj = UniformSamplingQueue(
         config.buffer_size,
         buffer_entry_prototype,
@@ -36,21 +35,21 @@ if __name__ == "__main__":
     key, sub_key = random.split(key)
     buffer_state = buffer_obj.init(sub_key)
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
-    buffer_state = buffer_obj.insert(buffer_state, env_state)
+    buffer_state = buffer_obj.insert(buffer_state, mdp_state)
 
     # Pre-populate the buffer with random trajectories.
     for global_step in range(1, config.learning_starts):
         key, sub_key = random.split(key)
-        env_state = step_env(sub_key, env_obj, env_state, train_state.policy_state, True)
-        buffer_state = buffer_obj.insert(buffer_state, env_state)
-        if jnp.all(env_state.done == 1):
+        mdp_state = mdp_step(sub_key, env_obj, mdp_state, train_state.policy_state, True)
+        buffer_state = buffer_obj.insert(buffer_state, mdp_state)
+        if jnp.all(mdp_state.done == 1):
             print(
                 f"Step: {global_step:7d} | "
-                + f"Episodic reward: {env_state.total_reward.mean():10.2f}"
+                + f"Episodic reward: {mdp_state.total_reward.mean():10.2f}"
             )
 
     # Ensure that training starts with a fresh episode.
-    env_state = env_state._replace(done=jnp.ones(env_obj.num_envs))
+    mdp_state = mdp_state._replace(done=jnp.ones(env_obj.num_envs))
 
     # Number of steps to take using the `lax.scan` loop (and how often to print training info).
     steps_per_epoch = 10 * (env_obj.num_time_steps + 1)
@@ -60,11 +59,11 @@ if __name__ == "__main__":
         config.learning_starts, config.total_timesteps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
-        env_state, buffer_state, train_state = \
+        mdp_state, buffer_state, train_state = \
             step_and_train(
                 sub_key,
                 env_obj,
-                env_state,
+                mdp_state,
                 buffer_obj,
                 buffer_state,
                 train_state,
@@ -75,7 +74,7 @@ if __name__ == "__main__":
 
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "
-            + f"Episodic reward: {env_state.total_reward.mean():10.2f} | "
+            + f"Episodic reward: {mdp_state.total_reward.mean():10.2f} | "
             + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
         )
 
