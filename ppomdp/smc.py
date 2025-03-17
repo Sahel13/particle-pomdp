@@ -92,7 +92,7 @@ def smc_init(
         obs_model, inner_state, observations
     )
     inner_info = InnerInfo(
-        ess=effective_sample_size(inner_state.weights),
+        ess=effective_sample_size(inner_state.log_weights),
         mean=weighted_mean(inner_state.particles, inner_state.weights),
         covar=weighted_covar(inner_state.particles, inner_state.weights)
     )
@@ -194,7 +194,7 @@ def smc_step(
         obs_model, inner_state, observations
     )
     inner_info = InnerInfo(
-        ess=effective_sample_size(inner_state.weights),
+        ess=effective_sample_size(inner_state.log_weights),
         mean=weighted_mean(inner_state.particles, inner_state.weights),
         covar=weighted_covar(inner_state.particles, inner_state.weights)
     )

@@ -52,7 +52,7 @@ def resample_inner(
         return state._replace(resampling_indices=resampling_idx)
 
     resampled_state = jax.lax.cond(
-        ess(inner_state.log_weights) < 0.75 * num_particles,
+        effective_sample_size(inner_state.log_weights) < 0.75 * num_particles,
         true_fn,
         false_fn,
         inner_state,
@@ -210,7 +210,7 @@ def resample_outer(
         resampling_idx = jnp.arange(num_particles, dtype=jnp.int32)
         return state._replace(resampling_indices=resampling_idx)
 
-    predicate = effective_sample_size(outer_state.weights) < 0.75 * num_particles
+    predicate = effective_sample_size(outer_state.log_weights) < 0.75 * num_particles
     resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
     return resampled_state
 
@@ -357,13 +357,6 @@ def weighted_covar(particles: Array, weights: Array) -> Array:
     return jnp.einsum("mh,ml,m->hl", centered, centered, weights) / jnp.sum(weights)
 
 
-@partial(jnp.vectorize, signature="(m)->()")
-def effective_sample_size(weights: Array) -> Array:
-    """Compute the effective sample size."""
-    # TODO: Replace instances of this function with the more numerically stable `ess()`.
-    return 1.0 / jnp.sum(jnp.square(weights))
-
-
 def log_ess(log_weights: Array) -> Array:
     """Computes the log of the effective sample size.
 
@@ -376,7 +369,8 @@ def log_ess(log_weights: Array) -> Array:
     return 2 * jax.nn.logsumexp(log_weights) - jax.nn.logsumexp(2 * log_weights)
 
 
-def ess(log_weights: Array) -> Array:
+@partial(jnp.vectorize, signature="(m)->()")
+def effective_sample_size(log_weights: Array) -> Array:
     """Computes the effective sample size.
 
     Args:
