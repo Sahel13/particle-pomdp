@@ -420,7 +420,7 @@ def mcmc_backward_sampling_single(
     # Sample the last particle
     key, sub_key = random.split(rng_key)
     idx = jax.random.choice(
-        sub_key, jnp.arange(num_outer_particles), p=outer_states.weights[-1]
+        sub_key, jnp.arange(num_outer_particles, dtype=jnp.int32), p=outer_states.weights[-1]
     )
     last_smoothed_outer_particles = jax.tree.map(lambda x: x[-1, idx], outer_states.particles)
     last_smoothed_inner_state = jax.tree.map(lambda x: x[-1, idx], inner_states)
@@ -438,7 +438,7 @@ def mcmc_backward_sampling_single(
         ancestor_idx = outer_states.resampling_indices[t + 1, idx]
         key, sub_key = random.split(key)
         proposed_idx = jax.random.choice(
-            sub_key, jnp.arange(num_outer_particles), p=outer_states.weights[t]
+            sub_key, jnp.arange(num_outer_particles, dtype=jnp.int32), p=outer_states.weights[t]
         )
 
         ancestor_policy_logpdf = policy_logpdf(
@@ -578,7 +578,7 @@ def backward_sampling_single(
     # Sample the last particle
     key, sub_key = random.split(rng_key)
     idx = jax.random.choice(
-        sub_key, jnp.arange(num_outer_particles), p=outer_states.weights[-1]
+        sub_key, jnp.arange(num_outer_particles, dtype=jnp.int32), p=outer_states.weights[-1]
     )
     last_smoothed_outer_particles = jax.tree.map(lambda x: x[-1, idx], outer_states.particles)
     last_smoothed_inner_state = jax.tree.map(lambda x: x[-1, idx], inner_states)
@@ -627,7 +627,7 @@ def backward_sampling_single(
         reweighting_ratio = log_policy + log_transition + log_potentials
         smoothing_weights = jax.nn.softmax(reweighting_ratio + outer_states.log_weights[t])
 
-        idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles), p=smoothing_weights)
+        idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles, dtype=jnp.int32), p=smoothing_weights)
         smoothed_outer_particles = jax.tree.map(lambda x: x[t, idx], outer_states.particles)
         smoothed_inner_state = jax.tree.map(lambda x: x[t, idx], inner_states)
 

@@ -80,7 +80,7 @@ def csmc_init(
         particles=inner_particles,
         log_weights=jnp.zeros((num_outer_particles, num_inner_particles)),
         weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
-        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int_),
+        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int32),
     )
 
     # replace zeroth inner state with reference inner state
@@ -122,7 +122,7 @@ def csmc_init(
         particles=outer_particles,
         log_weights=jnp.zeros(num_outer_particles),
         weights=jnp.ones(num_outer_particles) / num_outer_particles,
-        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int_),
+        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int32),
         rewards=jnp.zeros(num_outer_particles),
     )
     return outer_state, inner_state, inner_info
