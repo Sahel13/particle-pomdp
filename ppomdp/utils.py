@@ -439,3 +439,18 @@ def stitch_arrays(a: Array, b: Array, stitch: int, max_size: int):
     """
 
     return jnp.where(jnp.arange(max_size)[:, None] <= stitch, a, b)
+
+
+def custom_split(rng_key: PRNGKey, num: int):
+    """
+    Splits a random number generator key into multiple sub-keys.
+
+    Args:
+        rng_key (PRNGKey): The random number generator key to split.
+        num (int): The number of sub-keys to generate.
+
+    Returns:
+        tuple: A tuple containing the next key and an array of sub-keys.
+    """
+    key, *sub_keys = random.split(rng_key, num)
+    return key, jnp.array(sub_keys)

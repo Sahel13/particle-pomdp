@@ -1,0 +1,71 @@
+from typing import Callable, NamedTuple
+
+from jax import Array
+from distrax import Distribution
+
+from ppomdp.core import Carry, InnerState
+from ppomdp.core import TransitionModel, ObservationModel, RewardFn
+
+
+class MDPEnv(NamedTuple):
+    num_envs: int
+    state_dim: int
+    action_dim: int
+    num_time_steps: int
+    prior_dist: Distribution
+    trans_model: TransitionModel
+    reward_fn: RewardFn
+    feature_fn: Callable
+
+
+class POMDPEnv(NamedTuple):
+    num_envs: int
+    num_particles: int
+    state_dim: int
+    action_dim: int
+    obs_dim: int
+    num_time_steps: int
+    prior_dist: Distribution
+    trans_model: TransitionModel
+    obs_model: ObservationModel
+    reward_fn: RewardFn
+    feature_fn: Callable
+
+
+class MDPState(NamedTuple):
+    states: Array
+    actions: Array
+    next_states: Array
+    rewards: Array
+    total_rewards: Array
+    time_steps: Array
+    done_flags: Array
+
+
+class POMDPState(NamedTuple):
+    states: Array
+    carry: list[Carry]
+    observations: Array
+    beliefs: InnerState
+    actions: Array
+    next_states: Array
+    next_carry: list[Carry]
+    next_observations: Array
+    next_beliefs: InnerState
+    rewards: Array
+    total_rewards: Array
+    time_steps: Array
+    done_flags: Array
+
+
+class QMDPState(NamedTuple):
+    states: Array
+    carry: list[Carry]
+    observations: Array
+    actions: Array
+    next_states: Array
+    next_carry: list[Carry]
+    next_observations: Array
+    rewards: Array
+    time_steps: Array
+    done_flags: Array

@@ -1,100 +1,48 @@
-from collections.abc import Callable
-from typing import NamedTuple
+from jax import Array, random, numpy as jnp
+from distrax import Chain, MultivariateNormalDiag, Transformed
 
-import flax.linen as nn
-import jax.numpy as jnp
-from chex import PRNGKey
-from distrax import Chain, ScalarAffine
-from flax.core import FrozenDict
-from jax import Array
-from jax.typing import ArrayLike
+from ppomdp.core import PRNGKey, Parameters
 
-from ppomdp.bijector import Tanh
-from ppomdp.policy import squash_policy
+from baselines.envs.core import MDPEnv
+from baselines.sac.arch import PolicyNetwork
 
 
-class OuterState(NamedTuple):
-    states: Array
-    actions: Array
-    next_states: Array
-    rewards: Array
-    time_steps: Array
-    dones: Array
-    episodic_rewards: Array
-
-
-class MLP(nn.Module):
-    """MLP module."""
-
-    layer_sizes: tuple[int, ...]
-
-    @nn.compact
-    def __call__(self, data: Array):
-        hidden = data
-        for i, hidden_size in enumerate(self.layer_sizes):
-            hidden = nn.Dense(hidden_size)(hidden)
-            if i != len(self.layer_sizes) - 1:
-                hidden = nn.relu(hidden)
-        return hidden
-
-
-class QNetworks(nn.Module):
-    feature_fn: Callable[[Array], Array]
-    num_time_steps: int
-    n_critics: int = 2
-    hidden_sizes: tuple[int, ...] = (256, 256)
-
-    @nn.compact
-    def __call__(self, states: Array, actions: Array, time: Array):
-        observations = self.feature_fn(states)
-        norm_time = time / self.num_time_steps
-        hidden = jnp.concatenate([observations, actions, norm_time[..., None]], -1)
-
-        res = []
-        for _ in range(self.n_critics):
-            q = MLP(
-                layer_sizes=self.hidden_sizes + (1,),
-            )(hidden)
-            res.append(q)
-        return jnp.concatenate(res, axis=-1)
-
-
-class ActorNetwork(nn.Module):
-    action_dim: int
-    feature_fn: Callable[[Array], Array]
-    num_time_steps: int
-    init_log_std: float = 2.0
-    hidden_sizes: tuple[int, ...] = (256, 256)
-
-    @nn.compact
-    def __call__(self, state: Array, time: Array) -> Array:
-        log_std = self.param(
-            "log_std", nn.initializers.constant(self.init_log_std), self.action_dim
-        )
-
-        y = self.feature_fn(state)
-        norm_time = time / self.num_time_steps
-        y = jnp.concatenate([y, norm_time[..., None]], -1)
-
-        for size in self.hidden_sizes:
-            y = nn.relu(nn.Dense(size)(y))
-
-        return nn.Dense(self.action_dim)(y)
-
-
-def sample_and_log_prob(
+def sample_random_actions(
     rng_key: PRNGKey,
-    params: FrozenDict,
-    states: Array,
-    time_steps: Array,
-    network: ActorNetwork,
-    action_scale: ArrayLike,
-    action_shift: ArrayLike,
+    env_obj: MDPEnv,
+) -> Array:
+    return random.uniform(
+        key=rng_key,
+        shape=(env_obj.num_envs, env_obj.action_dim),
+        minval=-1.0,
+        maxval=1.0
+    )
+
+
+def policy_sample(
+    rng_key: PRNGKey,
+    state: Array,
+    time_step: Array,
+    network: PolicyNetwork,
+    params: Parameters,
+    bijector: Chain
+) -> tuple[Array, Array]:
+    mean, log_std = network.apply({"params": params}, state, time_step)
+    base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+    dist = Transformed(distribution=base, bijector=bijector)
+    return dist.sample(seed=rng_key)
+
+
+def policy_sample_and_log_prob(
+    rng_key: PRNGKey,
+    state: Array,
+    time_step: Array,
+    network: PolicyNetwork,
+    params: Parameters,
+    bijector: Chain
 ) -> tuple[Array, Array, Array]:
-    """Sample actions and compute their log probabilities."""
-    mean = network.apply({"params": params}, states, time_steps)
-    bijector = Chain([ScalarAffine(action_scale, action_shift), Tanh()])
-    dist = squash_policy(mean, params["log_std"], bijector)
-    sampled_action, log_prob = dist.sample_and_log_prob(seed=rng_key)
-    mean_action = bijector.forward(mean)
-    return sampled_action, log_prob, mean_action
+    mean, log_std = network.apply({"params": params}, state, time_step)
+    base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+    dist = Transformed(distribution=base, bijector=bijector)
+    actions, log_probs = dist.sample_and_log_prob(seed=rng_key)
+    return actions, log_probs, bijector.forward(mean)
