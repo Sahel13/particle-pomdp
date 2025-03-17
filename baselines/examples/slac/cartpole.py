@@ -13,7 +13,7 @@ from baselines.slac.slac import (
     step_and_train,
 )
 from baselines.slac.utils import get_qmdp_state
-from baselines.envs.pomdps import CartPolePOMDP as env_obj
+from ppomdp.envs.pomdps import CartPolePOMDP as env_obj
 
 import matplotlib.pyplot as plt
 

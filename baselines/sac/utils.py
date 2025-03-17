@@ -3,7 +3,7 @@ from distrax import Chain, MultivariateNormalDiag, Transformed
 
 from ppomdp.core import PRNGKey, Parameters
 
-from baselines.envs.core import MDPEnv
+from ppomdp.envs.core import MDPEnv
 from baselines.sac.arch import PolicyNetwork
 
 

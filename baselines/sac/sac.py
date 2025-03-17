@@ -13,7 +13,7 @@ from distrax import Block
 from ppomdp.core import PRNGKey
 from ppomdp.bijector import Tanh
 
-from baselines.envs.core import MDPEnv, MDPState
+from ppomdp.envs.core import MDPEnv, MDPState
 from baselines.sac.arch import PolicyNetwork, CriticNetwork
 from baselines.sac.utils import sample_random_actions, policy_sample_and_log_prob
 

@@ -9,7 +9,7 @@ from baselines.sac.sac import (
     create_train_state,
     step_and_train,
 )
-from baselines.envs.mdps import CartPoleMDP as env_obj
+from ppomdp.envs.mdps import CartPoleMDP as env_obj
 
 import matplotlib.pyplot as plt
 

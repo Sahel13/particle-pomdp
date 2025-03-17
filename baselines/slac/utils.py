@@ -4,7 +4,7 @@ from distrax import Chain, MultivariateNormalDiag, Transformed
 
 from ppomdp.core import PRNGKey, Parameters, Carry, InnerState
 
-from baselines.envs.core import POMDPEnv, POMDPState, QMDPState
+from ppomdp.envs.core import POMDPEnv, POMDPState, QMDPState
 from baselines.slac.arch import PolicyNetwork
 
 
