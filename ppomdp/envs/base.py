@@ -2,6 +2,7 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 from distrax import Distribution
+from jax import Array
 
 from ppomdp.core import ObservationModel, RewardFn, TransitionModel
 
@@ -19,3 +20,9 @@ class Environment(NamedTuple):
     reward_fn: RewardFn
     prior_dist: Distribution
     feature_fn: Callable
+
+
+def euler_step(
+    deriv_fn: Callable[[Array, Array], Array], s: Array, a: Array, dt: float
+) -> Array:
+    return s + deriv_fn(s, a) * dt

@@ -49,7 +49,7 @@ def resample_inner(
         )
 
     def false_fn(state: InnerState) -> InnerState:
-        resampling_idx = jnp.arange(num_particles)
+        resampling_idx = jnp.arange(num_particles, dtype=jnp.int32)
         return state._replace(resampling_indices=resampling_idx)
 
     resampled_state = jax.lax.cond(
@@ -146,6 +146,8 @@ def expected_reward(
     rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(
         inner_state.particles, action, time_idx
     )
+    if rewards.ndim != 1:
+        raise ValueError("The reward function must return a scalar value.")
     return jnp.sum(rewards * inner_state.weights)
 
 
@@ -206,7 +208,7 @@ def resample_outer(
         )
 
     def false_fn(state: OuterState) -> OuterState:
-        resampling_idx = jnp.arange(num_particles)
+        resampling_idx = jnp.arange(num_particles, dtype=jnp.int32)
         return state._replace(resampling_indices=resampling_idx)
 
     predicate = effective_sample_size(outer_state.weights) < 0.75 * num_particles
@@ -247,7 +249,7 @@ def multinomial_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -
         Array: The indices of the resampled particles.
     """
     idx = random.choice(rng_key, num_samples, shape=(num_samples,), p=weights)
-    return idx
+    return idx.astype(jnp.int32)
 
 
 # backward sampling functions
