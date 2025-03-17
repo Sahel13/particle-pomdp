@@ -2,12 +2,12 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.sac.core import SACConfig
 from baselines.sac.sac import (
+    SACConfig,
     mdp_init,
     mdp_step,
     create_train_state,
-    step_and_train
+    step_and_train,
 )
 from baselines.envs.mdps import CartPoleMDP as env_obj
 
@@ -32,9 +32,10 @@ if __name__ == "__main__":
         sample_batch_size=config.batch_size
     )
 
+    buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
+
     key, sub_key = random.split(key)
     buffer_state = buffer_obj.init(sub_key)
-    buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
     buffer_state = buffer_obj.insert(buffer_state, mdp_state)
 
     # Pre-populate the buffer with random trajectories.
@@ -83,8 +84,8 @@ if __name__ == "__main__":
     state = env_obj.prior_dist.sample(seed=state_key)
 
     def body_fn(carry, rng_key):
-        _action_key, _state_key = random.split(rng_key)
         _state, _time_step = carry
+        _action_key, _state_key = random.split(rng_key)
         _, _, _action = train_state.policy_state.apply_fn(
             rng_key=_action_key,
             params=train_state.policy_state.params,

@@ -1,4 +1,5 @@
 from functools import partial
+from typing import NamedTuple, Dict
 
 import jax
 import optax
@@ -13,13 +14,31 @@ from ppomdp.core import PRNGKey
 from ppomdp.bijector import Tanh
 
 from baselines.envs.core import MDPEnv, MDPState
-from baselines.sac.core import JointTrainState
 from baselines.sac.arch import PolicyNetwork, CriticNetwork
 from baselines.sac.utils import sample_random_actions, policy_sample_and_log_prob
 
 from copy import deepcopy
 
 # jax.config.update("jax_disable_jit", True)
+
+
+class SACConfig(NamedTuple):
+    seed: int = 1
+    total_timesteps: int = int(1e5)
+    buffer_size: int = int(1e5)
+    batch_size: int = 256
+    learning_starts: int = int(5e3)
+    policy_lr: float = 3e-4
+    critic_lr: float = 1e-3
+    alpha: float = 0.2
+    gamma: float = 0.95
+    tau: float = 0.005
+
+
+class JointTrainState(NamedTuple):
+    policy_state: TrainState
+    critic_state: TrainState
+    critic_target_params: Dict
 
 
 def mdp_init(

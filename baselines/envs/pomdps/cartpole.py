@@ -10,14 +10,17 @@ from distrax import (
     MultivariateNormalDiag
 )
 
-from ppomdp.core import PRNGKey, TransitionModel
-from baselines.envs.core import MDPEnv
+from ppomdp.core import PRNGKey, TransitionModel, ObservationModel
+from baselines.envs.core import POMDPEnv
 
 
 state_dim = 4
 action_dim = 1
+obs_dim = 2
 
 num_envs = 1
+num_particles = 512
+
 num_time_steps = 100
 action_scale = 50.0
 action_shift = 0.0
@@ -76,6 +79,31 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
     return dist.log_prob(sn)
 
 
+def mean_obs(s: Array) -> Array:
+    H = jnp.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+    return H @ s
+
+
+def stddev_obs(s: Array) -> Array:
+    return jnp.array([1e-2, 1e-2])
+
+
+def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
+    dist = MultivariateNormalDiag(
+        loc=mean_obs(s),
+        scale_diag=stddev_obs(s)
+    )
+    return dist.sample(seed=rng_key)
+
+
+def log_prob_obs(z: Array, s: Array) -> Array:
+    dist = MultivariateNormalDiag(
+        loc=mean_obs(s),
+        scale_diag=stddev_obs(s)
+    )
+    return dist.log_prob(z)
+
+
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     def wrap_angle(s: Array) -> Array:
         x, q, xd, qd = s
@@ -98,6 +126,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
 
 prior_dist = Deterministic(jnp.zeros(state_dim))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
+obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
 
 @partial(jnp.vectorize, signature="(m)->(n)")
@@ -107,13 +136,16 @@ def feature_fn(state: Array) -> Array:
     return jnp.array([x, sin_q, cos_q, xd, qd])
 
 
-CartPoleMDP = MDPEnv(
+CartPolePOMDP = POMDPEnv(
     num_envs,
+    num_particles,
     state_dim,
     action_dim,
+    obs_dim,
     num_time_steps,
     prior_dist,
     trans_model,
+    obs_model,
     reward_fn,
     feature_fn,
 )

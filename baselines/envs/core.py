@@ -20,6 +20,7 @@ class MDPEnv(NamedTuple):
 
 class POMDPEnv(NamedTuple):
     num_envs: int
+    num_particles: int
     state_dim: int
     action_dim: int
     obs_dim: int
@@ -42,29 +43,29 @@ class MDPState(NamedTuple):
 
 
 class POMDPState(NamedTuple):
-    state: Array
+    states: Array
     carry: list[Carry]
-    observation: Array
-    belief: InnerState
-    action: Array
-    next_state: Array
+    observations: Array
+    beliefs: InnerState
+    actions: Array
+    next_states: Array
     next_carry: list[Carry]
-    next_observation: Array
-    next_belief: InnerState
-    reward: Array
-    total_reward: Array
-    time: Array
-    done: Array
+    next_observations: Array
+    next_beliefs: InnerState
+    rewards: Array
+    total_rewards: Array
+    time_steps: Array
+    done_flags: Array
 
 
 class QMDPState(NamedTuple):
-    state: Array
+    states: Array
     carry: list[Carry]
-    observation: Array
-    action: Array
-    next_state: Array
+    observations: Array
+    actions: Array
+    next_states: Array
     next_carry: list[Carry]
-    next_observation: Array
-    time: Array
-    reward: Array
-    done: Array
+    next_observations: Array
+    rewards: Array
+    time_steps: Array
+    done_flags: Array

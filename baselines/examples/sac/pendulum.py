@@ -2,8 +2,8 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.sac.core import SACConfig
 from baselines.sac.sac import (
+    SACConfig,
     mdp_init,
     mdp_step,
     create_train_state,
@@ -83,8 +83,8 @@ if __name__ == "__main__":
     state = env_obj.prior_dist.sample(seed=state_key)
 
     def body_fn(carry, rng_key):
-        _action_key, _state_key = random.split(rng_key)
         _state, _time_step = carry
+        _action_key, _state_key = random.split(rng_key)
         _, _, _action = train_state.policy_state.apply_fn(
             rng_key=_action_key,
             params=train_state.policy_state.params,
