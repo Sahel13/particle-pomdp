@@ -20,7 +20,6 @@ class MDPEnv(NamedTuple):
 
 class POMDPEnv(NamedTuple):
     num_envs: int
-    num_particles: int
     state_dim: int
     action_dim: int
     obs_dim: int

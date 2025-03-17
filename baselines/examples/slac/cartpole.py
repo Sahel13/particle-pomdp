@@ -31,6 +31,7 @@ if __name__ == "__main__":
         env_obj=env_obj,
         policy_state=train_state.policy_state,
         policy_network=policy_network,
+        num_particles=config.num_particles,
         random_actions=True,
     )
     qmdp_state = get_qmdp_state(pomdp_state)
@@ -59,6 +60,7 @@ if __name__ == "__main__":
             pomdp_state=pomdp_state,
             policy_state=train_state.policy_state,
             policy_network=policy_network,
+            num_particles=config.num_particles,
             random_actions=True,
         )
         qmdp_state = get_qmdp_state(pomdp_state)
@@ -90,6 +92,7 @@ if __name__ == "__main__":
                 train_state,
                 policy_network,
                 steps_per_epoch,
+                config.num_particles,
                 config.alpha,
                 config.gamma
             )

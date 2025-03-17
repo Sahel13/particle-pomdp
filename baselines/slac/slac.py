@@ -23,7 +23,7 @@ from ppomdp.utils import (
 )
 from ppomdp.bijector import Tanh
 
-from baselines.envs.core import POMDPEnv, POMDPState, QMDPState
+from ppomdp.envs.core import POMDPEnv, POMDPState, QMDPState
 from baselines.slac.arch import PolicyNetwork, CriticNetwork, GRUEncoder, MLPDecoder
 from baselines.slac.utils import get_qmdp_state, sample_random_actions, policy_sample_and_log_prob
 
@@ -32,6 +32,7 @@ from copy import deepcopy
 
 class SLACConfig(NamedTuple):
     seed: int = 1
+    num_particles: int = 512
     total_timesteps: int = int(1e6)
     buffer_size: int = int(1e6)
     batch_size: int = 256
@@ -53,13 +54,14 @@ def pf_init(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
     observation: Array,
+    num_particles: int
 ) -> InnerState:
     """Initialize the particle filter to track the belief state."""
-    particles = env_obj.prior_dist.sample(seed=rng_key, sample_shape=(env_obj.num_particles,))
+    particles = env_obj.prior_dist.sample(seed=rng_key, sample_shape=(num_particles,))
     log_weights = jax.vmap(env_obj.obs_model.log_prob, (None, 0))(observation, particles)
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jnp.exp(log_weights - logsum_weights)
-    dummy_resampling_indices = jnp.zeros(env_obj.num_particles, dtype=jnp.int32)
+    dummy_resampling_indices = jnp.zeros(num_particles, dtype=jnp.int32)
     return InnerState(particles, log_weights, weights, dummy_resampling_indices)
 
 
@@ -131,6 +133,7 @@ def pomdp_init(
     env_obj: POMDPEnv,
     policy_state: TrainState,
     policy_network: PolicyNetwork,
+    num_particles: int,
     random_actions: bool = False,
 ) -> POMDPState:
     """Initialize the env state."""
@@ -141,7 +144,7 @@ def pomdp_init(
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, pf_keys = custom_split(key, env_obj.num_envs + 1)
-    beliefs = jax.vmap(pf_init, (0, None, 0))(pf_keys, env_obj, observations)
+    beliefs = jax.vmap(pf_init, (0, None, 0, None))(pf_keys, env_obj, observations, num_particles)
 
     carry = policy_network.reset(env_obj.num_envs)
 
@@ -179,13 +182,14 @@ def pomdp_init(
     )
 
 
-@partial(jax.jit, static_argnums=(1, 4, 5), donate_argnames="pomdp_state")
+@partial(jax.jit, static_argnums=(1, 4, 5, 6), donate_argnames="pomdp_state")
 def pomdp_step(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
     pomdp_state: POMDPState,
     policy_state: TrainState,
     policy_network: PolicyNetwork,
+    num_particles: int,
     random_actions: bool = False,
 ) -> POMDPState:
 
@@ -229,7 +233,7 @@ def pomdp_step(
         )
 
     def _false_fn(_outer_state):
-        return pomdp_init(rng_key, env_obj, policy_state, policy_network, random_actions)
+        return pomdp_init(rng_key, env_obj, policy_state, policy_network, num_particles, random_actions)
 
     return jax.lax.cond(
         jnp.all(pomdp_state.done_flags == 0.), _true_fn, _false_fn, pomdp_state
@@ -396,7 +400,7 @@ def gradient_step(
 
 @partial(
     jax.jit,
-    static_argnames=("env_obj", "buffer_obj", "policy_network", "num_steps"),
+    static_argnames=("env_obj", "buffer_obj", "policy_network", "num_steps", "num_particles", "alpha", "gamma"),
     donate_argnames=("buffer_state", "pomdp_state", "train_state"),
 )
 def step_and_train(
@@ -408,6 +412,7 @@ def step_and_train(
     train_state: JointTrainState,
     policy_network: PolicyNetwork,
     num_steps: int,
+    num_particles: int,
     alpha: float,
     gamma: float,
 ):
@@ -421,6 +426,7 @@ def step_and_train(
             pomdp_state=_pomdp_state,
             policy_state=_train_state.policy_state,
             policy_network=policy_network,
+            num_particles=num_particles,
         )
         _qmdp_state = get_qmdp_state(_pomdp_state)
         _buffer_state = buffer_obj.insert(_buffer_state, _qmdp_state)

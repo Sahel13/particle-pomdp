@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.csmc import csmc
 from ppomdp.core import Reference
-from ppomdp.gauss import RecurrentNeuralGauss, create_recurrent_gauss_policy, train_gaussian_policy
+from ppomdp.gauss import RecurrentNeuralGauss, create_recurrent_gauss_policy, train_recurrent_gauss_policy
 from ppomdp.bijector import Tanh
 from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.utils import batch_data
