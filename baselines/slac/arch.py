@@ -141,9 +141,9 @@ class CriticNetwork(nn.Module):
     num_critics: int = 2
 
     @nn.compact
-    def __call__(self, state: Array, action: Array, time: Array):
+    def __call__(self, state: Array, action: Array, time_idx: Array):
         feat = self.feature_fn(state)
-        time = time / self.time_norm
-        x = jnp.concatenate([feat, action, time[..., None]], -1)
+        time_idx = time_idx / self.time_norm
+        x = jnp.concatenate([feat, action, time_idx[..., None]], -1)
         values = [MLPDecoder(self.layer_sizes, 1)(x) for _ in range(self.num_critics)]
         return jnp.concatenate(values, axis=-1)

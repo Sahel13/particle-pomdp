@@ -37,7 +37,7 @@ class MDPState(NamedTuple):
     next_states: Array
     rewards: Array
     total_rewards: Array
-    time_steps: Array
+    time_idxs: Array
     done_flags: Array
 
 
@@ -53,7 +53,7 @@ class POMDPState(NamedTuple):
     next_beliefs: InnerState
     rewards: Array
     total_rewards: Array
-    time_steps: Array
+    time_idxs: Array
     done_flags: Array
 
 
@@ -66,5 +66,5 @@ class QMDPState(NamedTuple):
     next_carry: list[Carry]
     next_observations: Array
     rewards: Array
-    time_steps: Array
+    time_idxs: Array
     done_flags: Array

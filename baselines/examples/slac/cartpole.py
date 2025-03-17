@@ -72,7 +72,7 @@ if __name__ == "__main__":
             )
 
     # Ensure that training starts with a fresh episode.
-    pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs))
+    pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
 
     # Number of steps to take using the `lax.scan` loop (and how often to print training info).
     steps_per_epoch = 10 * (env_obj.num_time_steps + 1)

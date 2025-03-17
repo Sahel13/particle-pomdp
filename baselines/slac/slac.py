@@ -161,9 +161,9 @@ def pomdp_init(
             random_actions=random_actions,
         )
 
-    time_steps = jnp.zeros(env_obj.num_envs)
-    rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_steps)
-    done_flags = jnp.zeros(env_obj.num_envs)
+    time_idxs = jnp.zeros(env_obj.num_envs, dtype=jnp.int32)
+    rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
+    done_flags = jnp.zeros(env_obj.num_envs, dtype=jnp.int32)
 
     return POMDPState(
         states=states,
@@ -177,7 +177,7 @@ def pomdp_init(
         next_beliefs=next_beliefs,
         rewards=rewards,
         total_rewards=rewards.copy(),
-        time_steps=time_steps,
+        time_idxs=time_idxs,
         done_flags=done_flags,
     )
 
@@ -194,7 +194,7 @@ def pomdp_step(
 ) -> POMDPState:
 
     def _true_fn(_pomdp_state):
-        time_steps = _pomdp_state.time_steps + 1.
+        time_idxs = _pomdp_state.time_idxs + 1
         states = _pomdp_state.next_states
         carry = _pomdp_state.next_carry
         observations = _pomdp_state.next_observations
@@ -212,9 +212,9 @@ def pomdp_step(
                 random_actions=random_actions,
             )
 
-        rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_steps)
+        rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
         total_rewards = _pomdp_state.total_rewards + rewards
-        done_flags = jnp.where(time_steps == env_obj.num_time_steps, 1., 0.)
+        done_flags = jnp.where(time_idxs == env_obj.num_time_steps, 1, 0).astype(jnp.int32)
 
         return POMDPState(
             states=states,
@@ -228,7 +228,7 @@ def pomdp_step(
             next_beliefs=next_beliefs,
             rewards=rewards,
             total_rewards=total_rewards,
-            time_steps=time_steps,
+            time_idxs=time_idxs,
             done_flags=done_flags,
         )
 
@@ -236,7 +236,7 @@ def pomdp_step(
         return pomdp_init(rng_key, env_obj, policy_state, policy_network, num_particles, random_actions)
 
     return jax.lax.cond(
-        jnp.all(pomdp_state.done_flags == 0.), _true_fn, _false_fn, pomdp_state
+        jnp.all(pomdp_state.done_flags == 0), _true_fn, _false_fn, pomdp_state
     )
 
 
@@ -272,7 +272,7 @@ def create_train_state(
     dummy_actions = jnp.empty((1, env_obj.action_dim))
     dummy_carry = policy_network.reset(env_obj.num_envs)
     dummy_observations = jnp.empty((1, env_obj.obs_dim))
-    dummy_time = jnp.empty((1,))
+    dummy_time = jnp.empty((1,), dtype=jnp.int32)
 
     critic_key, policy_key = random.split(rng_key)
     policy_params = policy_network.init(policy_key, dummy_carry, dummy_observations)["params"]
@@ -318,7 +318,7 @@ def critic_train_step(
             train_state.critic_target_params,
             qmdp_state.next_states,
             next_actions,
-            qmdp_state.time_steps + 1.
+            qmdp_state.time_idxs + 1
         )
     next_values = jnp.min(_next_values, axis=-1) - alpha * next_log_probs
     target_values = qmdp_state.rewards + (1 - qmdp_state.done_flags) * gamma * next_values
@@ -329,7 +329,7 @@ def critic_train_step(
                 params,
                 qmdp_state.states,
                 qmdp_state.actions,
-                qmdp_state.time_steps
+                qmdp_state.time_idxs
             )
         _error = _values - jnp.expand_dims(target_values, -1)
         return 0.5 * jnp.mean(jnp.square(_error))
@@ -360,7 +360,7 @@ def policy_train_step(
                 train_state.critic_state.params,
                 qmdp_state.states,
                 actions,
-                qmdp_state.time_steps
+                qmdp_state.time_idxs
             )
         min_values = jnp.min(values, axis=-1)
         return jnp.mean(alpha * log_probs - min_values)

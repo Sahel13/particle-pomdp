@@ -3,7 +3,6 @@ from jax import Array, random, numpy as jnp
 from distrax import Chain, MultivariateNormalDiag, Transformed
 
 from ppomdp.core import PRNGKey, Parameters, Carry, InnerState
-
 from ppomdp.envs.core import POMDPEnv, POMDPState, QMDPState
 from baselines.slac.arch import PolicyNetwork
 
@@ -39,7 +38,7 @@ def get_qmdp_state(pomdp_state: POMDPState) -> QMDPState:
         next_carry=pomdp_state.next_carry,
         next_observations=pomdp_state.next_observations,
         rewards=pomdp_state.rewards,
-        time_steps=pomdp_state.time_steps,
+        time_idxs=pomdp_state.time_idxs,
         done_flags=pomdp_state.done_flags,
     )
 

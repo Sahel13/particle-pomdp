@@ -50,7 +50,7 @@ if __name__ == "__main__":
             )
 
     # Ensure that training starts with a fresh episode.
-    mdp_state = mdp_state._replace(done_flags=jnp.ones(env_obj.num_envs))
+    mdp_state = mdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
 
     # Number of steps to take using the `lax.scan` loop (and how often to print training info).
     steps_per_epoch = 10 * (env_obj.num_time_steps + 1)
@@ -84,16 +84,16 @@ if __name__ == "__main__":
     state = env_obj.prior_dist.sample(seed=state_key)
 
     def body_fn(carry, rng_key):
-        _state, _time_step = carry
+        _state, _time_idx = carry
         _action_key, _state_key = random.split(rng_key)
         _, _, _action = train_state.policy_state.apply_fn(
             rng_key=_action_key,
             params=train_state.policy_state.params,
             state=_state,
-            time_step=_time_step
+            time_idx=_time_idx
         )
         _state = env_obj.trans_model.sample(_state_key, _state, _action)
-        return (_state, _time_step + 1.), (_state, _action)
+        return (_state, _time_idx + 1.), (_state, _action)
 
     _, (states, actions) = jax.lax.scan(
         body_fn, (state, 0), random.split(key, env_obj.num_time_steps)
