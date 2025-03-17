@@ -24,7 +24,7 @@ import time
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from environment import lightdark1d as env
+from ppomdp.envs.pomdps import lightdark1d as env
 
 jax.config.update("jax_enable_x64", True)
 

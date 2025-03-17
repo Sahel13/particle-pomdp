@@ -1,6 +1,5 @@
 import jax
 from jax import Array, numpy as jnp
-
 from distrax import (
     Block,
     ScalarAffine,
@@ -11,16 +10,18 @@ from ppomdp.core import (
     PRNGKey,
     TransitionModel,
     ObservationModel,
-    Environment
 )
+from ppomdp.envs.core import POMDPEnv
+from ppomdp.envs.mdps.lightdark2d import feature_fn
 
 jax.config.update("jax_enable_x64", True)
 
 state_dim = 1
 action_dim = 1
 obs_dim = 1
-num_time_steps = 25
 
+num_envs = 1
+num_time_steps = 25
 action_shift = 0.0
 action_scale = 3.0
 action_trans = Block(
@@ -80,7 +81,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return dist.log_prob(z)
 
 
-def reward_fn(s: Array, a: Array, t: int) -> Array:
+def reward_fn(s: Array, a: Array, t: Array) -> Array:
     state_cost = jax.lax.cond(
         t < num_time_steps - 1,
         lambda _: 0.,
@@ -97,14 +98,17 @@ prior_dist = MultivariateNormalDiag(
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
+feature_fn = lambda x: x
 
-lightdark1d = Environment(
+lightdark1d = POMDPEnv(
+    num_envs=num_envs,
     state_dim=state_dim,
     action_dim=action_dim,
     obs_dim=obs_dim,
+    num_time_steps=num_time_steps,
     prior_dist=prior_dist,
     trans_model=trans_model,
     obs_model=obs_model,
     reward_fn=reward_fn,
-    num_time_steps=num_time_steps,
+    feature_fn=feature_fn
 )

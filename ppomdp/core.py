@@ -5,7 +5,6 @@ from jax import Array
 
 from flax.core import FrozenDict
 from flax.training.train_state import TrainState
-from distrax import Distribution
 
 LSTMCarry = tuple[Array, Array]
 GRUCarry = Array
@@ -213,14 +212,3 @@ class RecurrentPolicy(NamedTuple):
 class RewardFn(Protocol):
     def __call__(self, s: Array, a: Array, t: Array) -> Array:
         r"""The  reward function $r(s_t, a_t)$."""
-
-
-class Environment(NamedTuple):
-    state_dim: int
-    action_dim: int
-    obs_dim: int
-    prior_dist: Distribution
-    trans_model: TransitionModel
-    obs_model: ObservationModel
-    reward_fn: RewardFn
-    num_time_steps: int
