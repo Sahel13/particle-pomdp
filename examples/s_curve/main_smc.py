@@ -139,8 +139,8 @@ observations = []
 key = random.PRNGKey(21)
 key, state_key, obs_key = random.split(key, 3)
 
-state = env.prior_dist.sample(seed=state_key)
-obs = env.obs_model.sample(obs_key, state)
+state = prior_dist.sample(seed=state_key)
+obs = obs_model.sample(obs_key, state)
 carry = policy.reset(1)
 
 states.append(state)

@@ -1,12 +1,18 @@
 import jax
-from jax import Array
-import jax.numpy as jnp
+from jax import Array, numpy as jnp
 
-from chex import PRNGKey
-import distrax
-from distrax import MultivariateNormalDiag
+from distrax import (
+    Block,
+    ScalarAffine,
+    MultivariateNormalDiag
+)
 
-from ppomdp.core import TransitionModel, ObservationModel
+from ppomdp.core import (
+    PRNGKey,
+    TransitionModel,
+    ObservationModel,
+    Environment
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -15,12 +21,21 @@ action_dim = 1
 obs_dim = 1
 num_time_steps = 25
 
+action_shift = 0.0
+action_scale = 3.0
+action_trans = Block(
+    ScalarAffine(scale=action_scale, shift=action_shift),
+    ndims=1
+)
+
 
 def mean_trans(s: Array, a: Array) -> Array:
+    a = action_trans.forward(a)
     return s + 0.1 * a
 
 
 def stddev_trans(s: Array, a: Array) -> Array:
+    a = action_trans.forward(a)
     return jnp.array([0.01])
 
 
@@ -69,16 +84,27 @@ def reward_fn(s: Array, a: Array, t: int) -> Array:
     state_cost = jax.lax.cond(
         t < num_time_steps - 1,
         lambda _: 0.,
-        lambda _: 50. * jnp.dot(s, s),
+        lambda _: jnp.dot(s, s),
         operand=None
     )
-    action_cost = 1e-3 * jnp.dot(a, a)
+    action_cost = 1e-4 * jnp.dot(a, a)
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = distrax.MultivariateNormalDiag(
+prior_dist = MultivariateNormalDiag(
     loc=2.0 * jnp.ones((state_dim,)),
-    scale_diag=1.25 * jnp.ones((state_dim,))
+    scale_diag=1.0 * jnp.ones((state_dim,))
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
+
+lightdark1d = Environment(
+    state_dim=state_dim,
+    action_dim=action_dim,
+    obs_dim=obs_dim,
+    prior_dist=prior_dist,
+    trans_model=trans_model,
+    obs_model=obs_model,
+    reward_fn=reward_fn,
+    num_time_steps=num_time_steps,
+)

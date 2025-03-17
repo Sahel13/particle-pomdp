@@ -9,7 +9,7 @@ import jax.numpy as jnp
 
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.bijector import Tanh
-from ppomdp.policy import LSTM, get_recurrent_policy, train_step
+from ppomdp.policy import LSTM, create_policy, train_policy
 from ppomdp.utils import batch_data, weighted_mean
 
 from distrax import Chain, ScalarAffine
@@ -37,7 +37,7 @@ network = LSTM(
 shift = jnp.zeros((action_dim,))
 scale = jnp.array([2.5])
 bijector = Chain([ScalarAffine(shift, scale), Tanh()])
-policy = get_recurrent_policy(network, bijector)
+policy = create_policy(network, bijector)
 
 rng_key = random.PRNGKey(10)
 
@@ -136,7 +136,7 @@ for i in range(1, num_epochs + 1):
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
         outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
-        train_state, batch_loss = train_step(policy, train_state, outer_batch)
+        train_state, batch_loss = train_policy(policy, train_state, outer_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)

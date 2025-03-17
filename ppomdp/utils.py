@@ -3,11 +3,10 @@ from functools import partial
 from typing import Callable, Dict
 
 import jax
-from chex import PRNGKey
-from jax import Array, random
-from jax import numpy as jnp
+from jax import Array, random, numpy as jnp
 
 from ppomdp.core import (
+    PRNGKey,
     Carry,
     InnerState,
     ObservationModel,
@@ -291,12 +290,12 @@ def policy_logpdf(
     def body(k, val):
         carry, log_prob = val
         next_carry, log_prob_inc = policy.carry_and_log_prob(
-            future_actions[k], future_observations[k - 1], carry, params
+            future_actions[k], carry, future_observations[k - 1], params
         )
         return next_carry, log_prob + log_prob_inc
 
     carry, log_prob = policy.carry_and_log_prob(
-        future_actions[time_idx], init_observation, init_carry, params
+        future_actions[time_idx], init_carry, init_observation, params
     )
 
     _, log_prob = jax.lax.fori_loop(time_idx + 1, num_steps, body, (carry, log_prob))
