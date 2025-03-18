@@ -34,7 +34,7 @@ num_outer_particles = 512
 num_inner_particles = 256
 
 slew_rate_penalty = 5e-4
-tempering = 0.5
+tempering = 0.15
 num_moves = 3
 
 learning_rate = 3e-4
