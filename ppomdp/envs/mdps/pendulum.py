@@ -99,7 +99,7 @@ def feature_fn(state: Array) -> Array:
     return jnp.array([sin_q, cos_q, dq])
 
 
-PendulumMDP = MDPEnv(
+PendulumEnv = MDPEnv(
     num_envs,
     state_dim,
     action_dim,

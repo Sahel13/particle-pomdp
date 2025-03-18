@@ -134,7 +134,7 @@ def feature_fn(state: Array) -> Array:
     return jnp.array([x, sin_q, cos_q, xd, qd])
 
 
-CartPolePOMDP = POMDPEnv(
+CartPoleEnv = POMDPEnv(
     num_envs,
     state_dim,
     action_dim,

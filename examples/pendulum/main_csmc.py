@@ -1,28 +1,30 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
-import time
-
 import jax
-from jax import random
-import jax.numpy as jnp
-
-from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
-from ppomdp.csmc import csmc
-from ppomdp.core import Reference
-from ppomdp.gauss import RecurrentNeuralGauss, create_recurrent_gauss_policy, train_recurrent_gauss_policy
-from ppomdp.bijector import Tanh
-from ppomdp.arch import GRUEncoder, MLPDecoder
-from ppomdp.utils import batch_data
-
-from distrax import Chain, ScalarAffine
+from jax import random, numpy as jnp
 from flax.linen.initializers import constant
 
+from distrax import Block, MultivariateNormalDiag
+
+from ppomdp.core import Reference
+from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
+from ppomdp.csmc import csmc
+
+from ppomdp.bijector import Tanh
+from ppomdp.utils import batch_data
+from ppomdp.arch import GRUEncoder, MLPDecoder
+from ppomdp.gauss import (
+    RecurrentNeuralGauss,
+    create_recurrent_gauss_policy,
+    train_recurrent_gauss_policy
+)
+
+import time
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from environment import prior_dist, trans_model, obs_model, reward_fn
-from environment import action_dim, obs_dim, num_time_steps
+from ppomdp.envs.pomdps import PendulumEnv as env
 
 jax.config.update("jax_enable_x64", True)
 
@@ -31,13 +33,14 @@ rng_key = random.PRNGKey(10)
 
 num_outer_particles = 256
 num_inner_particles = 256
-tempering = 0.05
-slew_rate_penalty = 0.01
+
+slew_rate_penalty = 0.001
+tempering = 0.5
+num_moves = 1
 
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 150
-num_moves = 1
+num_epochs = 500
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
@@ -47,7 +50,7 @@ encoder = GRUEncoder(
 
 decoder = MLPDecoder(
     decoder_size=[256, 256],
-    output_dim=action_dim,
+    output_dim=env.action_dim,
 )
 
 network = RecurrentNeuralGauss(
@@ -56,56 +59,55 @@ network = RecurrentNeuralGauss(
     init_log_std=constant(jnp.log(1.0)),
 )
 
-shift = jnp.zeros((action_dim,))
-scale = jnp.array([2.5])
-bijector = Chain([ScalarAffine(shift, scale), Tanh()])
+bijector = Block(Tanh(), ndims=1)
 
 key, sub_key = random.split(rng_key, 2)
 policy = create_recurrent_gauss_policy(network, bijector)
-train_state = policy.init(sub_key, obs_dim, num_outer_particles, learning_rate)
-
-jitted_smc = jax.jit(smc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
-jitted_csmc = jax.jit(csmc, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
-jitted_backward_tracing = jax.jit(backward_tracing, static_argnums=(5,))
-jitted_mcmc_backward_sampling = jax.jit(mcmc_backward_sampling, static_argnums=(1, 4, 5, 7, 8, 9))
+train_state = policy.init(
+    rng_key=sub_key,
+    input_dim=env.obs_dim,
+    output_dim=env.action_dim,
+    batch_dim=num_outer_particles,
+    learning_rate=learning_rate
+)
 
 # run init nested smc
 key, sub_key = random.split(key)
-outer_states, inner_states, inner_infos, _ = jitted_smc(
-    sub_key,
-    num_time_steps,
-    num_outer_particles,
-    num_inner_particles,
-    prior_dist,
-    trans_model,
-    obs_model,
-    policy,
-    train_state.params,
-    reward_fn,
-    tempering,
-    slew_rate_penalty
-)
+outer_states, inner_states, inner_infos, _ = \
+    smc(
+        sub_key,
+        env.num_time_steps,
+        num_outer_particles,
+        num_inner_particles,
+        env.prior_dist,
+        env.trans_model,
+        env.obs_model,
+        policy,
+        train_state.params,
+        env.reward_fn,
+        tempering,
+        slew_rate_penalty
+    )
 
-# # trace ancestors of outer states
-# key, sub_key = random.split(key)
-# traced_outer, traced_inner, _ = jitted_backward_tracing(
-#     sub_key, outer_states, inner_states, inner_infos
-# )
-
-# backward sample outer states
+# trace ancestors of outer states
 key, sub_key = random.split(key)
-traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-    sub_key,
-    num_outer_particles,
-    outer_states,
-    inner_states,
-    trans_model,
-    policy,
-    train_state.params,
-    reward_fn,
-    tempering,
-    slew_rate_penalty
-)
+traced_outer, traced_inner, _ = \
+    backward_tracing(sub_key, outer_states, inner_states, inner_infos)
+
+# # backward sample outer states
+# key, sub_key = random.split(key)
+# traced_outer, traced_inner = mcmc_backward_sampling(
+#     sub_key,
+#     num_outer_particles,
+#     outer_states,
+#     inner_states,
+#     env.trans_model,
+#     policy,
+#     train_state.params,
+#     env.reward_fn,
+#     tempering,
+#     slew_rate_penalty
+# )
 
 # sample a new reference
 key, sub_key = random.split(key)
@@ -119,22 +121,19 @@ for i in range(1, num_epochs + 1):
     start_time = time.time()
 
     # evaluate current policy
-    eval_state = deepcopy(train_state)
-    eval_state.params["log_std"] = -20.0 * jnp.ones((action_dim,))
-
     key, sub_key = random.split(key)
     outer_states, _, _, _ = \
-        jitted_smc(
+        smc(
             sub_key,
-            num_time_steps,
+            env.num_time_steps,
             int(4 * num_outer_particles),
             int(4 * num_inner_particles),
-            prior_dist,
-            trans_model,
-            obs_model,
+            env.prior_dist,
+            env.trans_model,
+            env.obs_model,
             policy,
-            eval_state.params,
-            reward_fn,
+            train_state.params,
+            env.reward_fn,
             tempering=0.0,
             slew_rate_penalty=0.0,
         )
@@ -144,41 +143,41 @@ for i in range(1, num_epochs + 1):
         # run nested conditional smc
         key, sub_key = random.split(key)
         outer_states, inner_states, inner_info, log_marginal = \
-            jitted_csmc(
+            csmc(
                 sub_key,
-                num_time_steps,
+                env.num_time_steps,
                 num_outer_particles,
                 num_inner_particles,
-                prior_dist,
-                trans_model,
-                obs_model,
+                env.prior_dist,
+                env.trans_model,
+                env.obs_model,
                 policy,
                 train_state.params,
-                reward_fn,
+                env.reward_fn,
                 tempering,
                 slew_rate_penalty,
                 reference
             )
 
-        # # trace ancestors of outer states
-        # key, sub_key = random.split(key)
-        # traced_outer, traced_inner, _ = \
-        #     jitted_backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-        # backward sample outer states
+        # trace ancestors of outer states
         key, sub_key = random.split(key)
-        traced_outer, traced_inner = jitted_mcmc_backward_sampling(
-            sub_key,
-            num_outer_particles,
-            outer_states,
-            inner_states,
-            trans_model,
-            policy,
-            train_state.params,
-            reward_fn,
-            tempering,
-            slew_rate_penalty
-        )
+        traced_outer, traced_inner, _ = \
+            backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+        # # backward sample outer states
+        # key, sub_key = random.split(key)
+        # traced_outer, traced_inner = mcmc_backward_sampling(
+        #     sub_key,
+        #     num_outer_particles,
+        #     outer_states,
+        #     inner_states,
+        #     env.trans_model,
+        #     policy,
+        #     train_state.params,
+        #     env.reward_fn,
+        #     tempering,
+        #     slew_rate_penalty
+        # )
 
         # sample a new reference
         key, sub_key = random.split(key)
@@ -194,7 +193,7 @@ for i in range(1, num_epochs + 1):
     batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
     for batch_idx in batch_indices:
         outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
-        train_state, batch_loss = train_gaussian_policy(policy, train_state, outer_batch)
+        train_state, batch_loss = train_recurrent_gauss_policy(policy, train_state, outer_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)
@@ -209,7 +208,7 @@ for i in range(1, num_epochs + 1):
     )
 
 eval_state = deepcopy(train_state)
-eval_state.params["log_std"] = -20.0 * jnp.ones((action_dim,))
+eval_state.params["log_std"] = -20.0 * jnp.ones((env.action_dim,))
 
 # plot realization
 states = []
@@ -220,18 +219,18 @@ key = random.PRNGKey(21)
 key, state_key, obs_key = random.split(key, 3)
 
 state = jnp.array([0.0, 0.0])
-obs = obs_model.sample(obs_key, state)
+obs = env.obs_model.sample(obs_key, state)
 carry = policy.reset(1)
 
 states.append(state)
 observations.append(obs)
 
-for _ in range(num_time_steps):
+for _ in range(env.num_time_steps):
     key, state_key, obs_key, action_key = random.split(key, 4)
 
-    carry, action = policy.sample(action_key, obs, carry, train_state.params)
-    state = trans_model.sample(state_key, state, action[0])
-    obs = obs_model.sample(obs_key, state)
+    carry, action = policy.sample(action_key, carry, obs, train_state.params)
+    state = env.trans_model.sample(state_key, state, action[0])
+    obs = env.obs_model.sample(obs_key, state)
 
     states.append(state)
     actions.append(action[0])

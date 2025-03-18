@@ -9,7 +9,7 @@ from baselines.sac.sac import (
     create_train_state,
     step_and_train,
 )
-from ppomdp.envs.mdps import LightDark2DMDP as env_obj
+from ppomdp.envs.mdps import LightDark2DEnv as env_obj
 
 import matplotlib.pyplot as plt
 

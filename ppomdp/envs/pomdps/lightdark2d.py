@@ -4,7 +4,6 @@ from jax import Array, numpy as jnp
 from distrax import (
     Block,
     ScalarAffine,
-    Deterministic,
     MultivariateNormalDiag
 )
 
@@ -14,13 +13,13 @@ from ppomdp.envs.core import POMDPEnv
 
 state_dim = 4
 action_dim = 2
-obs_dim = 4
+obs_dim = 2
 
 num_envs = 1
 num_time_steps = 30
+
 action_scale = jnp.array([100., 100.])
 action_shift = jnp.array([0., 0.])
-
 action_trans = Block(
     ScalarAffine(
         scale=action_scale,
@@ -65,11 +64,20 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 
 def mean_obs(s: Array) -> Array:
-    return s
+    H = jnp.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0]
+    ])
+    return H @ s
 
 
 def stddev_obs(s: Array) -> Array:
-    return jnp.array([1e-4, 1e-4, 1e-4, 1e-4])
+    # light region along y-axis around x=5
+    dist = (s[0] - 5.0)**2 / 2.0
+    return jnp.sqrt(
+        dist * jnp.ones(obs_dim)
+        + 1e-4 * jnp.ones(obs_dim)
+    )
 
 
 def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
@@ -88,37 +96,27 @@ def log_prob_obs(z: Array, s: Array) -> Array:
     return dist.log_prob(z)
 
 
-# def reward_fn(s: Array, a: Array, t: Array) -> Array:
-#     h = jax.lax.select(
-#         t > 0,
-#         jnp.array([1.0, 1.0, 1e-1, 1e-1]),
-#         jnp.array([0.0, 0.0, 0.0, 0.0]),
-#     )
-#     r = jnp.array([1e-2, 1e-2])
-#     state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(h), s)
-#     action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
-#     return -0.5 * state_cost - 0.5 * action_cost
-
-
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     h = jax.lax.select(
         t < num_time_steps,
-        jnp.array([0.0, 0.0, 0.0, 0.0]),
-        jnp.array([1.0, 1.0, 1e-1, 1e-1]),
+        jnp.array([0., 0., 0., 0.]),
+        jnp.array([1., 1., 0., 0.]),
     )
-    r = jnp.array([1e-2, 1e-2])
+    r = jnp.array([1e-5, 1e-5])
     state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(h), s)
     action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
     return -0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = Deterministic(jnp.array([2.0, 2.0, 0.0, 0.0]))
+prior_dist = MultivariateNormalDiag(
+    loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
+    scale_diag=jnp.array([2.5, 2.5, 1e-4, 1e-4])
+)
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 feature_fn = lambda x: x
 
-
-LightDark2DPOMDP = POMDPEnv(
+LightDark2DEnv = POMDPEnv(
     num_envs,
     state_dim,
     action_dim,

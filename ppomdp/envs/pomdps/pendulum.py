@@ -13,6 +13,8 @@ from distrax import (
 from ppomdp.core import PRNGKey, TransitionModel, ObservationModel
 from ppomdp.envs.core import POMDPEnv
 
+jax.config.update("jax_enable_x64", True)
+
 
 state_dim = 2
 action_dim = 1
@@ -70,12 +72,12 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 
 def mean_obs(s: Array) -> Array:
-    H = jnp.array([[1., 0.], [0., 1.]])
-    return H @ s
+    q, _ = s
+    return jnp.array([jnp.sin(q), jnp.cos(q)])
 
 
 def stddev_obs(s: Array) -> Array:
-    return jnp.array([1e-4, 1e-2])
+    return jnp.array([1e-2, 1e-2])
 
 
 def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
@@ -126,7 +128,7 @@ def feature_fn(state: Array) -> Array:
     return jnp.array([sin_q, cos_q, dq])
 
 
-PendulumPOMDP = POMDPEnv(
+PendulumEnv = POMDPEnv(
     num_envs,
     state_dim,
     action_dim,

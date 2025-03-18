@@ -12,7 +12,6 @@ from ppomdp.core import (
     ObservationModel,
 )
 from ppomdp.envs.core import POMDPEnv
-from ppomdp.envs.mdps.lightdark2d import feature_fn
 
 jax.config.update("jax_enable_x64", True)
 
@@ -100,7 +99,7 @@ trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 feature_fn = lambda x: x
 
-lightdark1d = POMDPEnv(
+LightDark1DEnv = POMDPEnv(
     num_envs=num_envs,
     state_dim=state_dim,
     action_dim=action_dim,

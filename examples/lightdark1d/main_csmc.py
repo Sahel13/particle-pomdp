@@ -4,7 +4,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import jax
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
-
 from distrax import Block, MultivariateNormalDiag
 
 from ppomdp.core import Reference
@@ -24,7 +23,7 @@ import time
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from ppomdp.envs.pomdps import lightdark1d as env
+from ppomdp.envs.pomdps import LightDark1DEnv as env
 
 jax.config.update("jax_enable_x64", True)
 
@@ -89,25 +88,25 @@ outer_states, inner_states, inner_info, _ = \
         slew_rate_penalty,
     )
 
-# # trace ancestors of outer states
-# key, sub_key = random.split(key)
-# traced_outer, traced_inner, _ = \
-#     backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-# backward sample outer states
+# trace ancestors of outer states
 key, sub_key = random.split(key)
-traced_outer, traced_inner = mcmc_backward_sampling(
-    sub_key,
-    num_outer_particles,
-    outer_states,
-    inner_states,
-    env.trans_model,
-    policy,
-    train_state.params,
-    env.reward_fn,
-    tempering,
-    slew_rate_penalty
-)
+traced_outer, traced_inner, _ = \
+    backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+# # backward sample outer states
+# key, sub_key = random.split(key)
+# traced_outer, traced_inner = mcmc_backward_sampling(
+#     sub_key,
+#     num_outer_particles,
+#     outer_states,
+#     inner_states,
+#     env.trans_model,
+#     policy,
+#     train_state.params,
+#     env.reward_fn,
+#     tempering,
+#     slew_rate_penalty
+# )
 
 # sample a new reference
 key, sub_key = random.split(key)
@@ -159,25 +158,25 @@ for i in range(1, num_epochs + 1):
                 reference
             )
 
-        # # trace ancestors of outer states
-        # key, sub_key = random.split(key)
-        # traced_outer, traced_inner, _ = \
-        #     backward_tracing(sub_key, outer_states, inner_states, inner_info)
-
-        # backward sample outer states
+        # trace ancestors of outer states
         key, sub_key = random.split(key)
-        traced_outer, traced_inner = mcmc_backward_sampling(
-            sub_key,
-            num_outer_particles,
-            outer_states,
-            inner_states,
-            env.trans_model,
-            policy,
-            train_state.params,
-            env.reward_fn,
-            tempering,
-            slew_rate_penalty
-        )
+        traced_outer, traced_inner, _ = \
+            backward_tracing(sub_key, outer_states, inner_states, inner_info)
+
+        # # backward sample outer states
+        # key, sub_key = random.split(key)
+        # traced_outer, traced_inner = mcmc_backward_sampling(
+        #     sub_key,
+        #     num_outer_particles,
+        #     outer_states,
+        #     inner_states,
+        #     env.trans_model,
+        #     policy,
+        #     train_state.params,
+        #     env.reward_fn,
+        #     tempering,
+        #     slew_rate_penalty
+        # )
 
         # sample a new reference
         key, sub_key = random.split(key)
