@@ -3,17 +3,7 @@ from typing import Callable
 from jax import Array, numpy as jnp
 from flax import linen as nn
 
-
-class MLPDecoder(nn.Module):
-    decoder_size: tuple[int, ...]
-    output_dim: int
-
-    @nn.compact
-    def __call__(self, x: Array) -> Array:
-        # pass result through decoder layers
-        for size in self.decoder_size:
-            x = nn.relu(nn.Dense(size)(x))
-        return nn.Dense(self.output_dim)(x)
+from ppomdp.arch import MLPDecoder
 
 
 class PolicyNetwork(nn.Module):

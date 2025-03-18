@@ -24,7 +24,8 @@ from ppomdp.utils import (
 from ppomdp.bijector import Tanh
 
 from ppomdp.envs.core import POMDPEnv, POMDPState, QMDPState
-from baselines.slac.arch import PolicyNetwork, CriticNetwork, GRUEncoder, MLPDecoder
+from ppomdp.arch import GRUEncoder, MLPDecoder
+from baselines.slac.arch import PolicyNetwork, CriticNetwork
 from baselines.slac.utils import get_qmdp_state, sample_random_actions, policy_sample_and_log_prob
 
 from copy import deepcopy

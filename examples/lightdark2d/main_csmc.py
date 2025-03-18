@@ -45,12 +45,12 @@ num_epochs = 1000
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
-    encoder_size=[256, 256],
-    recurr_size=[64, 64],
+    encoder_size=(256, 256),
+    recurr_size=(64, 64),
 )
 
 decoder = MLPDecoder(
-    decoder_size=[256, 256],
+    decoder_size=(256, 256),
     output_dim=env.action_dim,
 )
 

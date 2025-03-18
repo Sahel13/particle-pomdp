@@ -144,9 +144,9 @@ def test_nested_smc():
     lstm = LSTM(
         dim=dim_action,
         feature_fn=lambda x: x,
-        encoder_size=[256, 256],
-        recurr_size=[64, 64],
-        output_size=[256, 256],
+        encoder_size=(256, 256),
+        recurr_size=(64, 64),
+        output_size=(256, 256),
     )
     bijector = Chain([ScalarAffine(0.0, 1.0)])
 
@@ -237,9 +237,9 @@ def test_policy_log_prob(seed):
     lstm = LSTM(
         dim=action_dim,
         feature_fn=lambda x: x,
-        encoder_size=[256, 256],
-        recurr_size=[64, 64],
-        output_size=[256, 256],
+        encoder_size=(256, 256),
+        recurr_size=(64, 64),
+        output_size=(256, 256),
     )
     bijector = Chain([ScalarAffine(0.0, 1.0)])
     # bijector = Chain([ScalarAffine(0.0, 1.0), Tanh()])

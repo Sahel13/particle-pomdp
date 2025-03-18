@@ -45,19 +45,19 @@ num_transforms = 4
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
-    encoder_size=[256, 256],
-    recurr_size=[64, 64],
+    encoder_size=(256, 256),
+    recurr_size=(64, 64),
 )
 
 decoder = MLPDecoder(
-    decoder_size=[256, 256],
+    decoder_size=(256, 256),
     output_dim=env.action_dim,
 )
 
 conditioners = [
     MLPConditioner(
         event_dim=env.action_dim,
-        hidden_size=[256, 256],
+        hidden_size=(256, 256),
         num_params=3 * num_bins + 1,
     ) for _ in range(num_transforms)
 ]

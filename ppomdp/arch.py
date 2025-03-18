@@ -1,13 +1,9 @@
-from typing import Callable, Sequence
+from typing import Callable, Union
 
 from jax import Array, numpy as jnp
 from flax import linen as nn
 
-from ppomdp.core import (
-    LSTMCarry,
-    GRUCarry,
-    Carry
-)
+from ppomdp.core import Carry, LSTMCarry, GRUCarry
 
 
 class LSTMEncoder(nn.Module):
@@ -16,13 +12,13 @@ class LSTMEncoder(nn.Module):
 
     Attributes:
         feature_fn (Callable): Function to extract features from the input sequence.
-        encoder_size (Sequence[int]): Sizes of the encoding layers.
-        recurr_size (Sequence[int]): Sizes of the recurrent layers.
+        encoder_size (tuple[int, ...]): Sizes of the encoding layers.
+        recurr_size (tuple[int, ...]): Sizes of the recurrent layers.
     """
 
     feature_fn: Callable
-    encoder_size: Sequence[int]
-    recurr_size: Sequence[int]
+    encoder_size: tuple[int, ...]
+    recurr_size: tuple[int, ...]
 
     @nn.compact
     def __call__(self, carry: list[LSTMCarry], s: Array) -> tuple[list[LSTMCarry], Array]:
@@ -55,13 +51,13 @@ class GRUEncoder(nn.Module):
 
     Attributes:
         feature_fn (Callable): Function to extract features from the input sequence.
-        encoder_size (Sequence[int]): Sizes of the encoding layers.
-        recurr_size (Sequence[int]): Sizes of the recurrent layers.
+        encoder_size (tuple[int, ...]): Sizes of the encoding layers.
+        recurr_size (tuple[int, ...]): Sizes of the recurrent layers.
     """
 
     feature_fn: Callable
-    encoder_size: Sequence[int]
-    recurr_size: Sequence[int]
+    encoder_size: tuple[int, ...]
+    recurr_size: tuple[int, ...]
 
     @nn.compact
     def __call__(self, carry: list[GRUCarry], s: Array) -> tuple[list[GRUCarry], Array]:
@@ -93,15 +89,15 @@ class MLPDecoder(nn.Module):
     a standard multi layer perceptron as an action decoder
 
     Attributes:
-        decoder_size (Sequence[int]): Sizes of the decoder layers.
+        decoder_size (tuple[int, ...]): Sizes of the decoder layers.
         output_dim (int): Size of the output layer.
     """
 
-    decoder_size: Sequence[int]
+    decoder_size: tuple[int, ...]
     output_dim: int
 
     @nn.compact
-    def __call__(self, x: Array) -> tuple[list[Carry], Array]:
+    def __call__(self, x: Array) -> Array:
         # pass result through decoder layers
         for size in self.decoder_size:
             x = nn.relu(nn.Dense(size)(x))
@@ -116,12 +112,12 @@ class MLPConditioner(nn.Module):
 
     Attributes:
         event_dim (int): Dimensionality of the event space.
-        hidden_size (Sequence[int]): Sizes of the hidden layers.
+        hidden_size (tuple[int, ...]): Sizes of the hidden layers.
         num_params (int): Number of parameters per bijector.
     """
 
     event_dim: int
-    hidden_size: Sequence[int]
+    hidden_size: tuple[int, ...]
     num_params: int  # number of parameters per bijector
 
     @nn.compact
