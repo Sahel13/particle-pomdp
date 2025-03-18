@@ -13,8 +13,6 @@ from ppomdp.core import (
 )
 from ppomdp.envs.core import POMDPEnv
 
-jax.config.update("jax_enable_x64", True)
-
 
 state_dim = 1
 action_dim = 1

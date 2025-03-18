@@ -4,7 +4,9 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import jax
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
-from distrax import Block, MultivariateNormalDiag
+from distrax import Block
+
+jax.config.update("jax_enable_x64", True)
 
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 
@@ -22,8 +24,6 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 
 from ppomdp.envs.pomdps import PendulumEnv as env
-
-jax.config.update("jax_enable_x64", True)
 
 
 rng_key = random.PRNGKey(10)

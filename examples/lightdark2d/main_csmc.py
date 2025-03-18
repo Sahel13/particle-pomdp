@@ -6,6 +6,8 @@ from jax import random, numpy as jnp
 from flax.linen.initializers import constant
 from distrax import Block
 
+jax.config.update("jax_enable_x64", True)
+
 from ppomdp.core import Reference
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.csmc import csmc
@@ -26,8 +28,6 @@ import matplotlib.patches as patches
 
 from ppomdp.envs.pomdps import LightDark2DEnv as env
 from ppomdp.envs.pomdps.lightdark2d import stddev_obs
-
-jax.config.update("jax_enable_x64", True)
 
 
 rng_key = random.PRNGKey(1337)

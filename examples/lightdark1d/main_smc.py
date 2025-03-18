@@ -6,6 +6,8 @@ from jax import random, numpy as jnp
 from flax.linen.initializers import constant
 from distrax import Block, MultivariateNormalDiag
 
+jax.config.update("jax_enable_x64", True)
+
 from ppomdp.bijector import Tanh
 from ppomdp.utils import batch_data
 from ppomdp.arch import GRUEncoder, MLPDecoder
@@ -26,8 +28,6 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 
 from ppomdp.envs.pomdps import LightDark1DEnv as env
-
-jax.config.update("jax_enable_x64", True)
 
 
 rng_key = random.PRNGKey(123)
