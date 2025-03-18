@@ -17,9 +17,9 @@ action_dim = 2
 
 num_envs = 1
 num_time_steps = 30
+
 action_scale = jnp.array([100., 100.])
 action_shift = jnp.array([0., 0.])
-
 action_trans = Block(
     ScalarAffine(
         scale=action_scale,

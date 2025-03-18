@@ -13,6 +13,8 @@ from distrax import (
 from ppomdp.core import PRNGKey, TransitionModel, ObservationModel
 from ppomdp.envs.core import POMDPEnv
 
+jax.config.update("jax_enable_x64", True)
+
 
 state_dim = 4
 action_dim = 1
@@ -20,9 +22,9 @@ obs_dim = 2
 
 num_envs = 1
 num_time_steps = 100
+
 action_scale = 50.0
 action_shift = 0.0
-
 action_trans = Block(
     ScalarAffine(
         scale=action_scale,
@@ -78,7 +80,10 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 
 def mean_obs(s: Array) -> Array:
-    H = jnp.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+    H = jnp.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0]
+    ])
     return H @ s
 
 
@@ -111,7 +116,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     g = jnp.array([0.0, jnp.pi, 0.0, 0.0])
     h = jax.lax.select(
         t > 0,
-        jnp.array([1e0, 1e1, 1e-1, 1e-1]),
+        jnp.array([1e-1, 1e0, 1e-2, 1e-2]),
         jnp.array([0., 0., 0., 0.]),
     )
     r = jnp.array([1e-3])

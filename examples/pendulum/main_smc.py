@@ -4,7 +4,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import jax
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
-
 from distrax import Block, MultivariateNormalDiag
 
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling

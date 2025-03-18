@@ -22,6 +22,7 @@ obs_dim = 2
 
 num_envs = 1
 num_time_steps = 100
+
 action_scale = 2.0
 action_shift = 0.0
 

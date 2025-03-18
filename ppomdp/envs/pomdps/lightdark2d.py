@@ -10,6 +10,8 @@ from distrax import (
 from ppomdp.core import PRNGKey, TransitionModel, ObservationModel
 from ppomdp.envs.core import POMDPEnv
 
+jax.config.update("jax_enable_x64", True)
+
 
 state_dim = 4
 action_dim = 2

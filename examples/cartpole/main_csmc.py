@@ -4,7 +4,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import jax
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
-from distrax import Block, MultivariateNormalDiag
+from distrax import Block
 
 from ppomdp.core import Reference
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
@@ -23,28 +23,28 @@ import time
 from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from ppomdp.envs.pomdps import PendulumEnv as env
+from ppomdp.envs.pomdps import CartPoleEnv as env
 
 jax.config.update("jax_enable_x64", True)
 
 
-rng_key = random.PRNGKey(10)
+rng_key = random.PRNGKey(1337)
 
-num_outer_particles = 256
+num_outer_particles = 512
 num_inner_particles = 256
 
-slew_rate_penalty = 0.001
+slew_rate_penalty = 5e-4
 tempering = 0.5
-num_moves = 1
+num_moves = 3
 
-learning_rate = 1e-3
-batch_size = 32
+learning_rate = 3e-4
+batch_size = 64
 num_epochs = 500
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
     encoder_size=[256, 256],
-    recurr_size=[64, 64],
+    recurr_size=[128, 128],
 )
 
 decoder = MLPDecoder(
@@ -116,12 +116,13 @@ reference = Reference(
     inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
 )
 
+# The training loop
 for i in range(1, num_epochs + 1):
     start_time = time.time()
 
-    # evaluate current policy
+    # run nested smc
     key, sub_key = random.split(key)
-    outer_states, _, _, _ = \
+    outer_states, inner_states, inner_infos, log_marginal = \
         smc(
             sub_key,
             env.num_time_steps,
@@ -210,7 +211,6 @@ for i in range(1, num_epochs + 1):
 eval_state = deepcopy(train_state)
 eval_state.params["log_std"] = -20.0 * jnp.ones((env.action_dim,))
 
-# plot realization
 states = []
 actions = []
 observations = []
@@ -218,7 +218,7 @@ observations = []
 key = random.PRNGKey(21)
 key, state_key, obs_key = random.split(key, 3)
 
-state = jnp.array([0.0, 0.0])
+state = jnp.zeros(env.state_dim)
 obs = env.obs_model.sample(obs_key, state)
 carry = policy.reset(1)
 
@@ -242,20 +242,28 @@ actions = jnp.squeeze(jnp.array(actions))
 observations = jnp.squeeze(jnp.array(observations))
 
 # Plot the results
-fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+fig, axs = plt.subplots(5, 1, figsize=(10, 8))
 fig.suptitle("Simulated trajectories")
 
 axs[0].plot(states[:, 0])
-axs[0].set_ylabel("Angle")
+axs[0].set_ylabel("Cart position")
 axs[0].grid(True)
 
 axs[1].plot(states[:, 1])
-axs[1].set_ylabel("Angular Velocity")
+axs[1].set_ylabel("Pole angle")
 axs[1].grid(True)
 
-axs[2].plot(actions)
-axs[2].set_ylabel("Action")
+axs[2].plot(states[:, 2])
+axs[2].set_ylabel("Cart velocity")
 axs[2].grid(True)
+
+axs[3].plot(states[:, 3])
+axs[3].set_ylabel("Pole angular velocity")
+axs[3].grid(True)
+
+axs[4].plot(actions)
+axs[4].set_ylabel("Action")
+axs[4].grid(True)
 
 plt.tight_layout()
 plt.show()

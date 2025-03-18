@@ -15,12 +15,14 @@ from ppomdp.envs.core import POMDPEnv
 
 jax.config.update("jax_enable_x64", True)
 
+
 state_dim = 1
 action_dim = 1
 obs_dim = 1
 
 num_envs = 1
 num_time_steps = 25
+
 action_shift = 0.0
 action_scale = 3.0
 action_trans = Block(
