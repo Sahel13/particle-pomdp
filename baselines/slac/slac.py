@@ -145,7 +145,9 @@ def pomdp_init(
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, pf_keys = custom_split(key, env_obj.num_envs + 1)
-    beliefs = jax.vmap(pf_init, (0, None, 0, None))(pf_keys, env_obj, observations, num_particles)
+    beliefs = jax.vmap(pf_init, (0, None, 0, None))(
+        pf_keys, env_obj, observations, num_particles
+    )
 
     carry = policy_network.reset(env_obj.num_envs)
 
@@ -183,16 +185,17 @@ def pomdp_init(
     )
 
 
-@partial(jax.jit, static_argnums=(1, 4, 5, 6), donate_argnames="pomdp_state")
+@partial(jax.jit, static_argnums=(1, 4, 5), donate_argnames="pomdp_state")
 def pomdp_step(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
     pomdp_state: POMDPState,
     policy_state: TrainState,
     policy_network: PolicyNetwork,
-    num_particles: int,
     random_actions: bool = False,
 ) -> POMDPState:
+
+    num_particles = pomdp_state.beliefs.particles.shape[1]
 
     def _true_fn(_pomdp_state):
         time_idxs = _pomdp_state.time_idxs + 1
@@ -401,7 +404,7 @@ def gradient_step(
 
 @partial(
     jax.jit,
-    static_argnames=("env_obj", "buffer_obj", "policy_network", "num_steps", "num_particles", "alpha", "gamma"),
+    static_argnames=("env_obj", "buffer_obj", "policy_network", "num_steps", "alpha", "gamma"),
     donate_argnames=("buffer_state", "pomdp_state", "train_state"),
 )
 def step_and_train(
@@ -413,7 +416,6 @@ def step_and_train(
     train_state: JointTrainState,
     policy_network: PolicyNetwork,
     num_steps: int,
-    num_particles: int,
     alpha: float,
     gamma: float,
 ):
@@ -427,7 +429,6 @@ def step_and_train(
             pomdp_state=_pomdp_state,
             policy_state=_train_state.policy_state,
             policy_network=policy_network,
-            num_particles=num_particles,
         )
         _qmdp_state = get_qmdp_state(_pomdp_state)
         _buffer_state = buffer_obj.insert(_buffer_state, _qmdp_state)

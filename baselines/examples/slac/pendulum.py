@@ -13,7 +13,7 @@ from baselines.slac.slac import (
     step_and_train,
 )
 from baselines.slac.utils import get_qmdp_state
-from ppomdp.envs.pomdps import CartPoleEnv as env_obj
+from ppomdp.envs.pomdps import PendulumEnv as env_obj
 
 import matplotlib.pyplot as plt
 
@@ -130,11 +130,11 @@ if __name__ == "__main__":
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
     fig.suptitle("Simulated trajectory")
 
-    axs[0].plot(states[:, 1])
+    axs[0].plot(states[:, 0])
     axs[0].set_ylabel("Angle")
     axs[0].grid(True)
 
-    axs[1].plot(states[:, 3])
+    axs[1].plot(states[:, 1])
     axs[1].set_ylabel("Angular velocity")
     axs[1].grid(True)
 
