@@ -2,11 +2,11 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 import jax
+jax.config.update("jax_enable_x64", True)
+
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
 from distrax import Block
-
-jax.config.update("jax_enable_x64", True)
 
 from ppomdp.core import Reference
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
@@ -30,8 +30,8 @@ from ppomdp.envs.pomdps import PendulumEnv as env
 
 rng_key = random.PRNGKey(10)
 
-num_outer_particles = 256
-num_inner_particles = 256
+num_history_particles = 256
+num_belief_particles = 256
 
 slew_rate_penalty = 0.001
 tempering = 0.5
@@ -66,18 +66,18 @@ train_state = policy.init(
     rng_key=sub_key,
     input_dim=env.obs_dim,
     output_dim=env.action_dim,
-    batch_dim=num_outer_particles,
+    batch_dim=num_history_particles,
     learning_rate=learning_rate
 )
 
 # run init nested smc
 key, sub_key = random.split(key)
-outer_states, inner_states, inner_infos, _ = \
+history_states, belief_states, belief_infos, _ = \
     smc(
         sub_key,
         env.num_time_steps,
-        num_outer_particles,
-        num_inner_particles,
+        num_history_particles,
+        num_belief_particles,
         env.prior_dist,
         env.trans_model,
         env.obs_model,
@@ -88,18 +88,18 @@ outer_states, inner_states, inner_infos, _ = \
         slew_rate_penalty
     )
 
-# trace ancestors of outer states
+# trace ancestors of history states
 key, sub_key = random.split(key)
-traced_outer, traced_inner, _ = \
-    backward_tracing(sub_key, outer_states, inner_states, inner_infos)
+traced_history, traced_belief, _ = \
+    backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
-# # backward sample outer states
+# # backward sample history states
 # key, sub_key = random.split(key)
-# traced_outer, traced_inner = mcmc_backward_sampling(
+# traced_history, traced_belief = mcmc_backward_sampling(
 #     sub_key,
-#     num_outer_particles,
-#     outer_states,
-#     inner_states,
+#     num_history_particles,
+#     history_states,
+#     belief_states,
 #     env.trans_model,
 #     policy,
 #     train_state.params,
@@ -110,10 +110,10 @@ traced_outer, traced_inner, _ = \
 
 # sample a new reference
 key, sub_key = random.split(key)
-idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles))
+idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
 reference = Reference(
-    outer_particles=jax.tree.map(lambda x: x[:, idx], traced_outer),
-    inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
+    history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
+    belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
 )
 
 for i in range(1, num_epochs + 1):
@@ -121,12 +121,12 @@ for i in range(1, num_epochs + 1):
 
     # evaluate current policy
     key, sub_key = random.split(key)
-    outer_states, _, _, _ = \
+    history_states, _, _, _ = \
         smc(
             sub_key,
             env.num_time_steps,
-            int(4 * num_outer_particles),
-            int(4 * num_inner_particles),
+            int(4 * num_history_particles),
+            int(4 * num_belief_particles),
             env.prior_dist,
             env.trans_model,
             env.obs_model,
@@ -136,17 +136,17 @@ for i in range(1, num_epochs + 1):
             tempering=0.0,
             slew_rate_penalty=0.0,
         )
-    expected_reward = jnp.mean(jnp.sum(outer_states.rewards, axis=0))
+    expected_reward = jnp.mean(jnp.sum(history_states.rewards, axis=0))
 
     for _ in range(num_moves):
         # run nested conditional smc
         key, sub_key = random.split(key)
-        outer_states, inner_states, inner_info, log_marginal = \
+        history_states, belief_states, belief_infos, log_marginal = \
             csmc(
                 sub_key,
                 env.num_time_steps,
-                num_outer_particles,
-                num_inner_particles,
+                num_history_particles,
+                num_belief_particles,
                 env.prior_dist,
                 env.trans_model,
                 env.obs_model,
@@ -158,18 +158,18 @@ for i in range(1, num_epochs + 1):
                 reference
             )
 
-        # trace ancestors of outer states
+        # trace ancestors of history states
         key, sub_key = random.split(key)
-        traced_outer, traced_inner, _ = \
-            backward_tracing(sub_key, outer_states, inner_states, inner_info)
+        traced_history, traced_belief, _ = \
+            backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
-        # # backward sample outer states
+        # # backward sample history states
         # key, sub_key = random.split(key)
-        # traced_outer, traced_inner = mcmc_backward_sampling(
+        # traced_history, traced_belief = mcmc_backward_sampling(
         #     sub_key,
-        #     num_outer_particles,
-        #     outer_states,
-        #     inner_states,
+        #     num_history_particles,
+        #     history_states,
+        #     belief_states,
         #     env.trans_model,
         #     policy,
         #     train_state.params,
@@ -180,20 +180,20 @@ for i in range(1, num_epochs + 1):
 
         # sample a new reference
         key, sub_key = random.split(key)
-        idx = jax.random.choice(sub_key, jnp.arange(num_outer_particles))
+        idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
         reference = Reference(
-            outer_particles=jax.tree.map(lambda x: x[:, idx], traced_outer),
-            inner_state=jax.tree.map(lambda x: x[:, idx], traced_inner)
+            history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
+            belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
         )
 
     # update policy parameters
     loss = 0.0
     key, sub_key = random.split(key)
-    batch_indices = batch_data(sub_key, num_outer_particles, batch_size)
+    batch_indices = batch_data(sub_key, num_history_particles, batch_size)
     for batch_idx in batch_indices:
-        outer_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_outer)
+        history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
         train_state, batch_loss = \
-            train_recurrent_gauss_policy(policy, train_state, outer_batch)
+            train_recurrent_gauss_policy(policy, train_state, history_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)

@@ -18,7 +18,7 @@ from ppomdp.core import (
     Carry,
     RecurrentPolicy,
     Parameters,
-    OuterParticles,
+    HistoryParticles,
     PRNGKey
 )
 from ppomdp.arch import (
@@ -122,7 +122,7 @@ def create_recurrent_gauss_policy(
         return dist.log_prob(actions)
 
     def pathwise_log_prob(
-        particles: OuterParticles,
+        particles: HistoryParticles,
         params: Parameters
     ) -> Array:
         def body(t, log_probs):
@@ -179,7 +179,7 @@ def create_recurrent_gauss_policy(
 def train_recurrent_gauss_policy(
     policy: RecurrentPolicy,
     train_state: TrainState,
-    particles: OuterParticles,
+    particles: HistoryParticles,
 ) -> tuple[TrainState, Array]:
     def loss_fn(params):
         log_probs = policy.pathwise_log_prob(particles, params)

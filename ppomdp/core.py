@@ -14,15 +14,15 @@ PRNGKey = chex.PRNGKey
 Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
-class OuterParticles(NamedTuple):
+class HistoryParticles(NamedTuple):
     observations: Array
     actions: Array
     carry: list[Carry]
     log_probs: Array
 
 
-class OuterState(NamedTuple):
-    r"""State of the outer particle filter.
+class HistoryState(NamedTuple):
+    r"""State of the history particle filter.
 
     Attributes:
         particles: NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
@@ -32,15 +32,15 @@ class OuterState(NamedTuple):
         rewards: Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
     """
 
-    particles: OuterParticles
+    particles: HistoryParticles
     log_weights: Array
     weights: Array
     resampling_indices: Array
     rewards: Array
 
 
-class InnerState(NamedTuple):
-    """State of the inner particle filter.
+class BeliefState(NamedTuple):
+    """State of the belief particle filter.
 
     Attributes:
         particles: The state particles $s_t^{nm}$.
@@ -55,15 +55,15 @@ class InnerState(NamedTuple):
     resampling_indices: Array
 
 
-class InnerInfo(NamedTuple):
+class BeliefInfo(NamedTuple):
     ess: Array
     mean: Array
     covar: Array
 
 
 class Reference(NamedTuple):
-    outer_particles: OuterParticles
-    inner_state: InnerState
+    history_particles: HistoryParticles
+    belief_state: BeliefState
 
 
 class SampleTransition(Protocol):
@@ -147,7 +147,7 @@ class LogProbRecurrentPolicy(Protocol):
 class PathwiseLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        particles: OuterParticles,
+        particles: HistoryParticles,
         params: Parameters
     ) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""

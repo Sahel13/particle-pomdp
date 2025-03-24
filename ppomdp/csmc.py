@@ -6,11 +6,11 @@ from jax import Array, random, numpy as jnp
 from distrax import Distribution
 
 from ppomdp.core import (
-    InnerState,
-    InnerInfo,
+    BeliefState,
+    BeliefInfo,
     ObservationModel,
-    OuterParticles,
-    OuterState,
+    HistoryParticles,
+    HistoryState,
     Reference,
     RecurrentPolicy,
     RewardFn,
@@ -19,10 +19,10 @@ from ppomdp.core import (
     PRNGKey
 )
 from ppomdp.utils import (
-    resample_inner,
-    resample_outer,
-    propagate_inner,
-    reweight_inner,
+    resample_belief,
+    resample_history,
+    propagate_belief,
+    reweight_belief,
     sample_marginal_obs,
     log_potential,
     weighted_mean,
@@ -35,15 +35,15 @@ from ppomdp.utils import (
 
 def csmc_init(
     rng_key: PRNGKey,
-    num_outer_particles: int,
-    num_inner_particles: int,
+    num_history_particles: int,
+    num_belief_particles: int,
     prior_dist: Distribution,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
     params: Parameters,
     reference: Reference,
-) -> tuple[OuterState, InnerState, InnerInfo]:
-    r"""Initialize the outer and inner states for the nested CSMC algorithm.
+) -> tuple[HistoryState, BeliefState, BeliefInfo]:
+    r"""Initialize the history and belief states for the nested CSMC algorithm.
 
     This samples from
     .. math::
@@ -55,10 +55,10 @@ def csmc_init(
 
     Args:
         rng_key: PRNGKey
-        num_outer_particles: int
-            The number of outer particles $N$.
-        num_inner_particles: int
-            The number of inner particles $M$.
+        num_history_particles: int
+            The number of history particles $N$.
+        num_belief_particles: int
+            The number of belief particles $M$.
         prior_dist: distrax.Distribution
             The prior distribution for the initial state particles.
         obs_model: ObservationModel
@@ -71,61 +71,61 @@ def csmc_init(
             Reference state of the conditional particle filter.
     """
     key, sub_key = random.split(rng_key)
-    inner_particles = prior_dist.sample(
+    belief_particles = prior_dist.sample(
         seed=sub_key,
-        sample_shape=(num_outer_particles, num_inner_particles),
+        sample_shape=(num_history_particles, num_belief_particles),
     )
 
-    inner_state = InnerState(
-        particles=inner_particles,
-        log_weights=jnp.zeros((num_outer_particles, num_inner_particles)),
-        weights=jnp.ones((num_outer_particles, num_inner_particles)) / num_inner_particles,
-        resampling_indices=jnp.zeros((num_outer_particles, num_inner_particles), dtype=jnp.int32),
+    belief_state = BeliefState(
+        particles=belief_particles,
+        log_weights=jnp.zeros((num_history_particles, num_belief_particles)),
+        weights=jnp.ones((num_history_particles, num_belief_particles)) / num_belief_particles,
+        resampling_indices=jnp.zeros((num_history_particles, num_belief_particles), dtype=jnp.int32),
     )
 
-    # replace zeroth inner state with reference inner state
-    inner_state = jax.tree.map(
-        lambda x, y: x.at[0].set(y), inner_state, reference.inner_state
+    # replace zeroth belief state with reference belief state
+    belief_state = jax.tree.map(
+        lambda x, y: x.at[0].set(y), belief_state, reference.belief_state
     )
 
     # sample marginal observations
-    keys = random.split(key, num_outer_particles)
+    keys = random.split(key, num_history_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys, obs_model, inner_state
+        keys, obs_model, belief_state
     )
 
     # replace zeroth observations with reference observation
-    observations = observations.at[0].set(reference.outer_particles.observations)
+    observations = observations.at[0].set(reference.history_particles.observations)
 
-    # reweight inner particles
-    inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
-        obs_model, inner_state, observations
+    # reweight belief particles
+    belief_state = jax.vmap(reweight_belief, in_axes=(None, 0, 0))(
+        obs_model, belief_state, observations
     )
-    inner_info = InnerInfo(
-        ess=effective_sample_size(inner_state.log_weights),
-        mean=weighted_mean(inner_state.particles, inner_state.weights),
-        covar=weighted_covar(inner_state.particles, inner_state.weights)
+    belief_info = BeliefInfo(
+        ess=effective_sample_size(belief_state.log_weights),
+        mean=weighted_mean(belief_state.particles, belief_state.weights),
+        covar=weighted_covar(belief_state.particles, belief_state.weights)
     )
 
     # Initialize dummy actions and policy carry.
-    init_carry = policy.reset(num_outer_particles)
-    dummy_actions = jnp.zeros((num_outer_particles, policy.dim))
-    dummy_log_probs = jnp.zeros(num_outer_particles)
+    init_carry = policy.reset(num_history_particles)
+    dummy_actions = jnp.zeros((num_history_particles, policy.dim))
+    dummy_log_probs = jnp.zeros(num_history_particles)
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
-    init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.outer_particles.carry)
-    dummy_actions = dummy_actions.at[0].set(reference.outer_particles.actions)
-    dummy_log_probs = dummy_log_probs.at[0].set(reference.outer_particles.log_probs)
+    init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.history_particles.carry)
+    dummy_actions = dummy_actions.at[0].set(reference.history_particles.actions)
+    dummy_log_probs = dummy_log_probs.at[0].set(reference.history_particles.log_probs)
 
-    outer_particles = OuterParticles(observations, dummy_actions, init_carry, dummy_log_probs)
-    outer_state = OuterState(
-        particles=outer_particles,
-        log_weights=jnp.zeros(num_outer_particles),
-        weights=jnp.ones(num_outer_particles) / num_outer_particles,
-        resampling_indices=jnp.zeros(num_outer_particles, dtype=jnp.int32),
-        rewards=jnp.zeros(num_outer_particles),
+    history_particles = HistoryParticles(observations, dummy_actions, init_carry, dummy_log_probs)
+    history_state = HistoryState(
+        particles=history_particles,
+        log_weights=jnp.zeros(num_history_particles),
+        weights=jnp.ones(num_history_particles) / num_history_particles,
+        resampling_indices=jnp.zeros(num_history_particles, dtype=jnp.int32),
+        rewards=jnp.zeros(num_history_particles),
     )
-    return outer_state, inner_state, inner_info
+    return history_state, belief_state, belief_info
 
 
 def csmc_step(
@@ -139,9 +139,9 @@ def csmc_step(
     tempering: float,
     slew_rate_penalty: float,
     reference: Reference,
-    outer_state: OuterState,
-    inner_state: InnerState,
-) -> tuple[OuterState, InnerState, InnerInfo, Array]:
+    history_state: HistoryState,
+    belief_state: BeliefState,
+) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     r"""A single step of the nested CSMC algorithm.
 
     Args:
@@ -164,26 +164,26 @@ def csmc_step(
             The slew rate penalty.
         reference: Reference
             Reference trajectory of the conditional particle filter.
-        outer_state: OuterState
+        history_state: HistoryState
             Leaves have shape (N, ...).
-        inner_state: InnerState
+        belief_state: BeliefState
             Leaves have shape (N, M, ...).
     """
-    num_particles = outer_state.weights.shape[0]
+    num_particles = history_state.weights.shape[0]
 
-    # 1. Resample the outer particles.
+    # 1. Resample the history particles.
     key, sub_key = random.split(rng_key)
-    outer_state = resample_outer(
-        sub_key, outer_state, multinomial_resampling, conditional=True
+    history_state = resample_history(
+        sub_key, history_state, multinomial_resampling, conditional=True
     )
-    particles = outer_state.particles
-    resampling_idx = outer_state.resampling_indices
-    inner_state = jax.tree.map(lambda x: x[resampling_idx], inner_state)
+    particles = history_state.particles
+    resampling_idx = history_state.resampling_indices
+    belief_state = jax.tree.map(lambda x: x[resampling_idx], belief_state)
 
-    # 2. Resample the inner particles.
+    # 2. Resample the belief particles.
     keys = random.split(key, num_particles + 1)
-    inner_state = jax.vmap(resample_inner, in_axes=(0, 0, None))(
-        keys[1:], inner_state, multinomial_resampling
+    belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
+        keys[1:], belief_state, multinomial_resampling
     )
 
     # 3. Sample new actions.
@@ -193,70 +193,70 @@ def csmc_step(
     )
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
-    carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.outer_particles.carry)
-    actions = actions.at[0].set(reference.outer_particles.actions)
-    log_probs = log_probs.at[0].set(reference.outer_particles.log_probs)
+    carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.history_particles.carry)
+    actions = actions.at[0].set(reference.history_particles.actions)
+    log_probs = log_probs.at[0].set(reference.history_particles.log_probs)
 
-    # 4. Propagate the inner particles.
+    # 4. Propagate the belief particles.
     keys = random.split(key, num_particles + 1)
-    inner_particles = jax.vmap(propagate_inner, in_axes=(0, None, 0, 0))(
-        keys[1:], trans_model, inner_state.particles, actions
+    belief_particles = jax.vmap(propagate_belief, in_axes=(0, None, 0, 0))(
+        keys[1:], trans_model, belief_state.particles, actions
     )
-    inner_state = inner_state._replace(particles=inner_particles)
+    belief_state = belief_state._replace(particles=belief_particles)
 
-    # replace zeroth inner state with reference inner state
-    inner_state = jax.tree.map(
-        lambda x, y: x.at[0].set(y), inner_state, reference.inner_state
+    # replace zeroth belief state with reference belief state
+    belief_state = jax.tree.map(
+        lambda x, y: x.at[0].set(y), belief_state, reference.belief_state
     )
 
     # 5. Sample new observations.
     keys = random.split(keys[0], num_particles)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys, obs_model, inner_state
+        keys, obs_model, belief_state
     )
 
     # replace zeroth observations with reference observation
-    observations = observations.at[0].set(reference.outer_particles.observations)
+    observations = observations.at[0].set(reference.history_particles.observations)
 
-    # 6. Reweight the inner particles.
-    inner_state = jax.vmap(reweight_inner, in_axes=(None, 0, 0))(
-        obs_model, inner_state, observations
+    # 6. Reweight the belief particles.
+    belief_state = jax.vmap(reweight_belief, in_axes=(None, 0, 0))(
+        obs_model, belief_state, observations
     )
-    inner_info = InnerInfo(
-        ess=effective_sample_size(inner_state.log_weights),
-        mean=weighted_mean(inner_state.particles, inner_state.weights),
-        covar=weighted_covar(inner_state.particles, inner_state.weights)
+    belief_info = BeliefInfo(
+        ess=effective_sample_size(belief_state.log_weights),
+        mean=weighted_mean(belief_state.particles, belief_state.weights),
+        covar=weighted_covar(belief_state.particles, belief_state.weights)
     )
 
-    # 7. Reweight the outer particles.
+    # 7. Reweight the history particles.
     log_potentials, rewards = jax.vmap(log_potential, in_axes=(0, 0, 0, None, None, None, None))(
-        inner_state, actions, particles.actions, time_idx, reward_fn, tempering, slew_rate_penalty
+        belief_state, actions, particles.actions, time_idx, reward_fn, tempering, slew_rate_penalty
     )
-    log_weights = log_potentials + outer_state.log_weights
+    log_weights = log_potentials + history_state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
 
     # 8. Compute the normalizing constant increment.
     # Eq. 10.3 in Chopin and Papaspiliopoulos (2020).
-    log_marginal = logsum_weights - jax.nn.logsumexp(outer_state.log_weights)
+    log_marginal = logsum_weights - jax.nn.logsumexp(history_state.log_weights)
 
-    outer_particles = OuterParticles(observations, actions, carry, log_probs)
-    outer_state = OuterState(
-        particles=outer_particles,
+    history_particles = HistoryParticles(observations, actions, carry, log_probs)
+    history_state = HistoryState(
+        particles=history_particles,
         log_weights=log_weights,
         weights=weights,
         resampling_indices=resampling_idx,
         rewards=rewards,
     )
-    return outer_state, inner_state, inner_info, log_marginal
+    return history_state, belief_state, belief_info, log_marginal
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
 def csmc(
     rng_key: PRNGKey,
     num_time_steps: int,
-    num_outer_particles: int,
-    num_inner_particles: int,
+    num_history_particles: int,
+    num_belief_particles: int,
     prior_dist: Distribution,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
@@ -266,17 +266,17 @@ def csmc(
     tempering: float,
     slew_rate_penalty: float,
     reference: Reference,
-) -> tuple[OuterState, InnerState, InnerInfo, Array]:
+) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     """
     Perform the Conditional Sequential Monte Carlo (CSMC) algorithm.
 
     Args:
         rng_key: PRNGKey
             The random key for sampling.
-        num_outer_particles: int
-            The number of outer particles.
-        num_inner_particles: int
-            The number of inner particles.
+        num_history_particles: int
+            The number of history particles.
+        num_belief_particles: int
+            The number of belief particles.
         num_time_steps: int
             The number of time steps for the SMC algorithm.
         prior_dist: Distribution
@@ -299,16 +299,16 @@ def csmc(
             Reference trajectory of the conditional particle filter.
 
     Returns:
-        tuple[OuterState, InnerState, Array]
-            All outer and inner states after running the SMC algorithm along
+        tuple[HistoryState, BeliefState, Array]
+            All history and belief states after running the SMC algorithm along
             with the normalizing constant estimate.
     """
 
     def csmc_loop(carry, args):
-        outer_state, inner_state, log_marginal = carry
+        history_state, belief_state, log_marginal = carry
         time_idx, key, ref_state = args
 
-        outer_state, inner_state, inner_info, log_marginal_incr = csmc_step(
+        history_state, belief_state, belief_info, log_marginal_incr = csmc_step(
             time_idx,
             key,
             trans_model,
@@ -319,18 +319,18 @@ def csmc(
             tempering,
             slew_rate_penalty,
             ref_state,
-            outer_state,
-            inner_state,
+            history_state,
+            belief_state,
         )
 
         log_marginal += log_marginal_incr
-        return (outer_state, inner_state, log_marginal), (outer_state, inner_state, inner_info)
+        return (history_state, belief_state, log_marginal), (history_state, belief_state, belief_info)
 
     init_key, loop_key = random.split(rng_key, 2)
-    init_outer_state, init_inner_state, init_inner_info = csmc_init(
+    init_history_state, init_belief_state, init_belief_info = csmc_init(
         init_key,
-        num_outer_particles,
-        num_inner_particles,
+        num_history_particles,
+        num_belief_particles,
         prior_dist,
         obs_model,
         policy,
@@ -338,9 +338,9 @@ def csmc(
         jax.tree.map(lambda x: x[0], reference),
     )
 
-    (_, _, log_marginal), (outer_states, inner_states, inner_infos) = jax.lax.scan(
+    (_, _, log_marginal), (history_states, belief_states, belief_infos) = jax.lax.scan(
         csmc_loop,
-        (init_outer_state, init_inner_state, jnp.array(0.0)),
+        (init_history_state, init_belief_state, jnp.array(0.0)),
         (
             jnp.arange(1, num_time_steps + 1),  # time indices
             random.split(loop_key, num_time_steps),  # random keys
@@ -351,7 +351,7 @@ def csmc(
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
 
-    outer_states = concat_trees(init_outer_state, outer_states)
-    inner_states = concat_trees(init_inner_state, inner_states)
-    inner_infos = concat_trees(init_inner_info, inner_infos)
-    return outer_states, inner_states, inner_infos, log_marginal
+    history_states = concat_trees(init_history_state, history_states)
+    belief_states = concat_trees(init_belief_state, belief_states)
+    belief_infos = concat_trees(init_belief_info, belief_infos)
+    return history_states, belief_states, belief_infos, log_marginal

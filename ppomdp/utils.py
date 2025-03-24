@@ -8,9 +8,9 @@ from jax import Array, random, numpy as jnp
 from ppomdp.core import (
     PRNGKey,
     Carry,
-    InnerState,
+    BeliefState,
     ObservationModel,
-    OuterState,
+    HistoryState,
     RecurrentPolicy,
     RewardFn,
     TransitionModel,
@@ -18,55 +18,55 @@ from ppomdp.core import (
 
 
 # smc functions
-def resample_inner(
+def resample_belief(
     rng_key: PRNGKey,
-    inner_state: InnerState,
+    belief_state: BeliefState,
     resample_fn: Callable,
-) -> InnerState:
-    """Resample the inner particles for a single outer trajectory.
+) -> BeliefState:
+    """Resample the belief particles for a single history trajectory.
 
     Only resamples if the effective sample size is below 75% of the number of particles.
 
     Args:
         rng_key: The random number generator key.
-        inner_state: The state associated with a single outer trajectory.
+        belief_state: The state associated with a single history trajectory.
             Leaves have shape (M, ...).
         resample_fn: The resampling function.
 
     Returns:
-        The new `InnerState` after resampling.
+        The new `BeliefState` after resampling.
     """
-    num_particles = inner_state.particles.shape[0]
+    num_particles = belief_state.particles.shape[0]
 
-    def true_fn(state: InnerState) -> InnerState:
+    def true_fn(state: BeliefState) -> BeliefState:
         resampling_idx = resample_fn(rng_key, state.weights, num_particles)
-        return InnerState(
+        return BeliefState(
             particles=state.particles[resampling_idx],
             log_weights=jnp.zeros(num_particles),
             weights=jnp.ones(num_particles) / num_particles,
             resampling_indices=resampling_idx,
         )
 
-    def false_fn(state: InnerState) -> InnerState:
+    def false_fn(state: BeliefState) -> BeliefState:
         resampling_idx = jnp.arange(num_particles, dtype=jnp.int32)
         return state._replace(resampling_indices=resampling_idx)
 
     resampled_state = jax.lax.cond(
-        effective_sample_size(inner_state.log_weights) < 0.75 * num_particles,
+        effective_sample_size(belief_state.log_weights) < 0.75 * num_particles,
         true_fn,
         false_fn,
-        inner_state,
+        belief_state,
     )
     return resampled_state
 
 
-def propagate_inner(
+def propagate_belief(
     rng_key: PRNGKey,
     model: TransitionModel,
     particles: Array,
     action: Array,
 ) -> Array:
-    r"""Propagate the inner particles for a single trajectory.
+    r"""Propagate the belief particles for a single trajectory.
 
     Args:
         rng_key: PRNGKey
@@ -74,7 +74,7 @@ def propagate_inner(
             The transition model for the state.
         particles: Array
             The state particles $\{s_{t-1}^{nm}\}_{m=1}^M$ associated with
-            the n-th outer trajectory. Has shape (M, ...).
+            the n-th history trajectory. Has shape (M, ...).
         action: Array
             The action $a_{t-1}^n$.
     """
@@ -83,16 +83,16 @@ def propagate_inner(
     return jax.vmap(model.sample, in_axes=(0, 0, None))(rng_keys, particles, action)
 
 
-def reweight_inner(
-    model: ObservationModel, state: InnerState, obs: Array
-) -> InnerState:
-    r"""Reweight the inner particles for a single outer trajectory.
+def reweight_belief(
+    model: ObservationModel, state: BeliefState, obs: Array
+) -> BeliefState:
+    r"""Reweight the belief particles for a single history trajectory.
 
     Args:
         model: ObservationModel
             The observation model.
-        state: InnerState
-            The inner state associated with the n-th outer trajectory.
+        state: BeliefState
+            The belief state associated with the n-th history trajectory.
             Leaves have shape (M, ...).
         obs: Array.
             The observation $z_t^n$.
@@ -105,7 +105,7 @@ def reweight_inner(
 
 
 def sample_marginal_obs(
-    rng_key: PRNGKey, obs_model: ObservationModel, state: InnerState
+    rng_key: PRNGKey, obs_model: ObservationModel, state: BeliefState
 ) -> Array:
     r"""Sample from the marginal observation distribution.
 
@@ -114,8 +114,8 @@ def sample_marginal_obs(
     Args:
         rng_key: PRNGKey
         obs_model: ObservationModel
-        state: InnerState
-            The inner state associated with the n-th outer trajectory.
+        state: BeliefState
+            The belief state associated with the n-th history trajectory.
             Leaves have shape (M, ...).
     """
     key1, key2 = random.split(rng_key)
@@ -124,34 +124,34 @@ def sample_marginal_obs(
 
 
 def expected_reward(
-    inner_state: InnerState, action: Array, time_idx: int, reward_fn: RewardFn
+    belief_state: BeliefState, action: Array, time_idx: int, reward_fn: RewardFn
 ) -> Array:
     """
-    Calculate the expected reward for a given particle and inner state.
+    Calculate the expected reward for a given particle and belief state.
 
     Args:
         reward_fn: RewardFn
             The reward function, r(s_{t], a_{t-1}).
-        inner_state: InnerState
-            The inner state containing particles and weights.
+        belief_state: BeliefState
+            The belief state containing particles and weights.
         action: Array
             Action particle.
         time_idx: int
             The current time index.
 
     Returns:
-        Array: The cumulative return for the given particle and inner state.
+        Array: The cumulative return for the given particle and belief state.
     """
     rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(
-        inner_state.particles, action, time_idx
+        belief_state.particles, action, time_idx
     )
     if rewards.ndim != 1:
         raise ValueError("The reward function must return a scalar value.")
-    return jnp.sum(rewards * inner_state.weights)
+    return jnp.sum(rewards * belief_state.weights)
 
 
 def log_potential(
-    inner_state: InnerState,
+    belief_state: BeliefState,
     action: Array,
     prev_action: Array,
     time_idx: int,
@@ -167,7 +167,7 @@ def log_potential(
 
     Args:
         reward_fn: The reward function.
-        inner_state: The inner state associated with the n-th outer trajectory.
+        belief_state: The belief state associated with the n-th history trajectory.
             Leaves have shape (M, ...).
         action: The current action.
         prev_action: The previous action.
@@ -175,22 +175,22 @@ def log_potential(
         tempering: The tempering parameter.
         slew_rate_penalty: The slew rate penalty.
     """
-    rewards = expected_reward(inner_state, action, time_idx, reward_fn)
+    rewards = expected_reward(belief_state, action, time_idx, reward_fn)
     mod_rewards = rewards - slew_rate_penalty * jnp.dot(
         action - prev_action, action - prev_action
     )
     return tempering * mod_rewards, rewards
 
 
-def resample_outer(
+def resample_history(
     rng_key: PRNGKey,
-    outer_state: OuterState,
+    history_state: HistoryState,
     resample_fn: Callable,
     conditional: bool = False,
-) -> OuterState:
-    num_particles = outer_state.weights.shape[0]
+) -> HistoryState:
+    num_particles = history_state.weights.shape[0]
 
-    def true_fn(state: OuterState) -> OuterState:
+    def true_fn(state: HistoryState) -> HistoryState:
         resampling_idx = resample_fn(rng_key, state.weights, num_particles)
         # Set zeroth resampling index to zero if conditional resampling is enabled
         resampling_idx = jax.lax.select(
@@ -198,7 +198,7 @@ def resample_outer(
         )
         resampled_particles = jax.tree.map(lambda x: x[resampling_idx], state.particles)
         resampled_rewards = state.rewards[resampling_idx]
-        return OuterState(
+        return HistoryState(
             particles=resampled_particles,
             log_weights=jnp.zeros(num_particles),
             weights=jnp.ones(num_particles) / num_particles,
@@ -206,12 +206,12 @@ def resample_outer(
             rewards=resampled_rewards,
         )
 
-    def false_fn(state: OuterState) -> OuterState:
+    def false_fn(state: HistoryState) -> HistoryState:
         resampling_idx = jnp.arange(num_particles, dtype=jnp.int32)
         return state._replace(resampling_indices=resampling_idx)
 
-    predicate = effective_sample_size(outer_state.log_weights) < 0.75 * num_particles
-    resampled_state = jax.lax.cond(predicate, true_fn, false_fn, outer_state)
+    predicate = effective_sample_size(history_state.log_weights) < 0.75 * num_particles
+    resampled_state = jax.lax.cond(predicate, true_fn, false_fn, history_state)
     return resampled_state
 
 
@@ -303,12 +303,12 @@ def policy_logpdf(
 
 
 def transition_logpdf(
-    future_inner_state: InnerState,
-    inner_state: InnerState,
+    future_belief_state: BeliefState,
+    belief_state: BeliefState,
     action: Array,
     trans_model: TransitionModel,
 ):
-    """Computes the transition probability of the inner particles for a single trajectory.
+    """Computes the transition probability of the belief particles for a single trajectory.
 
     The transition density is marginalized over the resampling indices.
     """
@@ -317,12 +317,12 @@ def transition_logpdf(
         logpdfs = jax.vmap(trans_model.log_prob, in_axes=(None, 0, None))(
             next_state, states, action
         )
-        return jax.nn.logsumexp(logpdfs + inner_state.log_weights)
+        return jax.nn.logsumexp(logpdfs + belief_state.log_weights)
 
     log_transitions = jax.vmap(_log_transition, in_axes=(0, None, None))(
-        future_inner_state.particles, inner_state.particles, action
+        future_belief_state.particles, belief_state.particles, action
     )
-    return jax.nn.logsumexp(log_transitions + future_inner_state.log_weights)
+    return jax.nn.logsumexp(log_transitions + future_belief_state.log_weights)
 
 
 # misc functions

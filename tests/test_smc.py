@@ -14,7 +14,7 @@ from distrax import (
 )
 
 from ppomdp.core import (
-    InnerState,
+    BeliefState,
     TransitionModel,
     ObservationModel,
 )
@@ -22,7 +22,7 @@ from ppomdp.smc import (
     smc,
     backward_tracing
 )
-from ppomdp.utils import resample_inner, propagate_inner, reweight_inner
+from ppomdp.utils import resample_belief, propagate_belief, reweight_belief
 from ppomdp.policy import (
     LSTM,
     create_policy,
@@ -31,12 +31,12 @@ from ppomdp.policy import (
 from ppomdp.bijector import Tanh
 
 
-def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
+def get_belief_state(key: PRNGKey, shape: tuple[int, ...]) -> BeliefState:
     key1, key2 = random.split(key)
     num_particles = shape[0]
     particles = random.normal(key1, shape)
     log_weights = random.normal(key2, (num_particles,))
-    return InnerState(
+    return BeliefState(
         particles=particles,
         log_weights=log_weights,
         weights=jnp.exp(log_weights - jax.nn.logsumexp(log_weights)),
@@ -46,13 +46,13 @@ def get_inner_state(key: PRNGKey, shape: tuple[int, ...]) -> InnerState:
 
 @pytest.mark.parametrize("seed", [0, 123])
 @pytest.mark.parametrize("num_particles", [1, 10])
-def test_resample_inner(seed, num_particles):
+def test_resample_belief(seed, num_particles):
     rng_key = random.PRNGKey(seed)
     key1, key2 = random.split(rng_key, 2)
     num_particles = 20
     particle_dim = 3
-    state = get_inner_state(key1, (num_particles, particle_dim))
-    resampled_state = resample_inner(key2, state)
+    state = get_belief_state(key1, (num_particles, particle_dim))
+    resampled_state = resample_belief(key2, state)
 
     resampling_idx = resampled_state.resampling_indices
     assert jnp.all(jnp.equal(resampled_state.particles, state.particles[resampling_idx]))
@@ -66,7 +66,7 @@ def test_resample_inner(seed, num_particles):
 
 
 @pytest.mark.parametrize("seed", [0, 123])
-def test_propagate_inner(seed):
+def test_propagate_belief(seed):
     def sample(rng_key, x, u):
         return x + u + random.normal(rng_key, x.shape)
 
@@ -79,12 +79,12 @@ def test_propagate_inner(seed):
     key1, key2, key3 = random.split(key, 3)
     state_particles = random.normal(key1, (10, 3))
     action = random.normal(key2, (3,))
-    new_particles = propagate_inner(key3, trans_model, state_particles, action)
+    new_particles = propagate_belief(key3, trans_model, state_particles, action)
     assert new_particles.shape == state_particles.shape
 
 
 @pytest.mark.parametrize("seed", [0, 123])
-def test_reweight_inner(seed):
+def test_reweight_belief(seed):
     def sample(rng_key, x):
         return x + random.normal(rng_key, x.shape)
 
@@ -94,9 +94,9 @@ def test_reweight_inner(seed):
     obs_model = ObservationModel(sample=sample, log_prob=log_prob)
     key = random.PRNGKey(seed)
     key1, key2 = random.split(key)
-    state = get_inner_state(key1, (10, 3))
+    state = get_belief_state(key1, (10, 3))
     obs = random.normal(key2, (3,))
-    new_state = reweight_inner(obs_model, state, obs)
+    new_state = reweight_belief(obs_model, state, obs)
 
     assert jnp.all(jnp.equal(new_state.particles, state.particles))
     assert jnp.all(jnp.equal(new_state.resampling_indices, state.resampling_indices))
@@ -107,7 +107,7 @@ def test_nested_smc():
     """Test the nested SMC algorithm.
 
     This tests two things:
-    1. The shapes of the leaves of the `OuterState` and `InnerState` objects.
+    1. The shapes of the leaves of the `HistoryState` and `BeliefState` objects.
     2. The number of times the `sample` and `log_prob` functions are traced for
     the transition and observation models.
     """
@@ -115,8 +115,8 @@ def test_nested_smc():
     dim_action = 3
     dim_obs = 2
 
-    num_outer_particles = 128
-    num_inner_particles = 64
+    num_history_particles = 128
+    num_belief_particles = 64
     num_time_steps = 50
 
     obs_matrix = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -160,16 +160,16 @@ def test_nested_smc():
 
     rng_key = random.PRNGKey(0)
     key, obs_key, param_key = random.split(rng_key, 3)
-    init_carry = policy.reset(num_outer_particles)
-    init_obs = random.normal(obs_key, (num_outer_particles, dim_obs))
+    init_carry = policy.reset(num_history_particles)
+    init_obs = random.normal(obs_key, (num_history_particles, dim_obs))
     init_params = lstm.init(param_key, init_carry, init_obs)["params"]
 
     key, sub_key = random.split(key)
-    outer_states, inner_states, _, _ = smc(
+    history_states, belief_states, _, _ = smc(
         sub_key,
         num_time_steps,
-        num_outer_particles,
-        num_inner_particles,
+        num_history_particles,
+        num_belief_particles,
         prior_dist,
         trans_model,
         obs_model,
@@ -180,29 +180,29 @@ def test_nested_smc():
         slew_rate_penalty=0.0
     )
 
-    # Check the shapes of the leaves of `outer_states`.
-    assert outer_states.particles[0].shape == (num_time_steps + 1, num_outer_particles, dim_obs)
-    assert outer_states.particles[1].shape == (num_time_steps + 1, num_outer_particles, dim_action)
+    # Check the shapes of the leaves of `history_states`.
+    assert history_states.particles[0].shape == (num_time_steps + 1, num_history_particles, dim_obs)
+    assert history_states.particles[1].shape == (num_time_steps + 1, num_history_particles, dim_action)
 
-    assert isinstance(outer_states.particles[2], list)
-    assert outer_states.particles[2][0][0].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][memory]
-    assert outer_states.particles[2][0][1].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][output]
-    assert outer_states.particles[2][1][0].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][memory]
-    assert outer_states.particles[2][1][1].shape == (num_time_steps + 1, num_outer_particles, 64)  # [carry][LSTMCell][output]
+    assert isinstance(history_states.particles[2], list)
+    assert history_states.particles[2][0][0].shape == (num_time_steps + 1, num_history_particles, 64)  # [carry][LSTMCell][memory]
+    assert history_states.particles[2][0][1].shape == (num_time_steps + 1, num_history_particles, 64)  # [carry][LSTMCell][output]
+    assert history_states.particles[2][1][0].shape == (num_time_steps + 1, num_history_particles, 64)  # [carry][LSTMCell][memory]
+    assert history_states.particles[2][1][1].shape == (num_time_steps + 1, num_history_particles, 64)  # [carry][LSTMCell][output]
 
-    assert outer_states.weights.shape == (num_time_steps + 1, num_outer_particles)
-    assert outer_states.resampling_indices.shape == (num_time_steps + 1, num_outer_particles)
+    assert history_states.weights.shape == (num_time_steps + 1, num_history_particles)
+    assert history_states.resampling_indices.shape == (num_time_steps + 1, num_history_particles)
 
-    # Check the shapes of the leaves of `inner_states`.
-    assert inner_states.particles.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles, 3)
-    assert inner_states.log_weights.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles)
-    assert inner_states.weights.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles)
-    assert inner_states.resampling_indices.shape == (num_time_steps + 1, num_outer_particles, num_inner_particles)
+    # Check the shapes of the leaves of `belief_states`.
+    assert belief_states.particles.shape == (num_time_steps + 1, num_history_particles, num_belief_particles, 3)
+    assert belief_states.log_weights.shape == (num_time_steps + 1, num_history_particles, num_belief_particles)
+    assert belief_states.weights.shape == (num_time_steps + 1, num_history_particles, num_belief_particles)
+    assert belief_states.resampling_indices.shape == (num_time_steps + 1, num_history_particles, num_belief_particles)
 
     # Check that the log weights and weights are finite.
-    assert jnp.all(jnp.isfinite(outer_states.weights))
-    assert jnp.all(jnp.isfinite(inner_states.log_weights))
-    assert jnp.all(jnp.isfinite(inner_states.weights))
+    assert jnp.all(jnp.isfinite(history_states.weights))
+    assert jnp.all(jnp.isfinite(belief_states.log_weights))
+    assert jnp.all(jnp.isfinite(belief_states.weights))
 
 
 @pytest.mark.parametrize("seed", [13, 42])
@@ -216,8 +216,8 @@ def test_policy_log_prob(seed):
     action_dim = 3
     obs_dim = 2
 
-    num_outer_particles = 128
-    num_inner_particles = 64
+    num_history_particles = 128
+    num_belief_particles = 64
     num_time_steps = 50
 
     obs_matrix = jnp.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -254,17 +254,17 @@ def test_policy_log_prob(seed):
 
     rng_key = random.PRNGKey(seed)
     key, obs_key, param_key = random.split(rng_key, 3)
-    init_carry = policy.reset(num_outer_particles)
-    init_obs = random.normal(obs_key, (num_outer_particles, obs_dim))
+    init_carry = policy.reset(num_history_particles)
+    init_obs = random.normal(obs_key, (num_history_particles, obs_dim))
     init_params = lstm.init(param_key, init_carry, init_obs)["params"]
 
     # Run SMC and plot smoothed trajectories.
     key, sub_key = random.split(rng_key)
-    outer_states, inner_states, inner_infos, _ = smc(
+    history_states, belief_states, belief_infos, _ = smc(
         sub_key,
         num_time_steps,
-        num_outer_particles,
-        num_inner_particles,
+        num_history_particles,
+        num_belief_particles,
         prior_dist,
         trans_model,
         obs_model,
@@ -276,11 +276,11 @@ def test_policy_log_prob(seed):
     )
 
     key, sub_key = random.split(key)
-    traced_outer, _, _ = backward_tracing(
-        sub_key, outer_states, inner_states, inner_infos
+    traced_history, _, _ = backward_tracing(
+        sub_key, history_states, belief_states, belief_infos
     )
 
-    smc_log_probs = traced_outer.particles.log_probs[:-1, :]
-    acc_log_probs = log_prob_policy_pathwise(traced_outer.particles, policy, init_params)
+    smc_log_probs = traced_history.particles.log_probs[:-1, :]
+    acc_log_probs = log_prob_policy_pathwise(traced_history.particles, policy, init_params)
 
     assert jnp.linalg.norm(smc_log_probs - acc_log_probs) < 1e-3

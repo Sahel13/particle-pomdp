@@ -3,7 +3,7 @@ from typing import Callable, NamedTuple
 from jax import Array
 from distrax import Distribution
 
-from ppomdp.core import Carry, InnerState
+from ppomdp.core import Carry, BeliefState
 from ppomdp.core import TransitionModel, ObservationModel, RewardFn
 
 
@@ -45,12 +45,12 @@ class POMDPState(NamedTuple):
     states: Array
     carry: list[Carry]
     observations: Array
-    beliefs: InnerState
+    belief_states: BeliefState
     actions: Array
     next_states: Array
     next_carry: list[Carry]
     next_observations: Array
-    next_beliefs: InnerState
+    next_belief_states: BeliefState
     rewards: Array
     total_rewards: Array
     time_idxs: Array
