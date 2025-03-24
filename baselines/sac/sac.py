@@ -103,7 +103,7 @@ def mdp_step(
             done_flags=done_flags
         )
 
-    def _false_fn(_outer_state):
+    def _false_fn(_mdp_state):
         return mdp_init(rng_key, env_obj, policy_state, random_actions)
 
     return jax.lax.cond(

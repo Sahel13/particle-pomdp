@@ -7,8 +7,8 @@ from brax.training.replay_buffers import UniformSamplingQueue
 
 from baselines.dvrl.dvrl import (
     DVRLConfig,
-    pf_init,
-    pf_step,
+    belief_init,
+    belief_update,
     pomdp_init,
     pomdp_step,
     create_train_state,
@@ -101,26 +101,26 @@ if __name__ == "__main__":
     key, obs_key, belief_key = random.split(key, 3)
     state = env_obj.prior_dist.mean()
     observation = env_obj.obs_model.sample(obs_key, state)
-    belief = pf_init(belief_key, env_obj, observation, config.num_particles)
+    belief_state = belief_init(belief_key, env_obj, observation, config.num_particles)
 
     def body(carry, rng_key):
-        _state, _belief = carry
+        _state, _belief_state = carry
         _action_key, _state_key, _obs_key, _pf_key = random.split(rng_key, 4)
         _, _, _action = \
             train_state.policy_state.apply_fn(
                 rng_key=_action_key,
                 params=train_state.policy_state.params,
-                particles=_belief.particles,
-                weights=_belief.weights,
+                particles=_belief_state.particles,
+                weights=_belief_state.weights,
         )
         _state = env_obj.trans_model.sample(_state_key, _state, _action)
         _observation = env_obj.obs_model.sample(_obs_key, _state)
-        _belief = pf_step(_pf_key, env_obj, _belief, _observation, _action)
-        return (_state, _belief), (_state, _action)
+        _belief_state = belief_update(_pf_key, env_obj, _belief_state, _observation, _action)
+        return (_state, _belief_state), (_state, _action)
 
     keys = random.split(key, env_obj.num_time_steps)
     _, (states, actions) = jax.lax.scan(
-        body, (state, belief), keys
+        body, (state, belief_state), keys
     )
     states = jnp.concatenate([state[None, ...], states], axis=0)
 
