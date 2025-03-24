@@ -2,7 +2,7 @@ import jax
 from jax import Array, random, numpy as jnp
 from distrax import Chain, MultivariateNormalDiag, Transformed
 
-from ppomdp.core import PRNGKey, Parameters, Carry, InnerState
+from ppomdp.core import PRNGKey, Parameters, Carry, BeliefState
 from ppomdp.envs.core import POMDPEnv, POMDPState, QMDPState
 from baselines.slac.arch import PolicyNetwork
 
@@ -23,11 +23,11 @@ def sample_random_actions(
 def get_qmdp_state(pomdp_state: POMDPState) -> QMDPState:
 
     @jax.vmap
-    def mean_belief(belief: InnerState) -> Array:
-        return jnp.sum(belief.particles * belief.weights[..., None], axis=0)
+    def mean_belief(state: BeliefState) -> Array:
+        return jnp.sum(state.particles * state.weights[..., None], axis=0)
 
-    states = mean_belief(pomdp_state.beliefs)
-    next_states = mean_belief(pomdp_state.next_beliefs)
+    states = mean_belief(pomdp_state.belief_states)
+    next_states = mean_belief(pomdp_state.next_belief_states)
 
     return QMDPState(
         states=states,
