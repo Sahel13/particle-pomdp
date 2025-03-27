@@ -40,7 +40,7 @@ class DSMCConfig(NamedTuple):
     num_belief_particles: int = 32
     num_planner_particles: int = 32
     num_planner_steps: int = 10
-    total_timesteps: int = int(1e5)
+    total_timesteps: int = int(25e3)
     buffer_size: int = int(1e5)
     batch_size: int = 256
     learning_starts: int = int(5e3)
@@ -245,6 +245,26 @@ def planner_step(
     )
 
 
+def planner_step_dummy(
+    rng_key: PRNGKey,
+    env_obj: POMDPEnv,
+    alg_cfg: DSMCConfig,
+    plan_state: PlanState,
+    train_state: JointTrainState,
+):
+    num_planner_particles = alg_cfg.num_planner_particles
+
+    return PlanState(
+        states=plan_state.states,
+        actions=plan_state.actions,
+        time_idxs=plan_state.time_idxs,
+        log_weights=jnp.zeros((num_planner_particles,)),
+        weights=jnp.ones((num_planner_particles,)),
+        resampling_indices=jnp.arange(num_planner_particles, dtype=jnp.int32),
+        done_flags=plan_state.done_flags,
+    )
+
+
 def planner_run(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
@@ -257,14 +277,28 @@ def planner_run(
         plan_state, key = carry
 
         key, step_key = jax.random.split(key)
-        next_plan_state = planner_step(
-            rng_key=step_key,
-            env_obj=env_obj,
-            alg_cfg=alg_cfg,
-            plan_state=plan_state,
-            train_state=train_state,
-        )
 
+        def _true_fn(_plan_state):
+            _next_plan_state = planner_step(
+                rng_key=step_key,
+                env_obj=env_obj,
+                alg_cfg=alg_cfg,
+                plan_state=_plan_state,
+                train_state=train_state,
+            )
+
+        def _false_fn(_plan_state):
+            _next_plan_state = planner_step_dummy(
+                rng_key=step_key,
+                env_obj=env_obj,
+                alg_cfg=alg_cfg,
+                plan_state=_plan_state,
+                train_state=train_state,
+            )
+
+        next_plan_state = jax.lax.cond(
+            jnp.all(plan_state.done_flags == 0), _true_fn, _false_fn, plan_state
+        )
         return (next_plan_state, key), next_plan_state
 
     key, init_key = jax.random.split(rng_key)
