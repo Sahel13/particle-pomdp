@@ -29,7 +29,8 @@ from ppomdp.utils import (
     weighted_covar,
     effective_sample_size,
     multinomial_resampling,
-    systematic_resampling
+    systematic_resampling,
+    custom_split,
 )
 
 
@@ -181,13 +182,13 @@ def csmc_step(
     belief_state = jax.tree.map(lambda x: x[resampling_idx], belief_state)
 
     # 2. Resample the belief particles.
-    keys = random.split(key, num_particles + 1)
+    key, sub_keys = custom_split(key, num_particles + 1)
     belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
-        keys[1:], belief_state, multinomial_resampling
+        sub_keys, belief_state, multinomial_resampling
     )
 
     # 3. Sample new actions.
-    key, sub_key = random.split(keys[0])
+    key, sub_key = random.split(key)
     carry, actions, log_probs = policy.sample_and_log_prob(
         sub_key, particles.carry, particles.observations, params
     )
@@ -198,9 +199,9 @@ def csmc_step(
     log_probs = log_probs.at[0].set(reference.history_particles.log_probs)
 
     # 4. Propagate the belief particles.
-    keys = random.split(key, num_particles + 1)
+    key, sub_keys = custom_split(key, num_particles + 1)
     belief_particles = jax.vmap(propagate_belief, in_axes=(0, None, 0, 0))(
-        keys[1:], trans_model, belief_state.particles, actions
+        sub_keys, trans_model, belief_state.particles, actions
     )
     belief_state = belief_state._replace(particles=belief_particles)
 
@@ -210,9 +211,9 @@ def csmc_step(
     )
 
     # 5. Sample new observations.
-    keys = random.split(keys[0], num_particles)
+    key, sub_keys = custom_split(key, num_particles + 1)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys, obs_model, belief_state
+        sub_keys, obs_model, belief_state
     )
 
     # replace zeroth observations with reference observation

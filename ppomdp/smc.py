@@ -31,6 +31,7 @@ from ppomdp.utils import (
     systematic_resampling,
     policy_logpdf,
     transition_logpdf,
+    custom_split
 )
 
 
@@ -165,28 +166,28 @@ def smc_step(
     belief_state = jax.tree.map(lambda x: x[resampling_idx], belief_state)
 
     # 2. Resample the belief particles.
-    keys = random.split(key, num_particles + 1)
+    key, sub_keys = custom_split(key, num_particles + 1)
     belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
-        keys[1:], belief_state, resample_fn
+        sub_keys, belief_state, resample_fn
     )
 
     # 3. Sample new actions.
-    key, sub_key = random.split(keys[0])
+    key, action_key = random.split(key)
     carry, actions, log_probs = policy.sample_and_log_prob(
-        sub_key, particles.carry, particles.observations, params
+        action_key, particles.carry, particles.observations, params
     )
 
     # 4. Propagate the belief particles.
-    keys = random.split(key, num_particles + 1)
+    key, sub_keys = custom_split(key, num_particles + 1)
     belief_particles = jax.vmap(propagate_belief, in_axes=(0, None, 0, 0))(
-        keys[1:], trans_model, belief_state.particles, actions
+        sub_keys, trans_model, belief_state.particles, actions
     )
     belief_state = belief_state._replace(particles=belief_particles)
 
     # 5. Sample new observations.
-    keys = random.split(keys[0], num_particles)
+    key, sub_keys = random.split(key, num_particles + 1)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
-        keys, obs_model, belief_state
+        sub_keys, obs_model, belief_state
     )
 
     # 6. Reweight the belief particles.
