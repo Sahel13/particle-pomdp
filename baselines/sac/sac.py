@@ -5,7 +5,7 @@ import jax
 import optax
 
 from jax import Array, random, numpy as jnp
-from flax import linen as nn
+from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from brax.training.replay_buffers import UniformSamplingQueue, ReplayBufferState
 from distrax import Block
@@ -42,6 +42,7 @@ class JointTrainState(NamedTuple):
 def mdp_init(
     rng_key: PRNGKey,
     env_obj: MDPEnv,
+    alg_config: SACConfig,
     policy_state: TrainState,
     random_actions: bool = False,
 ) -> MDPState:
@@ -70,10 +71,11 @@ def mdp_init(
     )
 
 
-@partial(jax.jit, static_argnums=(1, 4), donate_argnums=3)
+@partial(jax.jit, static_argnums=(1, 2, 5), donate_argnums=3)
 def mdp_step(
     rng_key: PRNGKey,
     env_obj: MDPEnv,
+    alg_config: SACConfig,
     mdp_state: MDPState,
     policy_state: TrainState,
     random_actions: bool = False,
@@ -104,7 +106,7 @@ def mdp_step(
         )
 
     def _false_fn(_mdp_state):
-        return mdp_init(rng_key, env_obj, policy_state, random_actions)
+        return mdp_init(rng_key, env_obj, alg_config, policy_state, random_actions)
 
     return jax.lax.cond(
         jnp.all(mdp_state.done_flags == 0), _true_fn, _false_fn, mdp_state
@@ -114,21 +116,20 @@ def mdp_step(
 def create_train_state(
     rng_key: PRNGKey,
     env_obj: MDPEnv,
-    policy_lr: float,
-    critic_lr: float,
+    alg_config: SACConfig,
 ) -> JointTrainState:
     policy_log_std = jnp.ones(env_obj.action_dim)
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,
-        layer_sizes=(256, 256),
+        hidden_sizes=(256, 256),
         output_dim=env_obj.action_dim,
-        init_log_std=nn.initializers.constant(policy_log_std),
+        init_log_std=constant(policy_log_std),
     )
     critic_networks = CriticNetwork(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,
-        layer_sizes=(256, 256),
+        hidden_sizes=(256, 256),
         num_critics=2,
     )
 
@@ -150,12 +151,12 @@ def create_train_state(
     policy_train_state = TrainState.create(
         apply_fn=policy_apply_fn,
         params=policy_params,
-        tx=optax.adam(policy_lr)
+        tx=optax.adam(alg_config.policy_lr)
     )
     critic_train_state = TrainState.create(
         apply_fn=critic_networks.apply,
         params=critic_params,
-        tx=optax.adam(critic_lr)
+        tx=optax.adam(alg_config.critic_lr)
     )
     return JointTrainState(
         policy_train_state,
@@ -169,7 +170,7 @@ def critic_train_step(
     train_state: JointTrainState,
     mdp_state: MDPState,
     alpha: float,
-    gamma: float,
+    gamma: float
 ) -> tuple[JointTrainState, Array]:
     next_actions, next_log_probs, _ = \
         train_state.policy_state.apply_fn(
@@ -253,27 +254,25 @@ def gradient_step(
     rng_key: PRNGKey,
     train_state: JointTrainState,
     mdp_state: MDPState,
-    alpha: float,
-    gamma: float,
+    alg_cfg: SACConfig,
 ) -> tuple[JointTrainState, Array, Array]:
     critic_key, policy_key = random.split(rng_key, 2)
-    train_state, critic_loss = critic_train_step(critic_key, train_state, mdp_state, alpha, gamma)
-    train_state, policy_loss = policy_train_step(policy_key, train_state, mdp_state, alpha)
-    train_state = critic_target_update(train_state, tau=0.005)
+    train_state, critic_loss = critic_train_step(critic_key, train_state, mdp_state, alg_cfg.alpha, alg_cfg.gamma)
+    train_state, policy_loss = policy_train_step(policy_key, train_state, mdp_state, alg_cfg.alpha)
+    train_state = critic_target_update(train_state, alg_cfg.tau)
     return train_state, policy_loss, critic_loss
 
 
-@partial(jax.jit, static_argnums=(1, 3, 6, 7, 8))
+@partial(jax.jit, static_argnums=(1, 2, 4, 7))
 def step_and_train(
     rng_key: PRNGKey,
     env_obj: MDPEnv,
+    alg_config: SACConfig,
     mdp_state: MDPState,
     buffer_obj: UniformSamplingQueue,
     buffer_state: ReplayBufferState,
     train_state: JointTrainState,
     num_steps: int,
-    alpha: float,
-    gamma: float,
 ):
 
     def body(carry, key):
@@ -283,6 +282,7 @@ def step_and_train(
         _mdp_state = mdp_step(
             rng_key=_step_key,
             env_obj=env_obj,
+            alg_config=alg_config,
             mdp_state=_mdp_state,
             policy_state=_train_state.policy_state
         )
@@ -294,8 +294,7 @@ def step_and_train(
                 rng_key=_train_key,
                 train_state=_train_state,
                 mdp_state=_mdp_state_sample,
-                alpha=alpha,
-                gamma=gamma
+                alg_cfg=alg_config
             )
         return (_mdp_state, _buffer_state, _train_state), None
 

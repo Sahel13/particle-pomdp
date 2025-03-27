@@ -7,13 +7,12 @@ from brax.training.replay_buffers import UniformSamplingQueue
 
 from baselines.dvrl.dvrl import (
     DVRLConfig,
-    belief_init,
-    belief_update,
     pomdp_init,
     pomdp_step,
     create_train_state,
     step_and_train
 )
+from baselines.dvrl.utils import belief_init, belief_update
 from ppomdp.envs.pomdps import PendulumEnv as env_obj
 
 import matplotlib.pyplot as plt
@@ -24,15 +23,14 @@ if __name__ == "__main__":
 
     key = random.key(config.seed)
     key, sub_key = random.split(key)
-    train_state, _, _ = \
-        create_train_state(sub_key, env_obj, config.policy_lr, config.critic_lr, config.num_particles)
+    train_state, _, _ = create_train_state(sub_key, env_obj, config)
 
     key, init_key = random.split(key)
     pomdp_state = pomdp_init(
         rng_key=init_key,
         env_obj=env_obj,
+        alg_cfg=config,
         policy_state=train_state.policy_state,
-        num_particles=config.num_particles,
         random_actions=True,
     )
 
@@ -58,6 +56,7 @@ if __name__ == "__main__":
         pomdp_state = pomdp_step(
             rng_key=sub_key,
             env_obj=env_obj,
+            alg_cfg=config,
             policy_state=train_state.policy_state,
             pomdp_state=pomdp_state,
             random_actions=True
@@ -83,13 +82,12 @@ if __name__ == "__main__":
             step_and_train(
                 sub_key,
                 env_obj,
+                config,
                 pomdp_state,
                 buffer_obj,
                 buffer_state,
                 train_state,
                 steps_per_epoch,
-                config.alpha,
-                config.gamma
             )
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "
@@ -101,7 +99,7 @@ if __name__ == "__main__":
     key, obs_key, belief_key = random.split(key, 3)
     state = env_obj.prior_dist.mean()
     observation = env_obj.obs_model.sample(obs_key, state)
-    belief_state = belief_init(belief_key, env_obj, observation, config.num_particles)
+    belief_state = belief_init(belief_key, env_obj, observation, config.num_belief_particles)
 
     def body(carry, rng_key):
         _state, _belief_state = carry

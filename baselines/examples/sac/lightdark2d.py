@@ -19,10 +19,16 @@ if __name__ == "__main__":
 
     key = random.key(config.seed)
     key, sub_key = random.split(key)
-    train_state = create_train_state(sub_key, env_obj, config.policy_lr, config.critic_lr)
+    train_state = create_train_state(sub_key, env_obj, config)
 
     key, sub_key = random.split(key)
-    mdp_state = mdp_init(sub_key, env_obj, train_state.policy_state, True)
+    mdp_state = mdp_init(
+        rng_key=sub_key,
+        env_obj=env_obj,
+        alg_config=config,
+        policy_state=train_state.policy_state,
+        random_actions=True
+    )
 
     # Set up the replay buffer from Brax.
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], mdp_state)
@@ -40,7 +46,14 @@ if __name__ == "__main__":
     # Pre-populate the buffer with random trajectories.
     for global_step in range(1, config.learning_starts):
         key, sub_key = random.split(key)
-        mdp_state = mdp_step(sub_key, env_obj, mdp_state, train_state.policy_state, True)
+        mdp_state = mdp_step(
+            rng_key=sub_key,
+            env_obj=env_obj,
+            alg_config=config,
+            mdp_state=mdp_state,
+            policy_state=train_state.policy_state,
+            random_actions=True
+        )
         buffer_state = buffer_obj.insert(buffer_state, mdp_state)
         if jnp.all(mdp_state.done_flags == 1):
             print(
@@ -63,13 +76,12 @@ if __name__ == "__main__":
             step_and_train(
                 sub_key,
                 env_obj,
+                config,
                 mdp_state,
                 buffer_obj,
                 buffer_state,
                 train_state,
                 steps_per_epoch,
-                config.alpha,
-                config.gamma,
             )
 
         print(
