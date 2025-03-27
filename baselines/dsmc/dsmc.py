@@ -279,7 +279,7 @@ def planner_run(
         key, step_key = jax.random.split(key)
 
         def _true_fn(_plan_state):
-            _next_plan_state = planner_step(
+            return planner_step(
                 rng_key=step_key,
                 env_obj=env_obj,
                 alg_cfg=alg_cfg,
@@ -288,7 +288,7 @@ def planner_run(
             )
 
         def _false_fn(_plan_state):
-            _next_plan_state = planner_step_dummy(
+            return planner_step_dummy(
                 rng_key=step_key,
                 env_obj=env_obj,
                 alg_cfg=alg_cfg,
