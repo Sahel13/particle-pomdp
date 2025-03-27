@@ -35,7 +35,7 @@ from copy import deepcopy
 class SLACConfig(NamedTuple):
     seed: int = 1
     num_belief_particles: int = 32
-    total_timesteps: int = int(1e6)
+    total_timesteps: int = int(25e3)
     buffer_size: int = int(1e6)
     batch_size: int = 256
     learning_starts: int = int(5e3)
@@ -235,7 +235,7 @@ def create_train_state(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,
         hidden_sizes=(256, 256),
-        num_critics=2,
+        num_critics=1,
     )
 
     dummy_particles = jnp.empty((1, alg_cfg.num_belief_particles, env_obj.state_dim))
