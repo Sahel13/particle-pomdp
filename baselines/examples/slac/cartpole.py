@@ -12,7 +12,6 @@ from baselines.slac.slac import (
     create_train_state,
     step_and_train,
 )
-from baselines.slac.utils import get_qmdp_state
 from ppomdp.envs.pomdps import CartPoleEnv as env_obj
 
 import matplotlib.pyplot as plt
@@ -23,22 +22,20 @@ if __name__ == "__main__":
 
     key = random.key(config.seed)
     key, sub_key = random.split(key)
-    train_state, policy_network, _ = \
-        create_train_state(sub_key, env_obj, config.policy_lr, config.critic_lr)
+    train_state, policy_network, _ = create_train_state(sub_key, env_obj, config)
 
     key, init_key = random.split(key)
     pomdp_state = pomdp_init(
         rng_key=init_key,
         env_obj=env_obj,
+        alg_cfg=config,
         policy_state=train_state.policy_state,
         policy_network=policy_network,
-        num_particles=config.num_particles,
         random_actions=True,
     )
-    qmdp_state = get_qmdp_state(pomdp_state)
 
     # Set up the replay buffer from Brax.
-    buffer_entry_prototype = jax.tree.map(lambda x: x[0], qmdp_state)
+    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
     buffer_obj = UniformSamplingQueue(
         config.buffer_size,
         buffer_entry_prototype,
@@ -50,7 +47,7 @@ if __name__ == "__main__":
 
     key, buffer_key = random.split(key)
     buffer_state = buffer_obj.init(buffer_key)
-    buffer_state = buffer_obj.insert(buffer_state, qmdp_state)
+    buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
 
     # Pre-fill the buffer with random actions.
     for global_step in range(1, config.learning_starts):
@@ -58,13 +55,13 @@ if __name__ == "__main__":
         pomdp_state = pomdp_step(
             rng_key=sub_key,
             env_obj=env_obj,
+            alg_cfg=config,
             pomdp_state=pomdp_state,
             policy_state=train_state.policy_state,
             policy_network=policy_network,
             random_actions=True,
         )
-        qmdp_state = get_qmdp_state(pomdp_state)
-        buffer_state = buffer_obj.insert(buffer_state, qmdp_state)
+        buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
         if jnp.all(pomdp_state.done_flags == 1):
             print(
                 f"Step: {global_step:6d} | "
@@ -86,14 +83,13 @@ if __name__ == "__main__":
             step_and_train(
                 sub_key,
                 env_obj,
+                config,
                 pomdp_state,
                 buffer_obj,
                 buffer_state,
                 train_state,
                 policy_network,
                 steps_per_epoch,
-                config.alpha,
-                config.gamma
             )
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "
