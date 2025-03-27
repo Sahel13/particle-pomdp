@@ -23,6 +23,7 @@ class PlanState(NamedTuple):
     log_weights: Array
     weights: Array
     resampling_indices: Array
+    done_flags: Array
 
 
 def sample_random_actions(

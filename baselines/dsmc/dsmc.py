@@ -39,6 +39,7 @@ class DSMCConfig(NamedTuple):
     seed: int = 1
     num_belief_particles: int = 32
     num_planner_particles: int = 32
+    num_planner_steps: int = 10
     total_timesteps: int = int(1e5)
     buffer_size: int = int(1e5)
     batch_size: int = 256
@@ -147,6 +148,8 @@ def planner_init(
     )
 
     time_idxs = init_time_idx * jnp.ones((num_planner_particles,), dtype=jnp.int32)
+    done_flags = jnp.zeros((num_planner_particles,), dtype=jnp.int32)
+
     log_weights = jnp.zeros((num_planner_particles,))
     weights = jnp.ones((num_planner_particles,))
     resampling_indices = jnp.zeros((num_planner_particles,), dtype=jnp.int32)
@@ -158,6 +161,7 @@ def planner_init(
         log_weights=log_weights,
         weights=weights,
         resampling_indices=resampling_indices,
+        done_flags=done_flags,
     )
 
 
@@ -237,6 +241,7 @@ def planner_step(
         log_weights=log_weights,
         weights=weights,
         resampling_indices=resampling_idx,
+        done_flags=done_flags,
     )
 
 
@@ -248,7 +253,7 @@ def planner_run(
     belief_state: BeliefState,
     train_state: JointTrainState,
 ):
-    def planner_loop(carry, time_idx):
+    def planner_loop(carry, _):
         plan_state, key = carry
 
         key, step_key = jax.random.split(key)
@@ -275,7 +280,7 @@ def planner_run(
     _, plan_states = jax.lax.scan(
         planner_loop,
         (init_plan_state, key),
-        jnp.arange(0, env_obj.num_time_steps)
+        jnp.arange(0, alg_cfg.num_planner_steps)
     )
 
     def concat_trees(x, y):
