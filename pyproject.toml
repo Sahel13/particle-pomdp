@@ -16,7 +16,8 @@ dependencies = [
   "distrax",
   "optax",
   "brax",
-  "matplotlib"
+  "matplotlib",
+  "pandas",
 ]
 
 [tool.setuptools]
