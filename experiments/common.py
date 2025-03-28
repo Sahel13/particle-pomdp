@@ -1,32 +1,48 @@
 import argparse
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 from jax import Array
 
-from ppomdp import envs
-from ppomdp.envs.base import Environment
+from ppomdp.envs import pomdps
+from ppomdp.envs.core import POMDPEnv
 
 
 def get_cmd_args():
+    """Command line arguments common to all algorithms."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, help="Seed for PRNGs", default=0)
     parser.add_argument(
         "--env",
         type=str,
         help="Environment name",
-        choices=["pendulum", "cartpole", "target-interception", "light-dark"],
+        choices=[
+            "pendulum",
+            "cartpole",
+            "target-interception",
+            "light-dark-1D",
+            "light-dark-2D",
+        ],
+    )
+    parser.add_argument(
+        "--log_dir", type=str, help="Logging directory", default=f"logs/{timestamp}"
     )
     return parser.parse_args()
 
 
-def get_env(env_name: str) -> Environment:
+def get_env(env_name: str) -> POMDPEnv:
     if env_name == "pendulum":
-        return envs.PendulumEnv
+        return pomdps.PendulumEnv
     elif env_name == "cartpole":
-        return envs.CartPoleEnv
+        return pomdps.CartPoleEnv
     elif env_name == "target-interception":
-        return envs.TargetInterceptionEnv
+        return pomdps.TargetEnv
+    elif env_name == "light-dark-1D":
+        return pomdps.LightDark1DEnv
     else:
-        return envs.LightDarkEnv
+        return pomdps.LightDark2DEnv
 
 
 def plot_trajectory(env_name: str, states: Array, actions: Array):
