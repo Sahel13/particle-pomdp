@@ -1,6 +1,6 @@
 # Experiments
 
 Usage:
-```bash
+```console
 $ ./run.sh dual_smc pendulum
 ```
