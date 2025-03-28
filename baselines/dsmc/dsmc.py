@@ -269,15 +269,27 @@ def planner_run(
     def planner_loop(carry, _):
         plan_state, key = carry
         key, step_key = random.split(key)
+
+        def _true_fn(_plan_state):
+            return planner_step(
+                rng_key=step_key,
+                env_obj=env_obj,
+                alg_cfg=alg_cfg,
+                plan_state=_plan_state,
+                train_state=train_state,
+            )
+
+        def _false_fn(_plan_state):
+            return planner_step_dummy(
+                rng_key=step_key,
+                env_obj=env_obj,
+                alg_cfg=alg_cfg,
+                plan_state=_plan_state,
+                train_state=train_state,
+            )
+
         next_plan_state = jax.lax.cond(
-            jnp.all(plan_state.done_flags == 0),
-            planner_step,
-            planner_step_dummy,
-            step_key,
-            env_obj,
-            alg_cfg,
-            plan_state,
-            train_state,
+            jnp.all(plan_state.done_flags == 0), _true_fn, _false_fn, plan_state
         )
         return (next_plan_state, key), next_plan_state
 
