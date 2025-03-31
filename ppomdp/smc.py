@@ -185,7 +185,7 @@ def smc_step(
     belief_state = belief_state._replace(particles=belief_particles)
 
     # 5. Sample new observations.
-    key, sub_keys = random.split(key, num_particles + 1)
+    key, sub_keys = custom_split(key, num_particles + 1)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         sub_keys, obs_model, belief_state
     )
