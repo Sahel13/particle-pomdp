@@ -22,8 +22,8 @@ def get_cmd_args():
             "pendulum",
             "cartpole",
             "target-interception",
-            "light-dark-1D",
-            "light-dark-2D",
+            "light-dark-1d",
+            "light-dark-2d",
         ],
     )
     parser.add_argument(
@@ -39,7 +39,7 @@ def get_env(env_name: str) -> POMDPEnv:
         return pomdps.CartPoleEnv
     elif env_name == "target-interception":
         return pomdps.TargetEnv
-    elif env_name == "light-dark-1D":
+    elif env_name == "light-dark-1d":
         return pomdps.LightDark1DEnv
     else:
         return pomdps.LightDark2DEnv
@@ -101,7 +101,7 @@ def plot_trajectory(env_name: str, states: Array, actions: Array):
         plt.legend()
         plt.tight_layout()
         plt.show()
-    elif env_name == "light-dark":
+    elif env_name == "light-dark-2d":
         plt.figure()
         plt.title("Simulated trajectory")
         plt.plot(states[:, 0], states[:, 1], "g-")
