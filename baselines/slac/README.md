@@ -5,10 +5,7 @@ A modified version of the stochastic latent actor-critic (SLAC) algorithm [1]. I
 2. Instead of parametrizing the belief state with a Gaussian distribution, we use a particle filter.
 
 ## Usage
-Specify the required environment in `slac.py`. Then run
-```python
-$ python slac.py
-```
+See `experiments/slac.py`.
 
 ## References
 1. Lee, Alex X., et al. "Stochastic latent actor-critic: Deep reinforcement
