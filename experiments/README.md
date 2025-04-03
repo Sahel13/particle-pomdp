@@ -7,7 +7,7 @@ Usage:
 Outputs will be saved in `./logs/<algorithm>_<environment>_<timestamp>`.
 
 Available algorithms:
-1. nsmc
+1. ours
 2. slac
 3. dual_smc
 

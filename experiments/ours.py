@@ -19,13 +19,14 @@ from ppomdp.gauss import (
     train_recurrent_gauss_policy,
 )
 from ppomdp.smc import backward_tracing, smc
-from ppomdp.utils import batch_data, custom_split, weighted_mean
-import matplotlib.pyplot as plt
+from ppomdp.utils import batch_data, custom_split
 
 
 @partial(jax.jit, static_argnames=("env", "policy", "num_samples"))
 def evaluate(key, env, policy, train_state, num_samples=100):
-    """Deploy the policy to sample trajectories and evaluate the average reward."""
+    """Deploy the (deterministic) policy to sample trajectories and evaluate the average reward."""
+    eval_params = train_state.params.copy()
+    eval_params["log_std"] = -20.0 * jnp.ones_like(eval_params["log_std"])
 
     def body(carry, _key):
         states, policy_carry, observations, t = carry
@@ -33,7 +34,7 @@ def evaluate(key, env, policy, train_state, num_samples=100):
         # Sample actions.
         _key, action_key = random.split(_key)
         policy_carry, actions = policy.sample(
-            action_key, policy_carry, observations, train_state.params
+            action_key, policy_carry, observations, eval_params
         )
         # Sample next states.
         _key, state_keys = custom_split(_key, num_samples + 1)
@@ -62,30 +63,32 @@ def evaluate(key, env, policy, train_state, num_samples=100):
     return expected_reward, states, actions
 
 
+# Configuration
 cmd_args = common.get_cmd_args()
 env = common.get_env(cmd_args.env)
 key = random.key(cmd_args.seed)
 
-num_history_particles = 256
+num_history_particles = 128
 num_belief_particles = 256
+
+# TODO: Reduce this, running dsmc for 1 million steps is too much.
+total_timesteps = int(1e6)
 
 slew_rate_penalty = 0.0
 tempering = 0.5
 
 learning_rate = 1e-3
 batch_size = 64
-num_epochs = 500
 
 if cmd_args.env == "cartpole":
-    tempering = 0.25
+    tempering = 0.3
     batch_size = 32
-    slew_rate_penalty = 5e-4
-    num_epochs = 200
+    slew_rate_penalty = 5e-2
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
     encoder_size=(256, 256),
-    recurr_size=(32, 32),
+    recurr_size=(128, 128),
 )
 
 decoder = MLPDecoder(
@@ -96,7 +99,7 @@ decoder = MLPDecoder(
 network = RecurrentNeuralGauss(
     encoder=encoder,
     decoder=decoder,
-    init_log_std=constant(jnp.log(1.0)),
+    init_log_std=constant(jnp.log(2.0)),
 )
 
 bijector = Block(Tanh(), ndims=1)
@@ -124,68 +127,59 @@ print(f"Step: {num_steps:7d} | Expected reward: {expected_reward:8.3f}")
 logger.append([num_steps, expected_reward])
 
 # run init nested smc
-key, sub_key = random.split(key)
-history_states, belief_states, belief_infos, _ = smc(
-    sub_key,
-    env.num_time_steps,
-    num_history_particles,
-    num_belief_particles,
-    env.prior_dist,
-    env.trans_model,
-    env.obs_model,
-    policy,
-    train_state.params,
-    env.reward_fn,
-    tempering,
-    slew_rate_penalty,
-)
-num_steps += num_history_particles * (env.num_time_steps + 1)
+# key, sub_key = random.split(key)
+# history_states, belief_states, belief_infos, _ = smc(
+#     sub_key,
+#     env.num_time_steps,
+#     num_history_particles,
+#     num_belief_particles,
+#     env.prior_dist,
+#     env.trans_model,
+#     env.obs_model,
+#     policy,
+#     train_state.params,
+#     env.reward_fn,
+#     tempering,
+#     slew_rate_penalty,
+# )
+# num_steps += num_history_particles * (env.num_time_steps + 1)
 
 # trace ancestors of history states
-key, sub_key = random.split(key)
-traced_history, traced_belief, _ = backward_tracing(
-    sub_key, history_states, belief_states, belief_infos
-)
-
-# mean_particles = weighted_mean(
-#     traced_belief.particles, traced_belief.weights
+# key, sub_key = random.split(key)
+# traced_history, traced_belief, _ = backward_tracing(
+#     sub_key, history_states, belief_states, belief_infos
 # )
-# actions = traced_history.actions[:, :, 0]
-#
-# fig, axs = plt.subplots(5, 1, figsize=(10, 15))
-# fig.suptitle("Smoothed trajectories")
-# axs[0].plot(mean_particles[:, :, 0])
-# axs[0].set_ylabel("Cart position")
-# axs[0].grid(True)
-# axs[1].plot(mean_particles[:, :, 1])
-# axs[1].set_ylabel("Pole angle")
-# axs[1].grid(True)
-# axs[2].plot(mean_particles[:, :, 2])
-# axs[2].set_ylabel("Cart velocity")
-# axs[2].grid(True)
-# axs[3].plot(mean_particles[:, :, 3])
-# axs[3].set_ylabel("Pole angular velocity")
-# axs[3].grid(True)
-# axs[4].plot(actions)
-# axs[4].set_ylabel("Action")
-# axs[4].set_xlabel("Time step")
-# axs[4].grid(True)
-# plt.tight_layout()
-# plt.show()
 
 # sample a new reference
-key, sub_key = random.split(key)
-idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-reference = Reference(
-    history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-    belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief),
-)
+# key, sub_key = random.split(key)
+# idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
+# reference = Reference(
+#     history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
+#     belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief),
+# )
 
-# The training loop
-for i in range(1, num_epochs + 1):
+# The training loop.
+while num_steps <= total_timesteps:
     # run nested conditional smc
+    # key, sub_key = random.split(key)
+    # history_states, belief_states, belief_infos, log_marginal = csmc(
+    #     sub_key,
+    #     env.num_time_steps,
+    #     num_history_particles,
+    #     num_belief_particles,
+    #     env.prior_dist,
+    #     env.trans_model,
+    #     env.obs_model,
+    #     policy,
+    #     train_state.params,
+    #     env.reward_fn,
+    #     tempering,
+    #     slew_rate_penalty,
+    #     reference,
+    # )
+
     key, sub_key = random.split(key)
-    history_states, belief_states, belief_infos, log_marginal = csmc(
+    history_states, belief_states, belief_infos, log_marginal = smc(
         sub_key,
         env.num_time_steps,
         num_history_particles,
@@ -198,8 +192,8 @@ for i in range(1, num_epochs + 1):
         env.reward_fn,
         tempering,
         slew_rate_penalty,
-        reference,
     )
+    num_steps += num_history_particles * (env.num_time_steps + 1)
 
     # trace ancestors of history states
     key, sub_key = random.split(key)
@@ -208,39 +202,34 @@ for i in range(1, num_epochs + 1):
     )
 
     # sample a new reference
-    key, sub_key = random.split(key)
-    idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-    reference = Reference(
-        history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-        belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief),
-    )
+    # key, sub_key = random.split(key)
+    # idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
+    # reference = Reference(
+    #     history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
+    #     belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief),
+    # )
 
     # update policy parameters
-    key, sub_key = random.split(key)
-    batch_indices = batch_data(sub_key, num_history_particles, batch_size)
-    for batch_idx in batch_indices:
-        history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
-        train_state, _ = train_recurrent_gauss_policy(
-            policy, train_state, history_batch
-        )
+    for _ in range(5):
+        key, sub_key = random.split(key)
+        batch_indices = batch_data(sub_key, num_history_particles, batch_size)
+        for batch_idx in batch_indices:
+            history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
+            train_state, _ = train_recurrent_gauss_policy(
+                policy, train_state, history_batch
+            )
 
-    entropy = policy.entropy(train_state.params)
-
-    # Evaluate the policy
-    num_steps += num_history_particles * (env.num_time_steps + 1)
+    # Evaluate the policy.
     key, sub_key = random.split(key)
     expected_reward, states, actions = evaluate(sub_key, env, policy, train_state)
     logger.append([num_steps, expected_reward])
 
     print(
-        f"Epoch: {i:3d} | "
         f"Step: {num_steps:7d} | "
         f"Log marginal: {log_marginal:8.3f} | "
         f"Expected reward: {expected_reward:8.3f} | "
-        f"Log std: {train_state.params["log_std"][0]:8.4f} | "
+        f"Log std: {train_state.params["log_std"][0]:8.4f}"
     )
-
-common.plot_trajectory(cmd_args.env, states, actions)
 
 # Save the logging data.
 with open(file_path, mode="a", newline="") as file:
