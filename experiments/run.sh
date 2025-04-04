@@ -14,8 +14,11 @@ mkdir -p "$log_dir"
 # Loop over seeds.
 for seed in {0..9}
 do
+    echo "\nRunning seed $seed.\n"
     python "$algorithm.py" --seed "$seed" --env "$environment" --log_dir "$log_dir"
 done
 
 # Process the data for plotting.
 python post_process.py --folder "./$log_dir"
+
+echo "\nExperiments complete. Results saved in ./$log_dir.\n"
