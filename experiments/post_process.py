@@ -38,9 +38,7 @@ def combine_csv_files(folder_name: str):
 
 
 parser = argparse.ArgumentParser(description="Combine CSV files.")
-parser.add_argument(
-    "--folder", type=str, required=True, help="Folder containing the CSV files"
-)
+parser.add_argument("--folder", type=str, required=True, help="Folder containing the CSV files")
 args = parser.parse_args()
 
 combine_csv_files(args.folder)

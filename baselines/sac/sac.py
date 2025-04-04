@@ -22,7 +22,7 @@ from copy import deepcopy
 
 class SACConfig(NamedTuple):
     seed: int = 1
-    total_timesteps: int = int(1e5)
+    total_time_steps: int = int(1e5)
     buffer_size: int = int(1e5)
     batch_size: int = 256
     learning_starts: int = int(5e3)

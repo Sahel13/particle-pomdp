@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     # Training loop - slightly faster training with `jax.lax.scan`.
     for global_step in range(
-        config.learning_starts, config.total_timesteps, steps_per_epoch
+        config.learning_starts, config.total_time_steps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
         pomdp_state, buffer_state, train_state = \

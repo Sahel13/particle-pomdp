@@ -32,9 +32,8 @@ def ode(s: Array, a: Array) -> Array:
     cth = jnp.cos(q)
 
     xdd = (a + mp * sth * (l * qd**2 + g * cth)) / (mc + mp * sth**2)
-    qdd = (-a * cth - mp * l * qd**2 * cth * sth - (mc + mp) * g * sth) / (
-        l * mc + l * mp * sth**2
-    )
+    qdd = (-a * cth - mp * l * qd**2 * cth * sth - (mc + mp) * g * sth) \
+          / (l * mc + l * mp * sth**2)
     return jnp.hstack((xd, qd, xdd, qdd))
 
 
@@ -59,7 +58,7 @@ def log_prob_trans(sn: Array, s: Array, a: Array) -> Array:
 
 
 def mean_obs(s: Array) -> Array:
-    x, q = s[:2]
+    x, q, _, _ = s
     return jnp.array([x, jnp.sin(q), jnp.cos(q)])
 
 
@@ -84,7 +83,11 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
         return jnp.hstack((x, _q, xd, qd))
 
     g = jnp.array([0.0, jnp.pi, 0.0, 0.0])
-    h = jax.lax.select(t > 0, jnp.array([1e-1, 1e0, 1e-2, 1e-2]), jnp.zeros(4))
+    h = jax.lax.select(
+        t > 0,
+        jnp.array([1e-1, 1e0, 1e-2, 1e-2]),
+        jnp.zeros(4)
+    )
     r = jnp.array([1e-3])
 
     s = wrap_angle(s) - g

@@ -69,7 +69,7 @@ if __name__ == "__main__":
 
     # Training loop.
     for global_step in range(
-            config.learning_starts, config.total_timesteps, steps_per_epoch
+            config.learning_starts, config.total_time_steps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
         mdp_state, buffer_state, train_state = \

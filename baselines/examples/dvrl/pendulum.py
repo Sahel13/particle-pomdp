@@ -75,7 +75,7 @@ if __name__ == "__main__":
     steps_per_epoch = 10 * (env_obj.num_time_steps + 1)
 
     for global_step in range(
-        config.learning_starts, config.total_timesteps, steps_per_epoch
+        config.learning_starts, config.total_time_steps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
         pomdp_state, buffer_state, train_state = \

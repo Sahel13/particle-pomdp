@@ -1,6 +1,5 @@
 from copy import deepcopy
 from functools import partial
-from typing import Dict, NamedTuple
 
 import jax
 import optax
@@ -12,37 +11,20 @@ from jax import Array, random
 from jax import numpy as jnp
 
 from baselines.slac.arch import CriticNetwork, PolicyNetwork
-from baselines.slac.utils import (
+from baselines.slac.utils import SLACConfig, policy_sample_and_log_prob
+from baselines.common import (
+    JointTrainState,
     belief_init,
     belief_update,
-    policy_sample_and_log_prob,
     sample_random_actions,
     sample_hidden_states,
 )
+
 from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.bijector import Tanh
 from ppomdp.core import BeliefState, Carry, PRNGKey
 from ppomdp.envs.core import POMDPEnv, POMDPState
 from ppomdp.utils import custom_split
-
-
-class SLACConfig(NamedTuple):
-    num_belief_particles: int = 64
-    total_timesteps: int = int(1e6)
-    buffer_size: int = int(1e6)
-    batch_size: int = 256
-    learning_starts: int = int(5e3)
-    policy_lr: float = 1e-4
-    critic_lr: float = 1e-3
-    alpha: float = 0.2
-    gamma: float = 0.995
-    tau: float = 0.005
-
-
-class JointTrainState(NamedTuple):
-    policy_state: TrainState
-    critic_state: TrainState
-    critic_target_params: Dict
 
 
 def _pomdp_base(
@@ -439,7 +421,10 @@ def evaluate(
         # Sample actions.
         _key, action_key = random.split(_key)
         policy_carry, _, _, actions = train_state.policy_state.apply_fn(
-            action_key, policy_carry, observations, train_state.policy_state.params
+            rng_key=action_key,
+            carry=policy_carry,
+            observation=observations,
+            params=train_state.policy_state.params
         )
         # Compute rewards.
         rewards = jax.vmap(env.reward_fn, (0, 0, None))(states, actions, t)

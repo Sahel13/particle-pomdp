@@ -2,8 +2,9 @@ import csv
 import os
 from functools import partial
 
-import common
 import jax
+# jax.config.update("jax_enable_x64", True)
+
 from distrax import Block
 from flax.linen.initializers import constant
 from jax import numpy as jnp
@@ -11,15 +12,42 @@ from jax import random
 
 from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.bijector import Tanh
-from ppomdp.core import Reference
-from ppomdp.csmc import csmc
-from ppomdp.gauss import (
-    RecurrentNeuralGauss,
-    create_recurrent_gauss_policy,
-    train_recurrent_gauss_policy,
-)
+from ppomdp.core import HistoryParticles, Reference
+from ppomdp.gauss import RecurrentNeuralGauss, create_recurrent_gauss_policy
 from ppomdp.smc import backward_tracing, smc
+from ppomdp.csmc import csmc
 from ppomdp.utils import batch_data, custom_split
+
+import common
+
+
+@jax.jit
+def prepare_training_data(particles: HistoryParticles) -> HistoryParticles:
+    if particles.observations.ndim != 3:
+        raise ValueError("`particles` must be the output from smoothing.")
+
+    actions = particles.actions[1:]
+    particles = jax.tree.map(lambda x: x[:-1], particles)
+    particles = particles._replace(actions=actions)
+    return jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles)
+
+
+@partial(jax.jit, static_argnames="policy")
+def train_recurrent_gauss_policy(policy, train_state, particles, batch_idx):
+    if particles.observations.ndim != 2:
+        raise ValueError(
+            "`particles.observations` must have shape `(batch_dim, obs_dim)`."
+        )
+
+    data = jax.tree.map(lambda x: x[batch_idx], particles)
+
+    def loss_fn(params):
+        log_probs = policy.log_prob(data.actions, data.carry, data.observations, params)
+        return -1.0 * jnp.mean(log_probs)
+
+    loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
+    train_state = train_state.apply_gradients(grads=grads)
+    return train_state, loss
 
 
 @partial(jax.jit, static_argnames=("env", "policy", "num_samples"))
@@ -68,22 +96,13 @@ cmd_args = common.get_cmd_args()
 env = common.get_env(cmd_args.env)
 key = random.key(cmd_args.seed)
 
+total_time_steps = int(1e6)
 num_history_particles = 128
-num_belief_particles = 256
-
-# TODO: Reduce this, running dsmc for 1 million steps is too much.
-total_timesteps = int(1e6)
-
-slew_rate_penalty = 0.0
-tempering = 0.5
-
-learning_rate = 1e-3
-batch_size = 64
-
-if cmd_args.env == "cartpole":
-    tempering = 0.3
-    batch_size = 32
-    slew_rate_penalty = 5e-2
+num_belief_particles = 64
+tempering = 0.3
+learning_rate = 1e-4
+batch_size = 256
+slew_rate_penalty = 5e-2
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
@@ -99,7 +118,7 @@ decoder = MLPDecoder(
 network = RecurrentNeuralGauss(
     encoder=encoder,
     decoder=decoder,
-    init_log_std=constant(jnp.log(2.0)),
+    init_log_std=constant(1.0),
 )
 
 bijector = Block(Tanh(), ndims=1)
@@ -126,60 +145,44 @@ expected_reward, *_ = evaluate(sub_key, env, policy, train_state)
 print(f"Step: {num_steps:7d} | Expected reward: {expected_reward:8.3f}")
 logger.append([num_steps, expected_reward])
 
+
 # run init nested smc
-# key, sub_key = random.split(key)
-# history_states, belief_states, belief_infos, _ = smc(
-#     sub_key,
-#     env.num_time_steps,
-#     num_history_particles,
-#     num_belief_particles,
-#     env.prior_dist,
-#     env.trans_model,
-#     env.obs_model,
-#     policy,
-#     train_state.params,
-#     env.reward_fn,
-#     tempering,
-#     slew_rate_penalty,
-# )
-# num_steps += num_history_particles * (env.num_time_steps + 1)
+key, sub_key = random.split(key)
+history_states, belief_states, belief_infos, _ = \
+    smc(
+        sub_key,
+        env.num_time_steps,
+        num_history_particles,
+        num_belief_particles,
+        env.prior_dist,
+        env.trans_model,
+        env.obs_model,
+        policy,
+        train_state.params,
+        env.reward_fn,
+        tempering,
+        slew_rate_penalty
+    )
 
 # trace ancestors of history states
-# key, sub_key = random.split(key)
-# traced_history, traced_belief, _ = backward_tracing(
-#     sub_key, history_states, belief_states, belief_infos
-# )
+key, sub_key = random.split(key)
+traced_history, traced_belief, _ = \
+    backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
 # sample a new reference
-# key, sub_key = random.split(key)
-# idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-# reference = Reference(
-#     history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-#     belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief),
-# )
+key, sub_key = random.split(key)
+idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
+reference = Reference(
+    history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
+    belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
+)
+
 
 # The training loop.
-while num_steps <= total_timesteps:
-    # run nested conditional smc
-    # key, sub_key = random.split(key)
-    # history_states, belief_states, belief_infos, log_marginal = csmc(
-    #     sub_key,
-    #     env.num_time_steps,
-    #     num_history_particles,
-    #     num_belief_particles,
-    #     env.prior_dist,
-    #     env.trans_model,
-    #     env.obs_model,
-    #     policy,
-    #     train_state.params,
-    #     env.reward_fn,
-    #     tempering,
-    #     slew_rate_penalty,
-    #     reference,
-    # )
-
+while num_steps <= total_time_steps:
+    # Run the particle filter.
     key, sub_key = random.split(key)
-    history_states, belief_states, belief_infos, log_marginal = smc(
+    history_states, belief_states, belief_infos, log_marginal = csmc(
         sub_key,
         env.num_time_steps,
         num_history_particles,
@@ -192,32 +195,33 @@ while num_steps <= total_timesteps:
         env.reward_fn,
         tempering,
         slew_rate_penalty,
+        reference
     )
     num_steps += num_history_particles * (env.num_time_steps + 1)
 
-    # trace ancestors of history states
+    # Get the smoothed trajectories using genealogy tracking.
     key, sub_key = random.split(key)
     traced_history, traced_belief, _ = backward_tracing(
         sub_key, history_states, belief_states, belief_infos
     )
 
     # sample a new reference
-    # key, sub_key = random.split(key)
-    # idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-    # reference = Reference(
-    #     history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-    #     belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief),
-    # )
+    key, sub_key = random.split(key)
+    idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
+    reference = Reference(
+        history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
+        belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
+    )
 
-    # update policy parameters
-    for _ in range(5):
-        key, sub_key = random.split(key)
-        batch_indices = batch_data(sub_key, num_history_particles, batch_size)
-        for batch_idx in batch_indices:
-            history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
-            train_state, _ = train_recurrent_gauss_policy(
-                policy, train_state, history_batch
-            )
+    # Update policy parameters.
+    training_data = prepare_training_data(traced_history)
+    num_data_points = training_data.observations.shape[0]
+    key, sub_key = random.split(key)
+    batch_indices = batch_data(sub_key, num_data_points, batch_size)
+    for batch_idx in batch_indices:
+        train_state, _ = train_recurrent_gauss_policy(
+            policy, train_state, training_data, batch_idx
+        )
 
     # Evaluate the policy.
     key, sub_key = random.split(key)
@@ -231,7 +235,7 @@ while num_steps <= total_timesteps:
         f"Log std: {train_state.params['log_std'][0]:8.4f}"
     )
 
-# Save the logging data.
-with open(file_path, mode="a", newline="") as file:
-    writer = csv.writer(file)
-    writer.writerows(logger)
+# # Save the logging data.
+# with open(file_path, mode="a", newline="") as file:
+#     writer = csv.writer(file)
+#     writer.writerows(logger)

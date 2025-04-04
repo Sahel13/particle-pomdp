@@ -7,18 +7,18 @@ export CUDA_VISIBLE_DEVICES=0
 algorithm=${1:?No algorithm specified. Usage: ./run.sh <algorithm> <environment>}
 environment=${2:?No environment specified. Usage: ./run.sh <algorithm> <environment>}
 
-# Create a directory for logging.
-log_dir="logs/${algorithm}_${environment}_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$log_dir"
+## Create a directory for logging.
+#log_dir="logs/${algorithm}_${environment}_$(date +%Y%m%d_%H%M%S)"
+#mkdir -p "$log_dir"
 
 # Loop over seeds.
 for seed in {0..9}
 do
     echo "\nRunning seed $seed.\n"
-    python "$algorithm.py" --seed "$seed" --env "$environment" --log_dir "$log_dir"
+    python "run_$algorithm.py" --seed "$seed" --env_id "$environment"
 done
 
-# Process the data for plotting.
-python post_process.py --folder "./$log_dir"
-
-echo "\nExperiments complete. Results saved in ./$log_dir.\n"
+## Process the data for plotting.
+#python post_process.py --folder "./$log_dir"
+#
+#echo "\nExperiments complete. Results saved in ./$log_dir.\n"

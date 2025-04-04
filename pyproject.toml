@@ -18,6 +18,8 @@ dependencies = [
   "brax",
   "matplotlib",
   "pandas",
+  "wandb",
+  "tyro",
 ]
 
 [tool.setuptools]
