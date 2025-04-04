@@ -3,14 +3,16 @@ from functools import partial
 from typing import Callable, Dict
 
 import jax
-from jax import Array, random, numpy as jnp
+from jax import Array, random
+from jax import numpy as jnp
 
 from ppomdp.core import (
-    PRNGKey,
-    Carry,
     BeliefState,
-    ObservationModel,
+    Carry,
+    HistoryParticles,
     HistoryState,
+    ObservationModel,
+    PRNGKey,
     RecurrentPolicy,
     RewardFn,
     TransitionModel,
@@ -382,6 +384,7 @@ def effective_sample_size(log_weights: Array) -> Array:
     return jnp.exp(log_ess(log_weights))
 
 
+@partial(jax.jit, static_argnames=("data_size", "batch_size", "skip_last"))
 def batch_data(
     rng_key: Array,
     data_size: int,
