@@ -140,8 +140,8 @@ def create_recurrent_gauss_policy(
     def entropy(params: Parameters) -> Array:
         sigma = jnp.diag(jnp.exp(2. * params["log_std"]))
         return 0.5 * (
-                network.dim * jnp.log(2.0 * jnp.pi * jnp.exp(1))
-                + jnp.linalg.slogdet(sigma)[1]
+            network.dim * jnp.log(2.0 * jnp.pi * jnp.exp(1))
+            + jnp.linalg.slogdet(sigma)[1]
         )
 
     def init(

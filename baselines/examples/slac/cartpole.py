@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
     config = SLACConfig()
 
-    key = random.key(config.seed)
+    key = random.key(1)
     key, sub_key = random.split(key)
     train_state, policy_network, _ = create_train_state(sub_key, env_obj, config)
 

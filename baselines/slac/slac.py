@@ -122,7 +122,6 @@ def pomdp_init(
             policy_state=policy_state,
             random_actions=random_actions,
         )
-    )
 
     time_idxs = jnp.zeros(env_obj.num_envs, dtype=jnp.int32)
     rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
@@ -166,7 +165,7 @@ def pomdp_step(
         observations = _pomdp_state.next_observations
         belief_states = _pomdp_state.next_belief_states
 
-        next_states, next_carry, next_observations, next_belief_states, actions = (
+        next_states, next_carry, next_observations, next_belief_states, actions = \
             _pomdp_base(
                 rng_key=rng_key,
                 env_obj=env_obj,
@@ -178,13 +177,10 @@ def pomdp_step(
                 policy_state=policy_state,
                 random_actions=random_actions,
             )
-        )
 
         rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
         total_rewards = _pomdp_state.total_rewards + rewards
-        done_flags = jnp.where(time_idxs == env_obj.num_time_steps, 1, 0).astype(
-            jnp.int32
-        )
+        done_flags = jnp.where(time_idxs == env_obj.num_time_steps, 1, 0).astype(jnp.int32)
 
         return POMDPState(
             states=states,
@@ -203,9 +199,7 @@ def pomdp_step(
         )
 
     def _false_fn(_pomdp_state):
-        return pomdp_init(
-            rng_key, env_obj, alg_cfg, policy_state, policy_network, random_actions
-        )
+        return pomdp_init(rng_key, env_obj, alg_cfg, policy_state, policy_network, random_actions)
 
     return jax.lax.cond(
         jnp.all(pomdp_state.done_flags == 0), _true_fn, _false_fn, pomdp_state
@@ -244,20 +238,20 @@ def create_train_state(
     dummy_time = jnp.empty((1,), dtype=jnp.int32)
 
     critic_key, policy_key = random.split(rng_key)
-    policy_params = policy_network.init(policy_key, dummy_carry, dummy_observations)[
-        "params"
-    ]
-    critic_params = critic_networks.init(
-        critic_key, dummy_states, dummy_actions, dummy_time
-    )
+    policy_params = policy_network.init(policy_key, dummy_carry, dummy_observations)["params"]
+    critic_params = critic_networks.init(critic_key, dummy_states, dummy_actions, dummy_time)
     critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
 
     policy_bijector = Block(Tanh(), ndims=1)
     policy_apply_fn = partial(
-        policy_sample_and_log_prob, network=policy_network, bijector=policy_bijector
+        policy_sample_and_log_prob,
+        network=policy_network,
+        bijector=policy_bijector
     )
     policy_train_state = TrainState.create(
-        apply_fn=policy_apply_fn, params=policy_params, tx=optax.adam(alg_cfg.policy_lr)
+        apply_fn=policy_apply_fn,
+        params=policy_params,
+        tx=optax.adam(alg_cfg.policy_lr)
     )
     critic_train_state = TrainState.create(
         apply_fn=critic_networks.apply,
@@ -265,7 +259,9 @@ def create_train_state(
         tx=optax.adam(alg_cfg.critic_lr),
     )
     train_state = JointTrainState(
-        policy_train_state, critic_train_state, critic_target_params
+        policy_train_state,
+        critic_train_state,
+        critic_target_params
     )
     return train_state, policy_network, critic_networks
 
@@ -358,7 +354,10 @@ def policy_train_step(
             pomdp_state.belief_states.weights,
         )
         values = train_state.critic_state.apply_fn(
-            train_state.critic_state.params, _states, actions, pomdp_state.time_idxs
+            train_state.critic_state.params,
+            _states,
+            actions,
+            pomdp_state.time_idxs
         )
         min_values = jnp.min(values, axis=-1)
         return jnp.mean(alpha * log_probs - min_values)

@@ -206,8 +206,7 @@ def planner_step(
         rng_key=action_key,
         params=train_state.policy_state.params,
         particles=next_states,
-        weights=jnp.ones((num_planner_particles, num_belief_particles))
-        / num_belief_particles,
+        weights=jnp.ones((num_planner_particles, num_belief_particles)) / num_belief_particles,
     )
 
     # reweight with advantage
