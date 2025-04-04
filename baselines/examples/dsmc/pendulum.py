@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
     config = DSMCConfig()
 
-    key = random.key(config.seed)
+    key = random.key(1)
     key, sub_key = random.split(key)
     train_state, _, _ = create_train_state(sub_key, env_obj, config)
 

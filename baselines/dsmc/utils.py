@@ -85,3 +85,21 @@ def belief_update(
     )
     resampled_belief = resampled_belief._replace(particles=particles)
     return reweight_belief(env_obj.obs_model, resampled_belief, observation)
+
+
+def sample_hidden_states(
+    rng_key: PRNGKey,
+    particles: Array,
+    weights: Array
+) -> Array:
+    """Sample one hidden state for each belief state.
+    `particles` has shape (batch_size, num_particles, state_dim).
+    """
+    batch_size, num_particles, _ = particles.shape
+
+    def choice_fn(key, _particles, _weights):
+        idx = random.choice(key, a=num_particles, p=_weights)
+        return _particles[idx]
+
+    keys = random.split(rng_key, batch_size)
+    return jax.vmap(choice_fn)(keys, particles, weights)
