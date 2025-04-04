@@ -1,6 +1,5 @@
 import csv
 import os
-from typing import NamedTuple
 
 import common
 import jax
@@ -8,26 +7,13 @@ from brax.training.replay_buffers import UniformSamplingQueue
 from jax import random
 
 from baselines.slac.slac import (
+    SLACConfig,
     create_train_state,
     evaluate,
     pomdp_init,
     pomdp_step,
     step_and_train,
 )
-
-
-class SLACConfig(NamedTuple):
-    num_belief_particles: int = 64
-    total_timesteps: int = int(5e5)
-    buffer_size: int = int(5e5)
-    batch_size: int = 256
-    learning_starts: int = int(5e3)
-    policy_lr: float = 1e-4
-    critic_lr: float = 1e-3
-    alpha: float = 0.2
-    gamma: float = 0.995
-    tau: float = 0.005
-
 
 config = SLACConfig()
 cmd_args = common.get_cmd_args()
@@ -37,7 +23,7 @@ key = random.key(cmd_args.seed)
 # Set up logging.
 file_name = f"training_log_seed_{cmd_args.seed}.csv"
 file_path = os.path.join(cmd_args.log_dir, file_name)
-logger = [["Step", "Episodic reward"]]
+logger = [["Step", "Average reward"]]
 
 key, sub_key = random.split(key)
 train_state, policy_network, _ = create_train_state(sub_key, env, config)
@@ -105,7 +91,9 @@ for global_step in range(
         steps_per_epoch,
     )
     key, sub_key = random.split(key)
-    expected_reward, states, actions = evaluate(sub_key, env, train_state, policy_network)
+    expected_reward, states, actions = evaluate(
+        sub_key, env, train_state, policy_network
+    )
     logger.append([global_step + steps_per_epoch, expected_reward])
     print(
         f"Step: {global_step + steps_per_epoch:7d} | "

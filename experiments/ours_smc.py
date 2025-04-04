@@ -12,10 +12,7 @@ from jax import random
 from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.bijector import Tanh
 from ppomdp.core import HistoryParticles
-from ppomdp.gauss import (
-    RecurrentNeuralGauss,
-    create_recurrent_gauss_policy,
-)
+from ppomdp.gauss import RecurrentNeuralGauss, create_recurrent_gauss_policy
 from ppomdp.smc import backward_tracing, smc
 from ppomdp.utils import batch_data, custom_split
 
@@ -135,7 +132,7 @@ train_state = policy.init(
 # Set up logging.
 file_name = f"training_log_seed_{cmd_args.seed}.csv"
 file_path = os.path.join(cmd_args.log_dir, file_name)
-logger = [["Step", "Episodic reward"]]
+logger = [["Step", "Average reward"]]
 num_steps = 0
 
 # Check policy performance before training.

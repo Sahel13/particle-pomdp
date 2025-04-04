@@ -1,6 +1,6 @@
-from functools import partial
-import os
 import csv
+import os
+from functools import partial
 
 import common
 import jax
@@ -117,7 +117,7 @@ train_state = policy.init(
 # Set up logging.
 file_name = f"training_log_seed_{cmd_args.seed}.csv"
 file_path = os.path.join(cmd_args.log_dir, file_name)
-logger = [["Step", "Episodic reward"]]
+logger = [["Step", "Average reward"]]
 num_steps = 0
 
 # Check policy performance before training.
@@ -228,7 +228,7 @@ while num_steps <= total_timesteps:
         f"Step: {num_steps:7d} | "
         f"Log marginal: {log_marginal:8.3f} | "
         f"Expected reward: {expected_reward:8.3f} | "
-        f"Log std: {train_state.params["log_std"][0]:8.4f}"
+        f"Log std: {train_state.params['log_std'][0]:8.4f}"
     )
 
 # Save the logging data.

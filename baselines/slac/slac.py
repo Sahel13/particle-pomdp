@@ -26,8 +26,8 @@ from ppomdp.utils import custom_split
 
 
 class SLACConfig(NamedTuple):
-    num_belief_particles: int = 32
-    total_timesteps: int = int(1e5)
+    num_belief_particles: int = 64
+    total_timesteps: int = int(1e6)
     buffer_size: int = int(1e6)
     batch_size: int = 256
     learning_starts: int = int(5e3)
