@@ -17,7 +17,7 @@ def combine_csv_files(folder_name: str):
     for file_path in csv_files:
         seed = os.path.basename(file_path).split("_")[-1].split(".")[0]
         df = pd.read_csv(file_path)
-        df = df.rename(columns={"Episodic reward": f"Seed_{seed}"})
+        df = df.rename(columns={"Average reward": f"Seed_{seed}"})
         dfs[seed] = df.set_index("Step")
 
     # Combine all dataframes on the 'Step' column
