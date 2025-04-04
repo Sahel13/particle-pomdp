@@ -17,6 +17,7 @@ from baselines.slac.utils import (
     belief_update,
     policy_sample_and_log_prob,
     sample_random_actions,
+    sample_hidden_states,
 )
 from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.bijector import Tanh
@@ -110,7 +111,7 @@ def pomdp_init(
     carry = policy_network.reset(env_obj.num_envs)
 
     key, step_key = random.split(key, 2)
-    next_states, next_carry, next_observations, next_belief_states, actions = (
+    next_states, next_carry, next_observations, next_belief_states, actions = \
         _pomdp_base(
             rng_key=step_key,
             env_obj=env_obj,
@@ -266,21 +267,6 @@ def create_train_state(
     return train_state, policy_network, critic_networks
 
 
-def sample_hidden_states(rng_key: PRNGKey, particles: Array, weights: Array) -> Array:
-    """Sample one hidden state for each belief state.
-
-    `particles` has shape (batch_size, num_particles, state_dim).
-    """
-    batch_size, num_particles = particles.shape[:2]
-
-    def choice_fn(key, _particles, _weights):
-        idx = random.choice(key, a=num_particles, p=_weights)
-        return _particles[idx]
-
-    keys = random.split(rng_key, batch_size)
-    return jax.vmap(choice_fn)(keys, particles, weights)
-
-
 def critic_train_step(
     rng_key: PRNGKey,
     train_state: JointTrainState,
@@ -289,7 +275,6 @@ def critic_train_step(
     gamma: float,
 ) -> tuple[JointTrainState, Array]:
     key, sub_key = random.split(rng_key)
-
     _, next_actions, next_log_probs, _ = train_state.policy_state.apply_fn(
         rng_key=sub_key,
         params=train_state.policy_state.params,
@@ -316,13 +301,14 @@ def critic_train_step(
         pomdp_state.time_idxs + 1,
     )
     next_values = jnp.min(_next_values, axis=-1) - alpha * next_log_probs
-    target_values = (
-        pomdp_state.rewards + (1 - pomdp_state.done_flags) * gamma * next_values
-    )
+    target_values =pomdp_state.rewards + (1 - pomdp_state.done_flags) * gamma * next_values
 
     def critic_loss(params):
         _values = train_state.critic_state.apply_fn(
-            params, _states, pomdp_state.actions, pomdp_state.time_idxs
+            params,
+            _states,
+            pomdp_state.actions,
+            pomdp_state.time_idxs
         )
         _error = _values - jnp.expand_dims(target_values, -1)
         return 0.5 * jnp.mean(jnp.square(_error))
@@ -385,12 +371,8 @@ def gradient_step(
     alg_cfg: SLACConfig,
 ) -> tuple[JointTrainState, Array, Array]:
     critic_key, policy_key = random.split(rng_key, 2)
-    train_state, critic_loss = critic_train_step(
-        critic_key, train_state, pomdp_state, alg_cfg.alpha, alg_cfg.gamma
-    )
-    train_state, policy_loss = policy_train_step(
-        policy_key, train_state, pomdp_state, alg_cfg.alpha
-    )
+    train_state, critic_loss = critic_train_step(critic_key, train_state, pomdp_state, alg_cfg.alpha, alg_cfg.gamma)
+    train_state, policy_loss = policy_train_step(policy_key, train_state, pomdp_state, alg_cfg.alpha)
     train_state = critic_target_update(train_state, alg_cfg.tau)
     return train_state, policy_loss, critic_loss
 
