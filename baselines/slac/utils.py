@@ -24,6 +24,12 @@ class SLACConfig:
     alpha: float = 0.2
     gamma: float = 0.95
     tau: float = 0.005
+    
+    # Logger settings
+    use_logger: bool = True
+    project_name: str = "particle-pomdp"
+    experiment_name: str = "slac-cartpole-seed-0"
+    log_dir: str = "logs"
 
 
 def policy_sample_and_log_prob(

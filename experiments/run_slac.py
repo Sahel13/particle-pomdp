@@ -19,15 +19,15 @@ from common import get_env
 if __name__ == "__main__":    
     config = tyro.cli(SLACConfig)
 
-    experiment_name = f"slac-{config.env_id}-seed-{config.seed}"
-
     # Set up wandb logging if enabled
-    logger = WandbLogger(
-        project_name="particle-pomdp",
-        experiment_name=experiment_name,
-        config=config,
-        log_dir="logs"
-    )
+    logger = None
+    if config.use_logger:
+        logger = WandbLogger(
+            project_name=config.project_name,
+            experiment_name=config.experiment_name,
+            config=config,
+            log_dir=config.log_dir
+        )
 
     env_obj = get_env(config.env_id)
 
@@ -79,14 +79,14 @@ if __name__ == "__main__":
             expected_reward, _, _ = \
                 evaluate(sub_key, env_obj, train_state, policy_network)
             
-            logger.log_metrics({
-                "episodic_reward": expected_reward,
-                "policy_log_std": train_state.policy_state.params['log_std'][0]
-            }, step=global_step)
+            if logger:
+                logger.log_metrics({
+                    "expected_reward": expected_reward,
+                    "policy_log_std": train_state.policy_state.params['log_std'][0]
+                }, step=global_step)
 
             print(
-                f"Step: {global_step:6d} | "
-                + f"Episodic reward: {expected_reward:6.2f}"
+                f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}"
             )
 
     # Number of steps to take using the `lax.scan` loop (and how often to evaluate the policy).
@@ -113,16 +113,18 @@ if __name__ == "__main__":
         expected_reward, states, actions = \
             evaluate(sub_key, env_obj, train_state, policy_network)
         
-        logger.log_metrics({
-            "episodic_reward": expected_reward,
-            "policy_log_std": train_state.policy_state.params['log_std'][0]
-        }, step=global_step + steps_per_epoch)
+        if logger:
+            logger.log_metrics({
+                "expected_reward": expected_reward,
+                "policy_log_std": train_state.policy_state.params['log_std'][0]
+            }, step=global_step + steps_per_epoch)
 
         print(
             f"Step: {global_step + steps_per_epoch:6d} | "
-            + f"Expected reward: {expected_reward:10.2f} | "
+            + f"Expected reward: {expected_reward:6.2f} | "
             + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
         )
 
     # Finish wandb logging if enabled
-    logger.finish()
+    if logger:
+        logger.finish()
