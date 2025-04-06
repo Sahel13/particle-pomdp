@@ -192,8 +192,8 @@ def create_recurrent_gauss_policy(
     )
 
 
-@partial(jax.jit, static_argnums=(0,))
-def train_recurrent_gauss_policy(
+@partial(jax.jit, static_argnames="policy")
+def train_recurrent_gauss_policy_pathwise(
     policy: RecurrentPolicy,
     train_state: TrainState,
     particles: HistoryParticles,
@@ -205,3 +205,29 @@ def train_recurrent_gauss_policy(
     loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
     train_state = train_state.apply_gradients(grads=grads)
     return train_state, loss
+
+
+@partial(jax.jit, static_argnames="policy")
+def train_recurrent_gauss_policy_stepwise(
+    policy: RecurrentPolicy,
+    train_state: TrainState,
+    particles: HistoryParticles,
+):
+    def loss_fn(params):
+        log_probs = policy.log_prob(particles.actions, particles.carry, particles.observations, params)
+        return -1.0 * jnp.mean(log_probs)
+
+    loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
+    train_state = train_state.apply_gradients(grads=grads)
+    return train_state, loss
+
+
+@jax.jit
+def prepare_particles_stepwise(particles: HistoryParticles) -> HistoryParticles:
+    if particles.observations.ndim != 3:
+        raise ValueError("`particles` must include a time component.")
+
+    actions = particles.actions[1:]
+    particles = jax.tree.map(lambda x: x[:-1], particles)
+    particles = particles._replace(actions=actions)
+    return jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles)
