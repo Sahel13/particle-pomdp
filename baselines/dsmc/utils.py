@@ -97,7 +97,7 @@ def policy_evaluate(
     _, (states, actions, rewards) = jax.lax.scan(
         body,
         (init_states, init_beliefs, 0),
-        random.split(key, env_obj.num_time_steps),
+        random.split(key, env_obj.num_time_steps + 1),
     )
     
     states = jnp.concatenate([init_states[None, :, :], states], axis=0)
