@@ -1,35 +1,19 @@
+from functools import partial
+
+import jax
+
 from distrax import Chain, MultivariateNormalDiag, Transformed
+from flax.training.train_state import TrainState
 from jax import Array
 from jax import numpy as jnp
-from flax import struct
+from jax import random
 
-from baselines.slac.arch import PolicyNetwork
 from ppomdp.core import Carry, Parameters, PRNGKey
+from ppomdp.utils import custom_split
+from ppomdp.envs.core import POMDPEnv
 
-
-@struct.dataclass
-class SLACConfig:
-    # Environment settings
-    seed: int = 0
-    env_id: str = "cartpole"
-
-    # Algorithm hyperparameters
-    num_belief_particles: int = 32
-    total_time_steps: int = 25000
-    buffer_size: int = 100000
-    learning_starts: int = 5000
-    policy_lr: float = 0.0003
-    critic_lr: float = 0.001
-    batch_size: int = 256
-    alpha: float = 0.2
-    gamma: float = 0.95
-    tau: float = 0.005
-    
-    # Logger settings
-    use_logger: bool = True
-    project_name: str = "particle-pomdp"
-    experiment_name: str = "slac-cartpole-seed-0"
-    log_dir: str = "logs"
+from baselines.common import JointTrainState
+from baselines.slac.arch import PolicyNetwork
 
 
 def policy_sample_and_log_prob(
@@ -45,3 +29,54 @@ def policy_sample_and_log_prob(
     dist = Transformed(distribution=base, bijector=bijector)
     action, log_prob = dist.sample_and_log_prob(seed=rng_key)
     return carry, action, log_prob, bijector.forward(mean)
+
+
+@partial(jax.jit, static_argnames=("env_obj", "policy_network", "num_samples"))
+def policy_evaluate(
+    rng_key: PRNGKey,
+    env_obj: POMDPEnv,
+    policy_state: TrainState,
+    policy_network: PolicyNetwork,
+    num_samples: int = 100,
+):
+
+    def body(carry, key):
+        states, policy_carry, observations, time_idx = carry
+
+        # Sample actions.
+        key, action_key = random.split(key)
+        policy_carry, _, _, actions = policy_state.apply_fn(
+            rng_key=action_key,
+            carry=policy_carry,
+            observation=observations,
+            params=policy_state.params
+        )
+
+        # Compute rewards.
+        rewards = jax.vmap(env_obj.reward_fn, (0, 0, None))(states, actions, time_idx)
+
+        # Sample next states.
+        key, state_keys = custom_split(key, num_samples + 1)
+        states = jax.vmap(env_obj.trans_model.sample)(state_keys, states, actions)
+
+        # Sample observations.
+        obs_keys = random.split(key, num_samples)
+        observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
+
+        return (states, policy_carry, observations, time_idx + 1), (states, actions, rewards)
+
+    # Initialize.
+    key, state_key = random.split(rng_key)
+    init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+    key, obs_keys = custom_split(key, num_samples + 1)
+    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
+    init_policy_carry = policy_network.reset(num_samples)
+
+    _, (states, actions, rewards) = jax.lax.scan(
+        body,
+        (init_states, init_policy_carry, init_observations, 0),
+        random.split(key, env_obj.num_time_steps)
+    )
+    states = jnp.concatenate([init_states[None], states], axis=0)
+    expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    return expected_reward, states, actions

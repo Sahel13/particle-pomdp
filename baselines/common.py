@@ -5,6 +5,7 @@ from flax.training.train_state import TrainState
 from jax import Array, random, numpy as jnp
 
 from ppomdp.core import PRNGKey, BeliefState
+from ppomdp.envs import pomdps
 from ppomdp.envs.core import POMDPEnv
 from ppomdp.utils import (
     resample_belief,
@@ -12,6 +13,19 @@ from ppomdp.utils import (
     reweight_belief,
     systematic_resampling
 )
+
+
+def get_env(env_name: str) -> POMDPEnv:
+    if env_name == "pendulum":
+        return pomdps.PendulumEnv
+    elif env_name == "cartpole":
+        return pomdps.CartPoleEnv
+    elif env_name == "target-interception":
+        return pomdps.TargetEnv
+    elif env_name == "light-dark-1d":
+        return pomdps.LightDark1DEnv
+    else:
+        raise NotImplementedError
 
 
 class JointTrainState(NamedTuple):

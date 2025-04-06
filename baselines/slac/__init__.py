@@ -1,8 +1,8 @@
-from baselines.slac.utils import SLACConfig
+from baselines.slac.config import SLAC, SLACExperiment
+from baselines.slac.utils import policy_evaluate
 from baselines.slac.slac import (
-    create_train_state,
     pomdp_init,
     pomdp_step,
+    create_train_state,
     step_and_train,
-    evaluate,
 )

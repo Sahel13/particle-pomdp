@@ -1,8 +1,6 @@
-from typing import Dict, Any
-import os
+from typing import Dict, Any, Optional, List, NamedTuple
 
 import wandb
-from flax.struct import dataclass
 
 
 class WandbLogger:
@@ -10,32 +8,39 @@ class WandbLogger:
         self,
         project_name: str,
         experiment_name: str,
-        config: dataclass,
-        log_dir: str,
+        experiment_group: Optional[str] = None,
+        experiment_tags: Optional[List[str]] = None,
+        experiment_config: Optional[Dict[str, Any]] = None,
+        logger_directory: str = "logs"
     ):
         """Initialize the Weights & Biases logger.
         
         Args:
-            project_name: Name of the wandb project
-            experiment_name: Name of this specific experiment run
-            config: Dictionary of hyperparameters and configuration or a NamedTuple
-            log_dir: Directory to save local logs
+            project_name: Name of the Weights & Biases project
+            experiment_name: Name of the experiment
+            experiment_group: Optional group name for organizing experiments
+            experiment_tags: Optional list of tags for the experiment
+            experiment_config: Optional dictionary of configuration parameters
+            logger_directory: Directory to store logs
         """
-        self.log_dir = log_dir
+        # Initialize wandb run with optional group and tags
+        init_kwargs = {
+            "project": project_name,
+            "name": experiment_name,
+            "dir": logger_directory,
+            "settings": wandb.Settings(start_method="thread"),
+        }
         
-        # Create log directory if it doesn't exist
-        os.makedirs(self.log_dir, exist_ok=True)
-        
-        # Convert config to dictionary if it's a NamedTuple
-        config_dict = config.__dict__
+        if experiment_group:
+            init_kwargs["group"] = experiment_group
             
-        self.wandb_run = wandb.init(
-            project=project_name,
-            name=experiment_name,
-            config=config_dict,
-            settings=wandb.Settings(start_method="thread"),
-            dir=self.log_dir,  # Set wandb to use the specified log directory
-        )
+        if experiment_tags:
+            init_kwargs["tags"] = experiment_tags
+            
+        if experiment_config:
+            init_kwargs["config"] = experiment_config
+            
+        self.wandb_run = wandb.init(**init_kwargs)
 
     def log_metrics(self, metrics: Dict[str, Any], step: int):
         """Log metrics to wandb.
