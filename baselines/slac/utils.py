@@ -32,7 +32,7 @@ def policy_sample_and_log_prob(
 
 
 @partial(jax.jit, static_argnames=("env_obj", "policy_network", "num_samples"))
-def policy_evaluate(
+def policy_evaluation(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
     policy_state: TrainState,

@@ -16,7 +16,7 @@ from baselines.slac import (
     pomdp_step,
     step_and_train,
     create_train_state,
-    policy_evaluate,
+    policy_evaluation,
 )
 from wandb_logger import WandbLogger
 from common import get_env
@@ -140,7 +140,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
         
         if global_step % 2000 == 0:
             key, sub_key = random.split(key)
-            expected_reward, _, _ = policy_evaluate(
+            expected_reward, _, _ = policy_evaluation(
                 rng_key=sub_key,
                 env_obj=env_obj,
                 policy_state=train_state.policy_state,
@@ -179,7 +179,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
             )
         
         key, sub_key = random.split(key)
-        expected_reward, _, _ = policy_evaluate(
+        expected_reward, _, _ = policy_evaluation(
             rng_key=sub_key,
             env_obj=env_obj,
             policy_state=train_state.policy_state,
