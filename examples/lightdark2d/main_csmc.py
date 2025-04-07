@@ -18,7 +18,7 @@ from ppomdp.arch import GRUEncoder, MLPDecoder
 from ppomdp.gauss import (
     RecurrentNeuralGauss,
     create_recurrent_gauss_policy,
-    train_recurrent_gauss_policy
+    train_recurrent_gauss_policy_pathwise
 )
 
 import time
@@ -195,7 +195,7 @@ for i in range(1, num_epochs + 1):
     for batch_idx in batch_indices:
         history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
         train_state, batch_loss = \
-            train_recurrent_gauss_policy(policy, train_state, history_batch)
+            train_recurrent_gauss_policy_pathwise(policy, train_state, history_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)
