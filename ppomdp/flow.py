@@ -85,21 +85,21 @@ class RecurrentNeuralFlow(nn.Module):
         return self.dist.log_prob(x, context=s)
 
     def sample(self, rng_key: PRNGKey, carry: list[Carry], s: Array) -> tuple[list[Carry], Array]:
-        carry, s = self.encoder(carry, s)
+        next_carry, s = self.encoder(carry, s)
         s = self.decoder(s)
         x = self.dist.sample(seed=rng_key, context=s, sample_shape=s.shape[0])
-        return carry, x
+        return next_carry, x
 
     def sample_and_log_prob(self, rng_key: PRNGKey, carry: list[Carry], s: Array) -> tuple[list[Carry], Array, Array]:
-        carry, s = self.encoder(carry, s)
+        next_carry, s = self.encoder(carry, s)
         s = self.decoder(s)
         x, log_prob = self.dist.sample_and_log_prob(seed=rng_key, context=s, sample_shape=s.shape[0])
-        return carry, x, log_prob
+        return next_carry, x, log_prob
 
     def carry_and_log_prob(self, x: Array, carry: list[Carry], s: Array) -> tuple[list[Carry], Array]:
-        carry, s = self.encoder(carry, s)
+        next_carry, s = self.encoder(carry, s)
         s = self.decoder(s)
-        return carry, self.dist.log_prob(x, context=s)
+        return next_carry, self.dist.log_prob(x, context=s)
 
     def log_prob(self, x: Array, carry: list[Carry], s: Array) -> Array:
         _, s = self.encoder(carry, s)
@@ -133,14 +133,14 @@ def create_recurrent_flow_policy(flow: RecurrentNeuralFlow) -> RecurrentPolicy:
         observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
-        carry, actions = flow.apply(
+        next_carry, actions = flow.apply(
             {"params": params},
             method=flow.sample,
             rng_key=rng_key,
             carry=carry,
             s=observations,
         )
-        return carry, actions
+        return next_carry, actions
 
     def sample_and_log_prob(
         rng_key: PRNGKey,
@@ -148,14 +148,14 @@ def create_recurrent_flow_policy(flow: RecurrentNeuralFlow) -> RecurrentPolicy:
         observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
-        carry, actions, log_probs = flow.apply(
+        next_carry, actions, log_probs = flow.apply(
             {"params": params},
             method=flow.sample_and_log_prob,
             rng_key=rng_key,
             carry=carry,
             s=observations,
         )
-        return carry, actions, log_probs
+        return next_carry, actions, log_probs
 
     def carry_and_log_prob(
         action: Array,
@@ -163,14 +163,14 @@ def create_recurrent_flow_policy(flow: RecurrentNeuralFlow) -> RecurrentPolicy:
         observation: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
-        carry, log_prob = flow.apply(
+        next_carry, log_prob = flow.apply(
             {"params": params},
             method=flow.carry_and_log_prob,
             x=action,
             carry=carry,
             s=observation
         )
-        return carry, log_prob
+        return next_carry, log_prob
 
     def log_prob(
         actions: Array,

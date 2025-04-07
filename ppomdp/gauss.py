@@ -46,9 +46,9 @@ class RecurrentNeuralGauss(nn.Module):
     def __call__(self, carry: list[Carry], s: Array) -> tuple[list[Carry], Array, Array]:
         log_std = self.param("log_std", self.init_log_std, self.decoder.output_dim)
 
-        carry, s = self.encoder(carry, s)
+        next_carry, s = self.encoder(carry, s)
         s = self.decoder(s)
-        return carry, s, log_std
+        return next_carry, s, log_std
 
     @property
     def dim(self):
@@ -82,10 +82,10 @@ def create_recurrent_gauss_policy(
         observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
-        carry, mean, log_std = network.apply({"params": params}, carry, observations)
+        next_carry, mean, log_std = network.apply({"params": params}, carry, observations)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
-        return carry, dist.sample(seed=rng_key)
+        return next_carry, dist.sample(seed=rng_key)
 
     def sample_and_log_prob(
         rng_key: PRNGKey,
@@ -93,11 +93,11 @@ def create_recurrent_gauss_policy(
         observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
-        carry, mean, log_std = network.apply({"params": params}, carry, observations)
+        next_carry, mean, log_std = network.apply({"params": params}, carry, observations)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
         action, log_prob = dist.sample_and_log_prob(seed=rng_key)
-        return carry, action, log_prob
+        return next_carry, action, log_prob
 
     def carry_and_log_prob(
         action: Array,
@@ -105,10 +105,10 @@ def create_recurrent_gauss_policy(
         observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
-        carry, mean, log_std = network.apply({"params": params}, carry, observations)
+        next_carry, mean, log_std = network.apply({"params": params}, carry, observations)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
-        return carry, dist.log_prob(action)
+        return next_carry, dist.log_prob(action)
 
     def log_prob(
         actions: Array,
@@ -120,6 +120,22 @@ def create_recurrent_gauss_policy(
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
         return dist.log_prob(actions)
+
+    @jax.jit
+    def pathwise_carry(
+        init_carry: list[Carry],
+        observations: Array,
+        params: Parameters,
+    ):
+        def concat_trees(x, y):
+            return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
+
+        def body(carry, obs):
+            next_carry, _, _ = network.apply({"params": params}, carry, obs)
+            return next_carry, next_carry
+
+        _, all_carry = jax.lax.scan(body, init_carry, observations)
+        return concat_trees(init_carry, all_carry)
 
     def pathwise_log_prob(
         particles: HistoryParticles,
@@ -167,6 +183,7 @@ def create_recurrent_gauss_policy(
         reset=reset,
         sample=sample,
         log_prob=log_prob,
+        pathwise_carry=pathwise_carry,
         pathwise_log_prob=pathwise_log_prob,
         sample_and_log_prob=sample_and_log_prob,
         carry_and_log_prob=carry_and_log_prob,

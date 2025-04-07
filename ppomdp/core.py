@@ -144,6 +144,16 @@ class LogProbRecurrentPolicy(Protocol):
         r"""Compute the log density of $\pi_\phi(a_t, carry, \mid s_t,)$."""
 
 
+class PathwiseCarryRecurrentPolicy(Protocol):
+    def __call__(
+        self,
+        init_carry: list[Carry],
+        observations: Array,
+        params: Parameters
+    ) -> list[Carry]:
+        r"""Compute the carry of $\pi_\phi(a_t \mid s_t, carry)$."""
+
+
 class PathwiseLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
@@ -202,6 +212,7 @@ class RecurrentPolicy(NamedTuple):
     reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
+    pathwise_carry: PathwiseCarryRecurrentPolicy
     pathwise_log_prob: PathwiseLogProbRecurrentPolicy
     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
     carry_and_log_prob: CarryAndLogProbRecurrentPolicy

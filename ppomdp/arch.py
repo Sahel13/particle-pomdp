@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Callable, Union
 
 from jax import Array, numpy as jnp
@@ -31,10 +32,11 @@ class LSTMEncoder(nn.Module):
         y = nn.Dense(self.recurr_size[0])(y)
 
         # pass encodings through recurrent layers
+        next_carry = deepcopy(carry)
         for k, size in enumerate(self.recurr_size):
-            carry[k], y = nn.LSTMCell(size)(carry[k], y)
+            next_carry[k], y = nn.LSTMCell(size)(carry[k], y)
 
-        return carry, y
+        return next_carry, y
 
     def reset(self, batch_size) -> list[LSTMCarry]:
         carry = []
@@ -70,10 +72,11 @@ class GRUEncoder(nn.Module):
         y = nn.Dense(self.recurr_size[0])(y)
 
         # pass encodings through recurrent layers
+        next_carry = deepcopy(carry)
         for k, size in enumerate(self.recurr_size):
-            carry[k], y = nn.GRUCell(size)(carry[k], y)
+            next_carry[k], y = nn.GRUCell(size)(carry[k], y)
 
-        return carry, y
+        return next_carry, y
 
     def reset(self, batch_size) -> list[GRUCarry]:
         carry = []
