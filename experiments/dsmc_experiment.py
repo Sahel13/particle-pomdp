@@ -19,14 +19,14 @@ from baselines.dsmc import (
     policy_evaluation,
 )
 from wandb_logger import WandbLogger
-from common import get_env
+from common import get_pomdp
 
 
 def generate_experiment_name(config: DSMCExperiment) -> str:
     """Generate a unique experiment name."""
     if config.experiment_name:
         return config.experiment_name
-    
+
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
     return f"dsmc-{config.env_id}-{timestamp}-{unique_id}"
@@ -34,12 +34,12 @@ def generate_experiment_name(config: DSMCExperiment) -> str:
 
 def run_single_seed(config: DSMCExperiment, seed: int) -> None:
     """Run a single seed experiment."""
-    
+
     # Set CUDA device
     os.environ["CUDA_VISIBLE_DEVICES"] = str(config.cuda_device)
-    
+
     # Get environment
-    env_obj = get_env(config.env_id)
+    env_obj = get_pomdp(config.env_id)
 
     # Set up wandb logging if enabled
     logger = None
@@ -63,7 +63,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             "gamma": config.gamma,
             "tau": config.tau,
         }
-        
+
         # Initialize logger with specific parameters
         logger = WandbLogger(
             project_name=config.project_name,
@@ -73,7 +73,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             experiment_config=dsmc_config,
             logger_directory=config.logger_directory
         )
-    
+
     num_planner_steps = config.num_planner_steps
     num_planner_particles = config.num_planner_particles
     num_belief_particles = config.num_belief_particles
@@ -92,7 +92,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
     from jax import random
     from jax import numpy as jnp
     key = random.key(seed)
-    
+
     # Create train state and networks
     key, sub_key = random.split(key)
     train_state, _, _ = create_train_state(
@@ -102,7 +102,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
         critic_lr=critic_lr,
         num_planner_particles=num_planner_particles,
     )
-    
+
     # Initialize POMDP state
     key, init_key = random.split(key)
     pomdp_state = pomdp_init(
@@ -116,7 +116,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
         gamma=gamma,
         random_actions=True,
     )
-    
+
     # Set up the replay buffer
     from brax.training.replay_buffers import UniformSamplingQueue
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
@@ -128,11 +128,11 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
     buffer_obj.sample_internal = jax.jit(buffer_obj.sample_internal)
-    
+
     key, buffer_key = random.split(key)
     buffer_state = buffer_obj.init(buffer_key)
     buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
-    
+
     # Pre-fill the buffer with random actions
     for global_step in range(1, learning_starts):
         key, sub_key = random.split(key)
@@ -149,7 +149,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             random_actions=True,
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
-        
+
         if global_step % 2000 == 0:
             key, sub_key = random.split(key)
             expected_reward, _, _ = policy_evaluation(
@@ -158,21 +158,21 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
                 policy_state=train_state.policy_state,
                 num_belief_particles=num_belief_particles,
             )
-            
+
             if logger:
                 logger.log_metrics({
                     "expected_reward": expected_reward,
                     "policy_log_std": train_state.policy_state.params['log_std'][0]
                 }, step=global_step)
-            
+
             print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
-    
+
     # Ensure that training starts with a fresh episode
     pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
-    
+
     # Number of steps to take using the `lax.scan` loop
     steps_per_epoch = 2000
-    
+
     # Training loop
     for global_step in range(
         learning_starts, total_time_steps, steps_per_epoch
@@ -194,7 +194,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
                 gamma=gamma,
                 tau=tau,
             )
-        
+
         key, sub_key = random.split(key)
         expected_reward, _, _ = policy_evaluation(
             rng_key=sub_key,
@@ -202,23 +202,23 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             policy_state=train_state.policy_state,
             num_belief_particles=num_belief_particles,
         )
-        
+
         if logger:
             logger.log_metrics({
                 "expected_reward": expected_reward,
                 "policy_log_std": train_state.policy_state.params['log_std'][0]
             }, step=global_step + steps_per_epoch)
-        
+
         print(
             f"Step: {global_step + steps_per_epoch:6d} | "
             + f"Expected reward: {expected_reward:6.2f} | "
             + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
         )
-    
+
     # Finish wandb logging if enabled
     if logger:
         logger.finish()
-    
+
     return None
 
 
@@ -226,11 +226,11 @@ def main(config: DSMCExperiment) -> None:
     # Generate experiment name if not provided
     if not config.experiment_name:
         config.experiment_name = generate_experiment_name(config)
-        
+
     # Run experiments for each seed
     for seed in tqdm(range(config.num_seeds), desc="Running seeds"):
         run_single_seed(config, seed)
-        
+
     print(f"Experiment completed.")
 
 

@@ -5,7 +5,7 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.common import get_env
+from baselines.common import get_pomdp
 from baselines.slac import (
     SLAC,
     pomdp_init,
@@ -25,7 +25,7 @@ if __name__ == "__main__":
         learning_starts=5000,
     )
 
-    env_obj = get_env("cartpole")
+    env_obj = get_pomdp("cartpole")
 
     num_belief_particles = config.num_belief_particles
     total_time_steps = config.total_time_steps

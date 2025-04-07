@@ -5,7 +5,7 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.common import get_env, belief_init, belief_update
+from baselines.common import get_pomdp, belief_init, belief_update
 from baselines.dsmc import (
     DSMC,
     pomdp_init,
@@ -25,7 +25,7 @@ if __name__ == "__main__":
         learning_starts=5000,
     )
 
-    env_obj = get_env("cartpole")
+    env_obj = get_pomdp("cartpole")
 
     num_planner_steps = config.num_planner_steps
     num_planner_particles = config.num_planner_particles

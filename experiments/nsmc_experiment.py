@@ -28,7 +28,7 @@ from ppomdp.utils import batch_data, flatten_particle_trajectories, policy_evalu
 from ppomdp.config import NSMCExperiment
 
 from wandb_logger import WandbLogger
-from common import get_env
+from common import get_pomdp
 
 
 def generate_experiment_name(config: NSMCExperiment) -> str:
@@ -70,7 +70,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = str(config.cuda_device)
 
     # Get environment
-    env_obj = get_env(config.env_id)
+    env_obj = get_pomdp(config.env_id)
 
     # Set up wandb logging if enabled
     logger = None
