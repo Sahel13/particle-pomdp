@@ -23,6 +23,7 @@ import jax
 from jax import random
 from jax import numpy as jnp
 
+from baselines.dvrl import DVRLExperiment
 from baselines.dvrl import (
     create_train_state,
     pomdp_init,
@@ -30,12 +31,12 @@ from baselines.dvrl import (
     step_and_train,
     policy_evaluation,
 )
-from baselines.dvrl.config import DVRLConfig
+
 from wandb_logger import WandbLogger
 from common import get_pomdp, get_unique_identifier
 
 
-def run_single_seed(config: DVRLConfig, seed: int) -> None:
+def run_single_seed(config: DVRLExperiment, seed: int) -> None:
     """Run a single seed experiment."""
 
     # Get environment
@@ -87,7 +88,7 @@ def run_single_seed(config: DVRLConfig, seed: int) -> None:
     key = random.key(seed)
     key, sub_key = random.split(key)
     train_state, _, _ = create_train_state(
-        rng_key=sub_key, 
+        rng_key=sub_key,
         env_obj=env_obj,
         policy_lr=policy_lr,
         critic_lr=critic_lr,
@@ -128,6 +129,7 @@ def run_single_seed(config: DVRLConfig, seed: int) -> None:
             env_obj=env_obj,
             policy_state=train_state.policy_state,
             pomdp_state=pomdp_state,
+            num_belief_particles=num_belief_particles,
             random_actions=True,
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
@@ -201,7 +203,7 @@ def run_single_seed(config: DVRLConfig, seed: int) -> None:
     return None
 
 
-def main(config: DVRLConfig) -> None:
+def main(config: DVRLExperiment) -> None:
     # Generate unique identifier for group
     identifier = get_unique_identifier()
 
@@ -216,5 +218,5 @@ def main(config: DVRLConfig) -> None:
 
 
 if __name__ == "__main__":
-    config = tyro.cli(DVRLConfig)
+    config = tyro.cli(DVRLExperiment)
     main(config)

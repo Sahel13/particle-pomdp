@@ -94,9 +94,9 @@ python dvrl_experiment.py \
     --project_name particle-pomdp \
     --experiment_group dvrl-cartpole \
     --experiment_tags dvrl cartpole \
-    --total_time_steps 100000 \
+    --total_time_steps 1000000 \
     --num_belief_particles 32 \
-    --buffer_size 100000 \
+    --buffer_size 1000000 \
     --learning_starts 5000 \
     --policy_lr 0.0001 \
     --critic_lr 0.001 \

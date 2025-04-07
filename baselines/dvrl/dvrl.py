@@ -1,5 +1,4 @@
 from functools import partial
-from typing import NamedTuple, Dict
 
 import jax
 import optax
@@ -8,13 +7,8 @@ from brax.training.replay_buffers import ReplayBufferState, UniformSamplingQueue
 from jax import Array, random, numpy as jnp
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from brax.training.replay_buffers import (
-    UniformSamplingQueue,
-    ReplayBufferState
-)
 from distrax import Block
 
-from examples.pendulum.main_smc import num_belief_particles
 from ppomdp.core import PRNGKey, BeliefState
 from ppomdp.bijector import Tanh
 from ppomdp.utils import custom_split
