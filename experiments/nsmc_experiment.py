@@ -189,7 +189,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
 
         # Evaluate the policy
         key, sub_key = random.split(key)
-        expected_reward, *_ = policy_evaluation(sub_key, env_obj, policy, train_state)
+        expected_reward, *_ = policy_evaluation(sub_key, env_obj, policy, train_state.params)
 
         if logger:
             logger.log_metrics({

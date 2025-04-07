@@ -10,6 +10,7 @@ from jax import numpy as jnp
 from ppomdp.core import (
     Carry,
     PRNGKey,
+    Parameters,
     BeliefState,
     HistoryState,
     HistoryParticles,
@@ -19,6 +20,8 @@ from ppomdp.core import (
     RewardFn,
 )
 from ppomdp.envs.core import POMDPEnv
+
+from copy import deepcopy
 
 
 # smc functions
@@ -487,7 +490,7 @@ def policy_evaluation(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
     policy: RecurrentPolicy,
-    train_state: TrainState,
+    params: Parameters,
     num_samples:int = 100
 ):
     """
@@ -497,13 +500,13 @@ def policy_evaluation(
         rng_key (PRNGKey): The random number generator key.
         env_obj (POMDPEnv): The partially observable Markov decision process environment.
         policy (RecurrentPolicy): The policy to be evaluated.
-        train_state (TrainState): The training state containing the policy parameters.
+        params (Parameter): Stochastic policy parameters.
         num_samples (int, optional): The number of samples to draw. Defaults to 100.
 
     Returns:
         tuple: A tuple containing the expected reward, states, and actions.
     """
-    eval_params = train_state.params.copy()
+    eval_params = deepcopy(params)
     eval_params["log_std"] = -20.0 * jnp.ones_like(eval_params["log_std"])
 
     def body(carry, key):
