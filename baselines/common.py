@@ -1,12 +1,12 @@
-from typing import NamedTuple, Dict
+from typing import NamedTuple, Dict, Union
 
 import jax
 from flax.training.train_state import TrainState
 from jax import Array, random, numpy as jnp
 
 from ppomdp.core import PRNGKey, BeliefState
-from ppomdp.envs import pomdps
-from ppomdp.envs.core import POMDPEnv
+from ppomdp.envs import mdps, pomdps
+from ppomdp.envs.core import MDPEnv, POMDPEnv
 from ppomdp.utils import (
     resample_belief,
     propagate_belief,
@@ -15,7 +15,18 @@ from ppomdp.utils import (
 )
 
 
-def get_env(env_name: str) -> POMDPEnv:
+def get_mdp(env_name: str) -> MDPEnv:
+    if env_name == "pendulum":
+        return mdps.PendulumEnv
+    elif env_name == "cartpole":
+        return mdps.CartPoleEnv
+    elif env_name == "light-dark-2d":
+        return mdps.LightDark2DEnv
+    else:
+        raise NotImplementedError
+
+
+def get_pomdp(env_name: str) -> POMDPEnv:
     if env_name == "pendulum":
         return pomdps.PendulumEnv
     elif env_name == "cartpole":
@@ -24,6 +35,8 @@ def get_env(env_name: str) -> POMDPEnv:
         return pomdps.TargetEnv
     elif env_name == "light-dark-1d":
         return pomdps.LightDark1DEnv
+    elif env_name == "light-dark-2d":
+        return pomdps.LightDark2DEnv
     else:
         raise NotImplementedError
 
@@ -36,7 +49,7 @@ class JointTrainState(NamedTuple):
 
 def sample_random_actions(
     rng_key: PRNGKey,
-    env_obj: POMDPEnv,
+    env_obj: Union[MDPEnv, POMDPEnv],
 ) -> Array:
     return random.uniform(
         key=rng_key,

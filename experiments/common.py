@@ -5,7 +5,7 @@ from ppomdp.envs import pomdps
 from ppomdp.envs.core import POMDPEnv
 
 
-def get_env(env_name: str) -> POMDPEnv:
+def get_pomdp(env_name: str) -> POMDPEnv:
     if env_name == "pendulum":
         return pomdps.PendulumEnv
     elif env_name == "cartpole":
@@ -14,6 +14,8 @@ def get_env(env_name: str) -> POMDPEnv:
         return pomdps.TargetEnv
     elif env_name == "light-dark-1d":
         return pomdps.LightDark1DEnv
+    elif env_name == "light-dark-2d":
+        return pomdps.LightDark2DEnv
     else:
         raise NotImplementedError
 
