@@ -3,16 +3,12 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 import jax
 jax.config.update("jax_enable_x64", True)
-# jax.config.update("jax_disable_jit", True)
 
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
 from distrax import Block
 
-from ppomdp.core import Reference
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
-from ppomdp.csmc import csmc
-
 from ppomdp.bijector import Tanh
 from ppomdp.utils import batch_data, flatten_particle_trajectories, policy_evaluation
 from ppomdp.arch import GRUEncoder, MLPDecoder
@@ -37,7 +33,6 @@ num_belief_particles = 32
 
 slew_rate_penalty = 0.05
 tempering = 0.5
-num_moves = 1
 
 learning_rate = 1e-4
 batch_size = 256
@@ -69,52 +64,6 @@ train_state = policy.init(
     learning_rate=learning_rate
 )
 
-# run init nested smc
-key, sub_key = random.split(key)
-history_states, belief_states, belief_infos, _ = \
-    smc(
-        sub_key,
-        env.num_time_steps,
-        num_history_particles,
-        num_belief_particles,
-        env.prior_dist,
-        env.trans_model,
-        env.obs_model,
-        policy,
-        train_state.params,
-        env.reward_fn,
-        tempering,
-        slew_rate_penalty
-    )
-
-# trace ancestors of history states
-key, sub_key = random.split(key)
-traced_history, traced_belief, _ = \
-    backward_tracing(sub_key, history_states, belief_states, belief_infos)
-
-# # backward sample history states
-# key, sub_key = random.split(key)
-# traced_history, traced_belief = mcmc_backward_sampling(
-#     sub_key,
-#     num_history_particles,
-#     history_states,
-#     belief_states,
-#     env.trans_model,
-#     policy,
-#     train_state.params,
-#     env.reward_fn,
-#     tempering,
-#     slew_rate_penalty
-# )
-
-# sample a new reference
-key, sub_key = random.split(key)
-idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-reference = Reference(
-    history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-    belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
-)
-
 # The training loop
 for i in range(1, num_epochs + 1):
     start_time = time.time()
@@ -124,60 +73,45 @@ for i in range(1, num_epochs + 1):
     expected_reward, *_ = \
         policy_evaluation(sub_key, env, policy, train_state.params)
 
-    for _ in range(num_moves):
-        # run nested conditional smc
-        key, sub_key = random.split(key)
-        history_states, belief_states, belief_infos, log_marginal = \
-            csmc(
-                sub_key,
-                env.num_time_steps,
-                num_history_particles,
-                num_belief_particles,
-                env.prior_dist,
-                env.trans_model,
-                env.obs_model,
-                policy,
-                train_state.params,
-                env.reward_fn,
-                tempering,
-                slew_rate_penalty,
-                reference
-            )
-
-        # trace ancestors of history states
-        key, sub_key = random.split(key)
-        traced_history, traced_belief, _ = \
-            backward_tracing(sub_key, history_states, belief_states, belief_infos)
-
-        # # backward sample history states
-        # key, sub_key = random.split(key)
-        # traced_history, traced_belief = mcmc_backward_sampling(
-        #     sub_key,
-        #     num_history_particles,
-        #     history_states,
-        #     belief_states,
-        #     env.trans_model,
-        #     policy,
-        #     train_state.params,
-        #     env.reward_fn,
-        #     tempering,
-        #     slew_rate_penalty
-        # )
-
-        # sample a new reference
-        key, sub_key = random.split(key)
-        idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-        reference = Reference(
-            history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-            belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
+    # run nested conditional smc
+    key, sub_key = random.split(key)
+    history_states, belief_states, belief_infos, _ = \
+        smc(
+            sub_key,
+            env.num_time_steps,
+            num_history_particles,
+            num_belief_particles,
+            env.prior_dist,
+            env.trans_model,
+            env.obs_model,
+            policy,
+            train_state.params,
+            env.reward_fn,
+            tempering,
+            slew_rate_penalty,
         )
 
-    # update policy parameters
+    # trace ancestors of history states
+    key, sub_key = random.split(key)
+    traced_history, traced_belief, _ = \
+        backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
-    # trace carry forward
-    init_carry = policy.reset(num_history_particles)
-    traced_carry = policy.pathwise_carry(init_carry, traced_history.observations, train_state.params)
-    traced_history = traced_history._replace(carry=traced_carry)
+    # # backward sample history states
+    # key, sub_key = random.split(key)
+    # traced_history, traced_belief = mcmc_backward_sampling(
+    #     sub_key,
+    #     num_history_particles,
+    #     history_states,
+    #     belief_states,
+    #     env.trans_model,
+    #     policy,
+    #     train_state.params,
+    #     env.reward_fn,
+    #     tempering,
+    #     slew_rate_penalty
+    # )
+
+    # update policy parameters
 
     # flatten traced history
     flat_traced_history = flatten_particle_trajectories(traced_history)
