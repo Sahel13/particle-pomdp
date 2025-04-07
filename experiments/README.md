@@ -1,10 +1,11 @@
 # Experiments
 
-This directory contains the implementation of three main algorithms for solving POMDPs:
+This directory contains the implementation of four main algorithms for solving POMDPs:
 
 1. **NSMC (Nested Sequential Monte Carlo)** - A particle-based policy optimization algorithm
 2. **DSMC (Deep Sequential Monte Carlo)** - A particle-based policy optimization algorithm
 3. **SLAC (Stochastic Latent Actor-Critic)** - A deep reinforcement learning algorithm
+4. **DVRL (Deep Variational Reinforcement Learning)** - A deep reinforcement learning algorithm for POMDPs
 
 ## Running Experiments
 
@@ -79,6 +80,29 @@ python slac_experiment.py \
     --batch_size 256 \
     --alpha 0.2 \
     --gamma 0.95 \
+    --tau 0.005
+```
+
+### DVRL
+
+```bash
+# Run DVRL on CartPole environment
+python dvrl_experiment.py \
+    --env_id cartpole \
+    --num_seeds 10 \
+    --cuda_device 0 \
+    --project_name particle-pomdp \
+    --experiment_group dvrl-cartpole \
+    --experiment_tags dvrl cartpole \
+    --total_time_steps 100000 \
+    --num_belief_particles 32 \
+    --buffer_size 100000 \
+    --learning_starts 5000 \
+    --policy_lr 0.0001 \
+    --critic_lr 0.001 \
+    --batch_size 256 \
+    --alpha 0.2 \
+    --gamma 0.995 \
     --tau 0.005
 ```
 
