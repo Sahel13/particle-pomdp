@@ -5,8 +5,6 @@ This script uses the DSMCExperiment struct to run DSMC experiments over multiple
 """
 
 import os
-import time
-import uuid
 import tyro
 from tqdm import tqdm
 
@@ -19,17 +17,8 @@ from baselines.dsmc import (
     policy_evaluation,
 )
 from wandb_logger import WandbLogger
-from common import get_pomdp
+from common import get_pomdp, get_unique_identifier
 
-
-def generate_experiment_name(config: DSMCExperiment) -> str:
-    """Generate a unique experiment name."""
-    if config.experiment_name:
-        return config.experiment_name
-
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    unique_id = str(uuid.uuid4())[:8]
-    return f"dsmc-{config.env_id}-{timestamp}-{unique_id}"
 
 
 def run_single_seed(config: DSMCExperiment, seed: int) -> None:
@@ -64,10 +53,12 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             "tau": config.tau,
         }
 
+        experiment_name = f"{config.experiment_group}-seed-{seed}"
+
         # Initialize logger with specific parameters
         logger = WandbLogger(
             project_name=config.project_name,
-            experiment_name=config.experiment_name,
+            experiment_name=experiment_name,
             experiment_group=config.experiment_group,
             experiment_tags=config.experiment_tags,
             experiment_config=dsmc_config,
@@ -223,9 +214,11 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
 
 def main(config: DSMCExperiment) -> None:
-    # Generate experiment name if not provided
-    if not config.experiment_name:
-        config.experiment_name = generate_experiment_name(config)
+    # Generate unique identifier for group
+    identifier = get_unique_identifier()
+
+    experiment_group = config.experiment_group + identifier
+    config = config._replace(experiment_group=experiment_group)
 
     # Run experiments for each seed
     for seed in tqdm(range(config.num_seeds), desc="Running seeds"):

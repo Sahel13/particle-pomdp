@@ -5,8 +5,6 @@ This script uses the NSMCConfig struct to run NSMC experiments over multiple see
 """
 
 import os
-import time
-import uuid
 import tyro
 from tqdm import tqdm
 
@@ -28,17 +26,7 @@ from ppomdp.utils import batch_data, flatten_particle_trajectories, policy_evalu
 from ppomdp.config import NSMCExperiment
 
 from wandb_logger import WandbLogger
-from common import get_pomdp
-
-
-def generate_experiment_name(config: NSMCExperiment) -> str:
-    """Generate a unique experiment name."""
-    if config.experiment_name:
-        return config.experiment_name
-
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    unique_id = str(uuid.uuid4())[:8]
-    return f"nsmc-{config.env_id}-{timestamp}-{unique_id}"
+from common import get_pomdp, get_unique_identifier
 
 
 def create_network(
@@ -93,10 +81,12 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             "decoder_size": config.decoder_size,
         }
 
+        experiment_name = f"{config.experiment_group}-seed-{seed}"
+
         # Initialize logger with specific parameters
         logger = WandbLogger(
             project_name=config.project_name,
-            experiment_name=config.experiment_name,
+            experiment_name=experiment_name,
             experiment_group=config.experiment_group,
             experiment_tags=config.experiment_tags,
             experiment_config=nsmc_config,
@@ -140,7 +130,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
 
     # Check policy performance before training
     key, sub_key = random.split(key)
-    expected_reward, *_ = policy_evaluation(sub_key, env_obj, policy, train_state)
+    expected_reward, *_ = policy_evaluation(sub_key, env_obj, policy, train_state.params)
     print(f"Step: {num_steps:6d} | Expected reward: {expected_reward:8.3f}")
 
     if logger:
@@ -213,15 +203,17 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
 
 
 def main(config: NSMCExperiment) -> None:
-    # Generate experiment name if not provided
-    if not config.experiment_name:
-        config.experiment_name = generate_experiment_name(config)
+    # Generate unique identifier for group
+    identifier = get_unique_identifier()
+
+    experiment_group = config.experiment_group + identifier
+    config = config._replace(experiment_group=experiment_group)
 
     # Run experiments for each seed
     for seed in tqdm(range(config.num_seeds), desc="Running seeds"):
         run_single_seed(config, seed)
 
-    print(f"Experiment completed.")
+    print(f"Experiments completed.")
 
 
 if __name__ == "__main__":

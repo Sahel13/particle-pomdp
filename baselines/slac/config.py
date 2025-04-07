@@ -35,7 +35,6 @@ class SLACExperiment(NamedTuple):
     # Logger settings
     use_logger: bool = True
     project_name: str = "particle-pomdp"
-    experiment_name: str = "slac-cartpole-seed-0"
-    experiment_group: Optional[str] = "slac-cartpole"
+    experiment_group: str = "slac-cartpole"
     experiment_tags: Optional[List[str]] = ["slac", "cartpole" "test"]
     logger_directory: str = "logs"

@@ -12,7 +12,6 @@ from ppomdp.core import Carry, Parameters, PRNGKey
 from ppomdp.utils import custom_split
 from ppomdp.envs.core import POMDPEnv
 
-from baselines.common import JointTrainState
 from baselines.slac.arch import PolicyNetwork
 
 

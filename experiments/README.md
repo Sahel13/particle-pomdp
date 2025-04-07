@@ -16,10 +16,10 @@ Each algorithm can be run using Python with the appropriate configuration. Below
 # Run NSMC on cartpole environment
 python nsmc_experiment.py \
     --env_id cartpole \
-    --num_seeds 1 \
+    --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_group nsmc-cartpole-multiseed \
+    --experiment_group nsmc-cartpole \
     --experiment_tags nsmc cartpole \
     --total_time_steps 1000000 \
     --num_history_particles 128 \
@@ -38,12 +38,11 @@ python nsmc_experiment.py \
 ```bash
 
 # Run DSMC on CartPole environment
-python experiments/dsmc_experiment.py \
+python dsmc_experiment.py \
     --env_id cartpole \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_name dsmc-cartpole-multiseed \
     --experiment_group dsmc-cartpole \
     --experiment_tags dsmc cartpole \
     --total_time_steps 1000000 \
@@ -64,12 +63,11 @@ python experiments/dsmc_experiment.py \
 
 ```bash
 # Run SLAC on CartPole environment
-python experiments/run_slac_experiment.py \
+python slac_experiment.py \
     --env_id cartpole \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_name slac-cartpole-multiseed \
     --experiment_group slac-cartpole \
     --experiment_tags slac cartpole \
     --total_time_steps 1000000 \

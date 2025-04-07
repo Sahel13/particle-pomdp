@@ -42,7 +42,6 @@ class NSMCExperiment(NamedTuple):
     # Logger settings
     use_logger: bool = True
     project_name: str = "particle-pomdp"
-    experiment_name: str = "nsmc-cartpole-seed-0"
-    experiment_group: Optional[str] = "nsmc-cartpol"
+    experiment_group: str = "nsmc-cartpole"
     experiment_tags: Optional[List[str]] = ["nsmc", "cartpole", "test"]
     logger_directory: str = "logs"

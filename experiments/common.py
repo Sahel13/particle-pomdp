@@ -1,8 +1,17 @@
+import time
+import uuid
+
 from jax import Array
 import matplotlib.pyplot as plt
 
 from ppomdp.envs import pomdps
 from ppomdp.envs.core import POMDPEnv
+
+
+def get_unique_identifier() -> str:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    unique_id = str(uuid.uuid4())[:8]
+    return f"-{timestamp}-{unique_id}"
 
 
 def get_pomdp(env_name: str) -> POMDPEnv:

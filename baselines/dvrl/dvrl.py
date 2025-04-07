@@ -20,22 +20,9 @@ from ppomdp.bijector import Tanh
 from ppomdp.envs.core import POMDPEnv, POMDPState
 from baselines.dvrl.arch import PolicyNetwork, CriticNetwork
 from baselines.dvrl.utils import sample_random_actions, policy_sample_and_log_prob, belief_init, belief_update
+from baselines.dvrl.config import DVRLConfig
 
 from copy import deepcopy
-
-
-class DVRLConfig(NamedTuple):
-    seed: int = 1
-    num_belief_particles: int = 64
-    total_time_steps: int = int(25e3)
-    buffer_size: int = int(1e5)
-    batch_size: int = 256
-    learning_starts: int = int(5e3)
-    policy_lr: float = 1e-4
-    critic_lr: float = 1e-3
-    alpha: float = 0.2
-    gamma: float = 0.995
-    tau: float = 0.005
 
 
 class JointTrainState(NamedTuple):

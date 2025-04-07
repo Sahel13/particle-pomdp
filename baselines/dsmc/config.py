@@ -36,11 +36,10 @@ class DSMCExperiment(NamedTuple):
     alpha: float = 0.2
     gamma: float = 0.95
     tau: float = 0.005
-    
+
     # Logger settings
     use_logger: bool = True
     project_name: str = "particle-pomdp"
-    experiment_name: str = "dsmc-cartpole-seed-0"
     experiment_group: Optional[str] = "dsmc-cartpole"
     experiment_tags: Optional[List[str]] = ["dsmc", "cartpole" "test"]
     logger_directory: str = "logs"
