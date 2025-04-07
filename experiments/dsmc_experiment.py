@@ -5,6 +5,17 @@ This script uses the DSMCExperiment struct to run DSMC experiments over multiple
 """
 
 import os
+import sys
+
+# Set CUDA device before importing any GPU-related libraries
+if len(sys.argv) > 1:
+    # Parse command line arguments manually to get cuda_device
+    for i, arg in enumerate(sys.argv):
+        if arg == "--cuda_device" and i + 1 < len(sys.argv):
+            os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[i + 1]
+            print(f"Setting CUDA_VISIBLE_DEVICES to {sys.argv[i + 1]}")
+            break
+
 import tyro
 from tqdm import tqdm
 
@@ -23,9 +34,6 @@ from common import get_pomdp, get_unique_identifier
 
 def run_single_seed(config: DSMCExperiment, seed: int) -> None:
     """Run a single seed experiment."""
-
-    # Set CUDA device
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(config.cuda_device)
 
     # Get environment
     env_obj = get_pomdp(config.env_id)

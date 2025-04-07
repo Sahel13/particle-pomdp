@@ -111,10 +111,10 @@ def main():
         history = run.history(keys=keys_to_fetch)
         df = pd.DataFrame(history)
         df['seed'] = run.config.get('seed', run.id)
-        
+
         # Merge the new DataFrame with the combined DataFrame
         combined_data = pd.concat([combined_data, df], ignore_index=True)
-    
+
     print(f"Total data points: {len(combined_data)}")
 
     # Apply smoothing if requested
