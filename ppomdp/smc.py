@@ -439,9 +439,10 @@ def mcmc_backward_sampling_single(
         ancestor_idx = history_states.resampling_indices[t + 1, idx]
         key, sub_key = random.split(key)
         proposed_idx = jax.random.choice(
-            sub_key, jnp.arange(num_history_particles, dtype=jnp.int32), p=history_states.weights[t]
+            sub_key,
+            jnp.arange(num_history_particles, dtype=jnp.int32),
+            p=history_states.weights[t]
         )
-
         ancestor_policy_logpdf = policy_logpdf(
             t + 1,  # starting index of future time steps
             smoothed_actions,
@@ -460,7 +461,6 @@ def mcmc_backward_sampling_single(
             policy,
             params
         )
-
         ancestor_trans_logpdf = transition_logpdf(
             jax.tree.map(lambda x: x[t + 1, idx], belief_states),
             jax.tree.map(lambda x: x[t, ancestor_idx], belief_states),
@@ -473,7 +473,6 @@ def mcmc_backward_sampling_single(
             history_states.particles.actions[t + 1, idx],
             trans_model,
         )
-
         ancestor_log_potential, _ = log_potential(
             jax.tree.map(lambda x: x[t + 1, idx], belief_states),
             history_states.particles.actions[t + 1, idx],
@@ -628,6 +627,7 @@ def backward_sampling_single(
         reweighting_ratio = log_policy + log_transition + log_potentials
         smoothing_weights = jax.nn.softmax(reweighting_ratio + history_states.log_weights[t])
 
+        key, sub_key = random.split(key)
         idx = jax.random.choice(sub_key, jnp.arange(num_history_particles, dtype=jnp.int32), p=smoothing_weights)
         smoothed_history_particles = jax.tree.map(lambda x: x[t, idx], history_states.particles)
         smoothed_belief_state = jax.tree.map(lambda x: x[t, idx], belief_states)

@@ -12,6 +12,7 @@ from ppomdp.core import (
     PRNGKey,
     BeliefState,
     HistoryState,
+    HistoryParticles,
     TransitionModel,
     ObservationModel,
     RecurrentPolicy,
@@ -293,12 +294,18 @@ def policy_logpdf(
     def body(k, val):
         carry, log_prob = val
         next_carry, log_prob_inc = policy.carry_and_log_prob(
-            future_actions[k], carry, future_observations[k - 1], params
+            action=future_actions[k],
+            carry=carry,
+            observations=future_observations[k - 1],
+            params=params
         )
         return next_carry, log_prob + log_prob_inc
 
     carry, log_prob = policy.carry_and_log_prob(
-        future_actions[time_idx], init_carry, init_observation, params
+        action=future_actions[time_idx],
+        carry=init_carry,
+        observations=init_observation,
+        params=params
     )
 
     _, log_prob = jax.lax.fori_loop(time_idx + 1, num_steps, body, (carry, log_prob))
@@ -451,6 +458,28 @@ def custom_split(rng_key: PRNGKey, num: int):
     """
     key, *sub_keys = random.split(rng_key, num)
     return key, jnp.array(sub_keys)
+
+
+@jax.jit
+def flatten_particle_trajectories(particles: HistoryParticles) -> HistoryParticles:
+    """
+    Aligns particle trajectories in time and concatenates them to flatten the time dimension.
+
+    Args:
+        particles (HistoryParticles): The particle trajectories to be flattened.
+            Must include a time component with shape (num_time_steps, batch_size, ...).
+
+    Returns:
+        HistoryParticles: The flattened particle trajectories with the time dimension concatenated.
+    """
+
+    if particles.observations.ndim != 3:
+        raise ValueError("`particles` must include a time component.")
+
+    actions = particles.actions[1:]
+    particles = jax.tree.map(lambda x: x[:-1], particles)
+    particles = particles._replace(actions=actions)
+    return jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles)
 
 
 @partial(jax.jit, static_argnames=("env_obj", "policy", "num_samples"))

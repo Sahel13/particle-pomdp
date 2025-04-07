@@ -21,11 +21,10 @@ from ppomdp.bijector import Tanh
 from ppomdp.gauss import (
     RecurrentNeuralGauss,
     create_recurrent_gauss_policy,
-    train_recurrent_gauss_policy_stepwise,
-    prepare_particles_stepwise
+    train_recurrent_gauss_policy_stepwise
 )
 from ppomdp.smc import backward_tracing, smc
-from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.utils import batch_data, flatten_particle_trajectories, policy_evaluation
 from ppomdp.config import NSMCExperiment
 
 from wandb_logger import WandbLogger
@@ -177,13 +176,13 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
         )
 
         # Update policy parameters
-        traced_history_stepwise = prepare_particles_stepwise(traced_history)
-        data_size = traced_history_stepwise.observations.shape[0]
+        flat_traced_history = flatten_particle_trajectories(traced_history)
+        data_size = flat_traced_history.observations.shape[0]
 
         key, sub_key = random.split(key)
         batch_indices = batch_data(sub_key, data_size, batch_size)
         for batch_idx in batch_indices:
-            history_batch = jax.tree.map(lambda x: x[batch_idx, ...], traced_history_stepwise)
+            history_batch = jax.tree.map(lambda x: x[batch_idx, ...], flat_traced_history)
             train_state, _ = train_recurrent_gauss_policy_stepwise(
                 policy, train_state, history_batch
             )

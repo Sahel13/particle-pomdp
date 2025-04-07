@@ -220,14 +220,3 @@ def train_recurrent_gauss_policy_stepwise(
     loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
     train_state = train_state.apply_gradients(grads=grads)
     return train_state, loss
-
-
-@jax.jit
-def prepare_particles_stepwise(particles: HistoryParticles) -> HistoryParticles:
-    if particles.observations.ndim != 3:
-        raise ValueError("`particles` must include a time component.")
-
-    actions = particles.actions[1:]
-    particles = jax.tree.map(lambda x: x[:-1], particles)
-    particles = particles._replace(actions=actions)
-    return jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles)
