@@ -19,6 +19,10 @@ if len(sys.argv) > 1:
 import tyro
 from tqdm import tqdm
 
+import jax
+from jax import random
+from jax import numpy as jnp
+
 from baselines.dsmc import DSMCExperiment
 from baselines.dsmc import (
     pomdp_init,
@@ -87,12 +91,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
     tau = config.tau
 
     # Initialize JAX random key
-    import jax
-    from jax import random
-    from jax import numpy as jnp
     key = random.key(seed)
-
-    # Create train state and networks
     key, sub_key = random.split(key)
     train_state, _, _ = create_train_state(
         rng_key=sub_key,

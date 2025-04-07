@@ -5,7 +5,7 @@ class NSMC(NamedTuple):
     # Algorithm hyperparameters
     total_time_steps: int = 1000000
     num_history_particles: int = 128
-    num_belief_particles: int = 64
+    num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
     learning_rate: float = 1e-4
@@ -27,7 +27,7 @@ class NSMCExperiment(NamedTuple):
     # Algorithm hyperparameters
     total_time_steps: int = 1000000
     num_history_particles: int = 128
-    num_belief_particles: int = 64
+    num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
     learning_rate: float = 1e-4

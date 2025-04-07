@@ -1,8 +1,7 @@
-from typing import List, Optional, NamedTuple
+from typing import NamedTuple
 
 
 class SAC(NamedTuple):
-    # Algorithm hyperparameters
     total_time_steps: int = 100000
     buffer_size: int = 100000
     learning_starts: int = 5000

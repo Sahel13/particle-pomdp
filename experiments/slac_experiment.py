@@ -19,6 +19,10 @@ if len(sys.argv) > 1:
 import tyro
 from tqdm import tqdm
 
+import jax
+from jax import random
+from jax import numpy as jnp
+
 from baselines.slac import SLACExperiment
 from baselines.slac import (
     pomdp_init,
@@ -82,11 +86,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
     tau = config.tau
 
     # Initialize JAX random key
-    import jax
-    from jax import random
     key = random.key(seed)
-
-    # Create train state and networks
     key, sub_key = random.split(key)
     train_state, policy_network, _ = create_train_state(
         rng_key=sub_key,
@@ -152,6 +152,9 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
                 }, step=global_step)
 
             print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
+
+    # Ensure that training starts with a fresh episode
+    pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
 
     # Number of steps to take using the `lax.scan` loop
     steps_per_epoch = 2000

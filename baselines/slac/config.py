@@ -3,7 +3,7 @@ from typing import List, Optional, NamedTuple
 
 class SLAC(NamedTuple):
     num_belief_particles: int = 32
-    total_time_steps: int = 25000
+    total_time_steps: int = 100000
     buffer_size: int = 100000
     learning_starts: int = 5000
     policy_lr: float = 0.0003
@@ -22,7 +22,7 @@ class SLACExperiment(NamedTuple):
 
     # Algorithm settings
     num_belief_particles: int = 32
-    total_time_steps: int = 25000
+    total_time_steps: int = 100000
     buffer_size: int = 100000
     learning_starts: int = 5000
     policy_lr: float = 0.0003

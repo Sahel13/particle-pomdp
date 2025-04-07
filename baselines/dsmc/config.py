@@ -2,11 +2,10 @@ from typing import List, Optional, NamedTuple
 
 
 class DSMC(NamedTuple):
-    # Algorithm hyperparameters
     num_planner_steps: int = 10
     num_planner_particles: int = 32
     num_belief_particles: int = 32
-    total_time_steps: int = 25000
+    total_time_steps: int = 100000
     buffer_size: int = 100000
     learning_starts: int = 5000
     policy_lr: float = 0.0003
@@ -27,7 +26,7 @@ class DSMCExperiment(NamedTuple):
     num_planner_steps: int = 10
     num_planner_particles: int = 32
     num_belief_particles: int = 32
-    total_time_steps: int = 25000
+    total_time_steps: int = 100000
     buffer_size: int = 100000
     learning_starts: int = 5000
     policy_lr: float = 0.0003
