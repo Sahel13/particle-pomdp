@@ -283,7 +283,7 @@ def create_train_state(
     critic_lr: float,
 ) -> JointTrainState:
 
-    policy_log_std = jnp.ones(env_obj.action_dim)
+    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,

@@ -504,7 +504,7 @@ def critic_train_step(
     alpha: float,
     gamma: float,
 ) -> tuple[JointTrainState, Array]:
-    
+
     key, sub_key = random.split(rng_key)
     next_actions, next_log_probs, _ = train_state.policy_state.apply_fn(
         rng_key=sub_key,
@@ -696,8 +696,8 @@ def create_train_state(
     critic_lr: float,
     num_planner_particles: int,
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
-
-    policy_log_std = jnp.ones(env_obj.action_dim)
+    
+    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,

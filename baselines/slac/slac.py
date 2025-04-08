@@ -139,7 +139,7 @@ def pomdp_step(
     num_belief_particles: int,
     random_actions: bool = False
 ) -> POMDPState:
-    
+
     def _true_fn(_pomdp_state):
         time_idxs = _pomdp_state.time_idxs + 1
         states = _pomdp_state.next_states
@@ -256,7 +256,7 @@ def policy_train_step(
     pomdp_state: POMDPState,
     alpha: float,
 ) -> tuple[JointTrainState, Array]:
-    
+
     def actor_loss(params):
         key, action_key, state_key = random.split(rng_key, 3)
         _, actions, log_probs, _ = train_state.policy_state.apply_fn(
@@ -349,7 +349,7 @@ def step_and_train(
     gamma: float,
     tau: float
 ):
-    
+
     def body(carry, key):
         _pomdp_state, _buffer_state, _train_state = carry
         _step_key, _train_key = random.split(key)
@@ -388,8 +388,8 @@ def create_train_state(
     policy_lr: float,
     critic_lr: float,
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
-    
-    policy_log_std = jnp.ones(env_obj.action_dim)
+
+    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_encoder = GRUEncoder(
         feature_fn=lambda x: x,
         encoder_size=(256, 256),

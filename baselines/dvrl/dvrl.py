@@ -358,7 +358,7 @@ def create_train_state(
     num_belief_particles: int
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
 
-    policy_log_std = jnp.ones(env_obj.action_dim)
+    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         recurr_size=32,
@@ -371,7 +371,7 @@ def create_train_state(
         time_norm=env_obj.num_time_steps,
         recurr_size=32,
         hidden_sizes=(256, 256),
-        num_critics=1
+        num_critics=2
     )
 
     dummy_particles = jnp.empty((1, num_belief_particles, env_obj.state_dim))
