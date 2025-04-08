@@ -34,21 +34,18 @@ python nsmc_experiment.py \
     --decoder_size 256 256
 ```
 
-### DSMC
+### DVRL
 
 ```bash
-
-# Run DSMC on CartPole environment
-python dsmc_experiment.py \
+# Run DVRL on CartPole environment
+python dvrl_experiment.py \
     --env_id cartpole \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_group dsmc-cartpole \
-    --experiment_tags dsmc cartpole \
+    --experiment_group dvrl-cartpole \
+    --experiment_tags dvrl cartpole \
     --total_time_steps 1000000 \
-    --num_planner_steps 10 \
-    --num_planner_particles 32 \
     --num_belief_particles 32 \
     --buffer_size 1000000 \
     --learning_starts 5000 \
@@ -83,26 +80,29 @@ python slac_experiment.py \
     --tau 0.005
 ```
 
-### DVRL
+### DSMC
 
 ```bash
-# Run DVRL on CartPole environment
-python dvrl_experiment.py \
+
+# Run DSMC on CartPole environment
+python dsmc_experiment.py \
     --env_id cartpole \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_group dvrl-cartpole \
-    --experiment_tags dvrl cartpole \
+    --experiment_group dsmc-cartpole \
+    --experiment_tags dsmc cartpole \
     --total_time_steps 1000000 \
+    --num_planner_steps 10 \
+    --num_planner_particles 32 \
     --num_belief_particles 32 \
     --buffer_size 1000000 \
     --learning_starts 5000 \
-    --policy_lr 0.0001 \
+    --policy_lr 0.0003 \
     --critic_lr 0.001 \
     --batch_size 256 \
     --alpha 0.2 \
-    --gamma 0.995 \
+    --gamma 0.95 \
     --tau 0.005
 ```
 
