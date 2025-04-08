@@ -1,27 +1,25 @@
 import math
+from copy import deepcopy
 from functools import partial
 from typing import Callable, Dict
 
 import jax
-from flax.training.train_state import TrainState
 from jax import Array, random
 from jax import numpy as jnp
 
 from ppomdp.core import (
-    Carry,
-    PRNGKey,
-    Parameters,
     BeliefState,
-    HistoryState,
+    Carry,
     HistoryParticles,
-    TransitionModel,
+    HistoryState,
     ObservationModel,
+    Parameters,
+    PRNGKey,
     RecurrentPolicy,
     RewardFn,
+    TransitionModel,
 )
 from ppomdp.envs.core import POMDPEnv
-
-from copy import deepcopy
 
 
 # smc functions
@@ -300,7 +298,7 @@ def policy_logpdf(
             action=future_actions[k],
             carry=carry,
             observations=future_observations[k - 1],
-            params=params
+            params=params,
         )
         return next_carry, log_prob + log_prob_inc
 
@@ -308,7 +306,7 @@ def policy_logpdf(
         action=future_actions[time_idx],
         carry=init_carry,
         observations=init_observation,
-        params=params
+        params=params,
     )
 
     _, log_prob = jax.lax.fori_loop(time_idx + 1, num_steps, body, (carry, log_prob))
@@ -491,7 +489,7 @@ def policy_evaluation(
     env_obj: POMDPEnv,
     policy: RecurrentPolicy,
     params: Parameters,
-    num_samples:int = 100
+    num_samples: int = 100,
 ):
     """
     Deploy the (deterministic) policy to sample trajectories and evaluate the average reward.
@@ -514,7 +512,9 @@ def policy_evaluation(
 
         # Sample actions.
         key, action_key = random.split(key)
-        policy_carry, actions = policy.sample(action_key, policy_carry, observations, eval_params)
+        policy_carry, actions = policy.sample(
+            action_key, policy_carry, observations, eval_params
+        )
 
         # Sample next states.
         key, state_keys = custom_split(key, num_samples + 1)
@@ -527,7 +527,11 @@ def policy_evaluation(
         obs_keys = random.split(key, num_samples)
         observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
-        return (states, policy_carry, observations, time_idx + 1), (states, actions, rewards)
+        return (states, policy_carry, observations, time_idx + 1), (
+            states,
+            actions,
+            rewards,
+        )
 
     key, state_key = random.split(rng_key)
     init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
@@ -538,7 +542,7 @@ def policy_evaluation(
     _, (states, actions, rewards) = jax.lax.scan(
         body,
         (init_states, init_policy_carry, init_observations, 1),
-        random.split(key, env_obj.num_time_steps + 1),
+        random.split(key, env_obj.num_time_steps),
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
     expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
