@@ -16,24 +16,22 @@ if len(sys.argv) > 1:
             print(f"Setting CUDA_VISIBLE_DEVICES to {sys.argv[i + 1]}")
             break
 
-import tyro
-from tqdm import tqdm
-
 import jax
+import tyro
+from brax.training.replay_buffers import UniformSamplingQueue
+from common import get_pomdp, get_unique_identifier
 from jax import random
-from jax import numpy as jnp
+from tqdm import tqdm
+from wandb_logger import WandbLogger
 
-from baselines.dvrl import DVRLExperiment
 from baselines.dvrl import (
+    DVRLExperiment,
     create_train_state,
+    policy_evaluation,
     pomdp_init,
     pomdp_step,
     step_and_train,
-    policy_evaluation,
 )
-
-from wandb_logger import WandbLogger
-from common import get_pomdp, get_unique_identifier
 
 
 def run_single_seed(config: DVRLExperiment, seed: int) -> None:
@@ -70,7 +68,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
             experiment_group=config.experiment_group,
             experiment_tags=config.experiment_tags,
             experiment_config=dvrl_config,
-            logger_directory=config.logger_directory
+            logger_directory=config.logger_directory,
         )
 
     num_belief_particles = config.num_belief_particles
@@ -106,12 +104,11 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
     )
 
     # Set up the replay buffer
-    from brax.training.replay_buffers import UniformSamplingQueue
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
     buffer_obj = UniformSamplingQueue(
         max_replay_size=buffer_size,
         dummy_data_sample=buffer_entry_prototype,
-        sample_batch_size=batch_size
+        sample_batch_size=batch_size,
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -136,7 +133,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
 
         if global_step % 2000 == 0:
             key, sub_key = random.split(key)
-            expected_reward, _, _ = policy_evaluation(
+            expected_reward, *_ = policy_evaluation(
                 rng_key=sub_key,
                 env_obj=env_obj,
                 policy_state=train_state.policy_state,
@@ -144,23 +141,21 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
             )
 
             if logger:
-                logger.log_metrics({
-                    "expected_reward": expected_reward,
-                    "policy_log_std": train_state.policy_state.params['log_std'][0]
-                }, step=global_step)
+                logger.log_metrics(
+                    {
+                        "expected_reward": expected_reward,
+                        "policy_log_std": train_state.policy_state.params["log_std"][0],
+                    },
+                    step=global_step,
+                )
 
             print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
-
-    # Ensure that training starts with a fresh episode
-    pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
 
     # Number of steps to take using the `lax.scan` loop
     steps_per_epoch = 2000
 
     # Training loop
-    for global_step in range(
-        learning_starts, total_time_steps, steps_per_epoch
-    ):
+    for global_step in range(learning_starts, total_time_steps, steps_per_epoch):
         key, sub_key = random.split(key)
         pomdp_state, buffer_state, train_state = step_and_train(
             rng_key=sub_key,
@@ -177,7 +172,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
         )
 
         key, sub_key = random.split(key)
-        expected_reward, _, _ = policy_evaluation(
+        expected_reward, *_ = policy_evaluation(
             rng_key=sub_key,
             env_obj=env_obj,
             policy_state=train_state.policy_state,
@@ -185,10 +180,13 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
         )
 
         if logger:
-            logger.log_metrics({
-                "expected_reward": expected_reward,
-                "policy_log_std": train_state.policy_state.params['log_std'][0]
-            }, step=global_step + steps_per_epoch)
+            logger.log_metrics(
+                {
+                    "expected_reward": expected_reward,
+                    "policy_log_std": train_state.policy_state.params["log_std"][0],
+                },
+                step=global_step + steps_per_epoch,
+            )
 
         print(
             f"Step: {global_step + steps_per_epoch:6d} | "
@@ -214,7 +212,7 @@ def main(config: DVRLExperiment) -> None:
     for seed in tqdm(range(config.num_seeds), desc="Running seeds"):
         run_single_seed(config, seed)
 
-    print(f"Experiment completed.")
+    print("Experiment completed.")
 
 
 if __name__ == "__main__":
