@@ -88,7 +88,11 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = Deterministic(jnp.zeros(state_dim))
+# prior_dist = Deterministic(jnp.zeros(state_dim))
+prior_dist = MultivariateNormalDiag(
+    loc=jnp.zeros(state_dim),
+    scale_diag=jnp.array([1e-2, 1e-1])
+)
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 
 

@@ -50,7 +50,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-4, 0.025])
+    return jnp.array([1e-2, 0.025])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -114,7 +114,11 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = Deterministic(jnp.zeros(state_dim))
+# prior_dist = Deterministic(jnp.zeros(state_dim))
+prior_dist = MultivariateNormalDiag(
+    loc=jnp.zeros(state_dim),
+    scale_diag=jnp.array([1e-2, 1e-1])
+)
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
