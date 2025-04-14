@@ -31,7 +31,7 @@ def get_pomdp(env_name: str) -> POMDPEnv:
         return pomdps.PendulumEnv
     elif env_name == "cartpole":
         return pomdps.CartPoleEnv
-    elif env_name == "target-interception":
+    elif env_name == "target-sensing":
         return pomdps.TargetEnv
     elif env_name == "light-dark-1d":
         return pomdps.LightDark1DEnv
