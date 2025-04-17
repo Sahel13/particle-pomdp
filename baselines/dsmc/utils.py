@@ -48,12 +48,12 @@ def policy_evaluation(
     env_obj: POMDPEnv,
     policy_state: TrainState,
     num_belief_particles: int,
-    num_samples: int = 100,
+    num_samples: int = 1024,
 ):
-    
+
     def body(carry, key):
         states, beliefs, time_idx = carry
-        
+
         # Sample actions using the policy
         key, action_key = random.split(key)
         _, _, actions = policy_state.apply_fn(
@@ -65,15 +65,15 @@ def policy_evaluation(
 
         # Compute rewards
         rewards = jax.vmap(env_obj.reward_fn, (0, 0, None))(states, actions, time_idx)
-        
+
         # Sample next states
         key, state_keys = custom_split(key, num_samples + 1)
         next_states = jax.vmap(env_obj.trans_model.sample)(state_keys, states, actions)
-        
+
         # Sample observations
         key, obs_keys = custom_split(key, num_samples + 1)
         next_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, next_states)
-        
+
         # Update beliefs
         key, belief_keys = custom_split(key, num_samples + 1)
         next_beliefs = jax.vmap(belief_update, (0, None, 0, 0, 0))(
@@ -81,7 +81,7 @@ def policy_evaluation(
         )
 
         return (next_states, next_beliefs, time_idx + 1), (states, actions, rewards)
-    
+
     # Initialize
     key, state_key = random.split(rng_key)
     init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
@@ -99,8 +99,8 @@ def policy_evaluation(
         (init_states, init_beliefs, 0),
         random.split(key, env_obj.num_time_steps + 1),
     )
-    
+
     states = jnp.concatenate([init_states[None, :, :], states], axis=0)
     expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
-    
+
     return expected_reward, states, actions

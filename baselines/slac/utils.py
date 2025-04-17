@@ -36,7 +36,7 @@ def policy_evaluation(
     env_obj: POMDPEnv,
     policy_state: TrainState,
     policy_network: PolicyNetwork,
-    num_samples: int = 100,
+    num_samples: int = 1024,
 ):
 
     def body(carry, key):
