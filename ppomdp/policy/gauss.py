@@ -18,7 +18,7 @@ from ppomdp.core import (
     HistoryParticles,
     RecurrentPolicy,
 )
-from ppomdp.arch import (
+from ppomdp.policy.arch import (
     LSTMEncoder,
     GRUEncoder,
     NeuralGaussDecoder

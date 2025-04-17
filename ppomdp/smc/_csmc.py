@@ -2,7 +2,6 @@ from functools import partial
 
 import jax
 from jax import Array, random, numpy as jnp
-
 from distrax import Distribution
 
 from ppomdp.core import (
@@ -41,7 +40,6 @@ def csmc_init(
     prior_dist: Distribution,
     obs_model: ObservationModel,
     policy: RecurrentPolicy,
-    params: Parameters,
     reference: Reference,
 ) -> tuple[HistoryState, BeliefState, BeliefInfo]:
     r"""Initialize the history and belief states for the nested CSMC algorithm.
@@ -111,14 +109,16 @@ def csmc_init(
     # Initialize dummy actions and policy carry.
     init_carry = policy.reset(num_history_particles)
     dummy_actions = jnp.zeros((num_history_particles, policy.dim))
-    dummy_log_probs = jnp.zeros(num_history_particles)
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
     init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.history_particles.carry)
     dummy_actions = dummy_actions.at[0].set(reference.history_particles.actions)
-    dummy_log_probs = dummy_log_probs.at[0].set(reference.history_particles.log_probs)
 
-    history_particles = HistoryParticles(observations, dummy_actions, init_carry, dummy_log_probs)
+    history_particles = HistoryParticles(
+        actions=dummy_actions,
+        carry=init_carry,
+        observations=observations
+    )
     history_state = HistoryState(
         particles=history_particles,
         log_weights=jnp.zeros(num_history_particles),
@@ -189,14 +189,13 @@ def csmc_step(
 
     # 3. Sample new actions.
     key, sub_key = random.split(key)
-    carry, actions, log_probs = policy.sample_and_log_prob(
+    carry, actions, log_probs, _ = policy.sample_and_log_prob(
         sub_key, particles.carry, particles.observations, params
     )
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
     carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.history_particles.carry)
     actions = actions.at[0].set(reference.history_particles.actions)
-    log_probs = log_probs.at[0].set(reference.history_particles.log_probs)
 
     # 4. Propagate the belief particles.
     key, sub_keys = custom_split(key, num_particles + 1)
@@ -242,7 +241,11 @@ def csmc_step(
     # Eq. 10.3 in Chopin and Papaspiliopoulos (2020).
     log_marginal = logsum_weights - jax.nn.logsumexp(history_state.log_weights)
 
-    history_particles = HistoryParticles(observations, actions, carry, log_probs)
+    history_particles = HistoryParticles(
+        actions=actions,
+        carry=carry,
+        observations=observations,
+    )
     history_state = HistoryState(
         particles=history_particles,
         log_weights=log_weights,
@@ -336,7 +339,6 @@ def csmc(
         prior_dist=prior_dist,
         obs_model=obs_model,
         policy=policy,
-        params=params,
         reference=jax.tree.map(lambda x: x[0], reference),
     )
 

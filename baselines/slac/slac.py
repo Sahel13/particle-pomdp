@@ -11,7 +11,7 @@ from flax.training.train_state import TrainState
 from jax import Array, random
 from jax import numpy as jnp
 
-from ppomdp.arch import GRUEncoder, MLPDecoder
+from ppomdp.policy.arch import GRUEncoder, MLPDecoder
 from ppomdp.bijector import Tanh
 from ppomdp.core import BeliefState, Carry, PRNGKey
 from ppomdp.envs.core import POMDPEnv, POMDPState

@@ -9,7 +9,7 @@ from jax import Array, random, numpy as jnp
 from flax import linen as nn
 from flax.training.train_state import TrainState
 
-from distrax import Bijector, MultivariateNormalDiag
+from distrax import MultivariateNormalDiag
 
 from ppomdp.core import (
     PRNGKey,
@@ -18,7 +18,7 @@ from ppomdp.core import (
     RecurrentPolicy,
     HistoryParticles,
 )
-from ppomdp.arch import (
+from ppomdp.policy.arch import (
     LSTMEncoder,
     GRUEncoder,
     MLPConditioner,
