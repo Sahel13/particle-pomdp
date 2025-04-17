@@ -1,5 +1,4 @@
 import math
-from copy import deepcopy
 from functools import partial
 from typing import Callable, Dict
 
@@ -28,18 +27,36 @@ def resample_belief(
     belief_state: BeliefState,
     resample_fn: Callable,
 ) -> BeliefState:
-    """Resample the belief particles for a single history trajectory.
+    r"""Resample the belief particles for a single history trajectory using adaptive resampling.
 
-    Only resamples if the effective sample size is below 75% of the number of particles.
+    This function implements adaptive resampling - it only triggers resampling when
+    the effective sample size (ESS) falls below 75% of the total number of particles.
+    This helps prevent particle degeneracy while avoiding unnecessary resampling.
 
     Args:
-        rng_key: The random number generator key.
-        belief_state: The state associated with a single history trajectory.
-            Leaves have shape (M, ...).
-        resample_fn: The resampling function.
+        rng_key: PRNGKey
+            Random number generator key for sampling operations
+        belief_state: BeliefState
+            Current belief state containing:
+            - particles: State particles with shape (M, ...)
+            - weights: Normalized importance weights
+            - log_weights: Log of importance weights
+            - resampling_indices: Indices from previous resampling
+        resample_fn: Callable
+            Function implementing the resampling strategy (e.g. systematic, multinomial)
 
     Returns:
-        The new `BeliefState` after resampling.
+        BeliefState:
+            Updated belief state after resampling (if triggered) with:
+            - Resampled particles
+            - Reset weights to uniform
+            - Recorded resampling indices
+
+    Notes:
+        - If ESS > 0.75M, returns original state with only indices updated
+        - If ESS ≤ 0.75M, performs resampling and resets weights
+        - The effective sample size is calculated as: 
+          \[ESS = \frac{(\sum_{m=1}^M w_m)^2}{\sum_{m=1}^M w_m^2}\]
     """
     num_particles = belief_state.particles.shape[0]
 
@@ -71,10 +88,15 @@ def propagate_belief(
     particles: Array,
     action: Array,
 ) -> Array:
-    r"""Propagate the belief particles for a single trajectory.
+    r"""Propagate belief particles forward using the transition model.
+
+    This function advances each particle through the state transition model
+    to get the next state distribution. It handles vectorized operations across
+    all particles efficiently.
 
     Args:
         rng_key: PRNGKey
+            Random number generator key for sampling
         model: TransitionModel
             The transition model for the state.
         particles: Array
@@ -82,6 +104,10 @@ def propagate_belief(
             the n-th history trajectory. Has shape (M, ...).
         action: Array
             The action $a_{t-1}^n$.
+
+    Returns:
+        Array:
+            The propagated particles $\{s_t^{nm}\}_{m=1}^M$ with shape (M, ...).
     """
     num_particles = particles.shape[0]
     rng_keys = random.split(rng_key, num_particles)
@@ -89,9 +115,14 @@ def propagate_belief(
 
 
 def reweight_belief(
-    model: ObservationModel, state: BeliefState, obs: Array
+    model: ObservationModel,
+    state: BeliefState,
+    obs: Array
 ) -> BeliefState:
-    r"""Reweight the belief particles for a single history trajectory.
+    r"""Update particle weights based on new observation.
+
+    Computes importance weights for particles by evaluating the observation
+    likelihood. Weights are normalized to sum to 1.
 
     Args:
         model: ObservationModel
@@ -99,8 +130,13 @@ def reweight_belief(
         state: BeliefState
             The belief state associated with the n-th history trajectory.
             Leaves have shape (M, ...).
-        obs: Array.
+        obs: Array
             The observation $z_t^n$.
+
+    Returns:
+        BeliefState:
+            Updated belief state with new weights computed as:
+            \[w_t^{nm} = \frac{w_{t-1}^{nm} p(z_t^n | s_t^{nm})}{\sum_{m'=1}^M w_{t-1}^{nm'} p(z_t^n | s_t^{nm'})}\]
     """
     log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(obs, state.particles)
     log_weights += state.log_weights
@@ -110,18 +146,27 @@ def reweight_belief(
 
 
 def sample_marginal_obs(
-    rng_key: PRNGKey, obs_model: ObservationModel, state: BeliefState
+    rng_key: PRNGKey,
+    obs_model: ObservationModel,
+    state: BeliefState
 ) -> Array:
-    r"""Sample from the marginal observation distribution.
+    r"""Sample an observation from the marginal observation distribution.
 
-    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$.
+    Samples an observation from the weighted mixture of observation models:
+    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$
 
     Args:
         rng_key: PRNGKey
+            Random number generator key
         obs_model: ObservationModel
+            The observation model
         state: BeliefState
             The belief state associated with the n-th history trajectory.
             Leaves have shape (M, ...).
+
+    Returns:
+        Array:
+            A sampled observation from the marginal distribution
     """
     key1, key2 = random.split(rng_key)
     x = random.choice(key1, state.particles, p=state.weights)
@@ -129,23 +174,29 @@ def sample_marginal_obs(
 
 
 def expected_reward(
-    belief_state: BeliefState, action: Array, time_idx: int, reward_fn: RewardFn
+    belief_state: BeliefState,
+    action: Array,
+    time_idx: int,
+    reward_fn: RewardFn
 ) -> Array:
-    """
-    Calculate the expected reward for a given particle and belief state.
+    r"""Calculate the expected reward for a given particle and belief state.
+
+    Computes the expected reward by taking a weighted average over the belief state:
+    $\mathbb{E}[r_t] = \sum_{m=1}^M w_t^{nm} r(s_t^{nm}, a_t^n)$
 
     Args:
-        reward_fn: RewardFn
-            The reward function, r(s_{t], a_{t-1}).
         belief_state: BeliefState
-            The belief state containing particles and weights.
+            The belief state containing particles and weights
         action: Array
-            Action particle.
+            Action particle
         time_idx: int
-            The current time index.
+            The current time index
+        reward_fn: RewardFn
+            The reward function, r(s_{t}, a_{t-1})
 
     Returns:
-        Array: The cumulative return for the given particle and belief state.
+        Array:
+            The expected reward for the given particle and belief state
     """
     rewards = jax.vmap(reward_fn, in_axes=(0, None, None))(
         belief_state.particles, action, time_idx
@@ -161,24 +212,34 @@ def log_potential(
     prev_action: Array,
     time_idx: int,
     reward_fn: RewardFn,
-    tempering: float,
     slew_rate_penalty: float,
+    tempering: float,
 ) -> tuple[Array, Array]:
     r"""Estimate the log potential function.
 
-    The estimate for the log potential function is given by
-    .. math::
-    \log g_t^n = \eta * \sum_{m=1}^M W_{s,t}^{nm} r_t(s_t^{nm}, a_t^n).
+    The estimate for the log potential function is given by:
+    $\log g_t^n = \eta \left( \sum_{m=1}^M W_{s,t}^{nm} r_t(s_t^{nm}, a_t^n) - \lambda \|a_t^n - a_{t-1}^n\|^2 \right)$
 
     Args:
-        reward_fn: The reward function.
-        belief_state: The belief state associated with the n-th history trajectory.
-            Leaves have shape (M, ...).
-        action: The current action.
-        prev_action: The previous action.
-        time_idx: The current time index.
-        tempering: The tempering parameter.
-        slew_rate_penalty: The slew rate penalty.
+        belief_state: BeliefState
+            The belief state associated with the n-th history trajectory
+        action: Array
+            The current action
+        prev_action: Array
+            The previous action
+        time_idx: int
+            The current time index
+        reward_fn: RewardFn
+            The reward function
+        slew_rate_penalty: float
+            The penalty coefficient for action changes
+        tempering: float
+            The tempering parameter η
+
+    Returns:
+        tuple[Array, Array]:
+            - The tempered log potential value
+            - The raw reward value before tempering
     """
     rewards = expected_reward(belief_state, action, time_idx, reward_fn)
     mod_rewards = rewards - slew_rate_penalty * jnp.dot(
@@ -193,6 +254,26 @@ def resample_history(
     resample_fn: Callable,
     conditional: bool = False,
 ) -> HistoryState:
+    r"""Resample history particles using adaptive resampling.
+
+    Performs adaptive resampling on the history state, similar to resample_belief,
+    but operates on the full history trajectory. Can optionally perform conditional
+    resampling where the first particle is preserved.
+
+    Args:
+        rng_key: PRNGKey
+            Random number generator key
+        history_state: HistoryState
+            Current history state containing particles, weights, and rewards
+        resample_fn: Callable
+            Function implementing the resampling strategy
+        conditional: bool, optional
+            If True, preserves the first particle during resampling
+
+    Returns:
+        HistoryState:
+            Resampled history state with updated particles and uniform weights
+    """
     num_particles = history_state.weights.shape[0]
 
     def true_fn(state: HistoryState) -> HistoryState:
@@ -221,16 +302,29 @@ def resample_history(
 
 
 def systematic_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
-    """
-    Perform systematic resampling of particles based on their weights.
+    r"""Perform systematic resampling of particles based on their weights.
+
+    Implements systematic resampling which provides lower variance than multinomial
+    resampling. The algorithm generates a single uniform random number and uses it
+    to create a deterministic grid of points for resampling.
 
     Args:
-        rng_key (PRNGKey): The random key for sampling.
-        weights (Array): The weights of the particles.
-        num_samples (int): The number of samples to draw.
+        rng_key: PRNGKey
+            Random number generator key
+        weights: Array
+            The weights of the particles
+        num_samples: int
+            The number of samples to draw
 
     Returns:
-        Array: The indices of the resampled particles.
+        Array:
+            The indices of the resampled particles
+
+    Notes:
+        The systematic resampling algorithm:
+        1. Generate a single uniform random number u ~ U[0,1]
+        2. Create a grid of points: u_i = (i + u)/N for i = 0,...,N-1
+        3. For each u_i, find the particle whose cumulative weight interval contains u_i
     """
     n = weights.shape[0]
     u = random.uniform(rng_key, ())
@@ -241,16 +335,28 @@ def systematic_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) ->
 
 
 def multinomial_resampling(rng_key: PRNGKey, weights: Array, num_samples: int) -> Array:
-    """
-    Perform multinomial resampling of particles based on their weights.
+    r"""Perform multinomial resampling of particles based on their weights.
+
+    Implements multinomial resampling where each particle is sampled independently
+    according to its weight. This is simpler but has higher variance than systematic
+    resampling.
 
     Args:
-        rng_key (PRNGKey): The random key for sampling.
-        weights (Array): The weights of the particles.
-        num_samples (int): The number of samples to draw.
+        rng_key: PRNGKey
+            Random number generator key
+        weights: Array
+            The weights of the particles
+        num_samples: int
+            The number of samples to draw
 
     Returns:
-        Array: The indices of the resampled particles.
+        Array:
+            The indices of the resampled particles
+
+    Notes:
+        The multinomial resampling algorithm:
+        1. Generate N independent uniform random numbers
+        2. For each random number, find the particle whose cumulative weight interval contains it
     """
     idx = random.choice(rng_key, num_samples, shape=(num_samples,), p=weights)
     return idx.astype(jnp.int32)
@@ -262,16 +368,22 @@ def marginal_observation_logpdf(
     observation: Array,
     obs_model: ObservationModel,
 ):
-    """
-    Compute the log marginal likelihood of a single observation.
+    r"""Compute the log marginal likelihood of a single observation.
+
+    Calculates the log probability of an observation by marginalizing over the state particles:
+    $\log p(z_t^n) = \log \left( \frac{1}{M} \sum_{m=1}^M p(z_t^n | s_t^{nm}) \right)$
 
     Args:
         states: Array
-            State particles.
+            State particles
         observation: Array
-            The observation.
+            The observation
         obs_model: ObservationModel
-            The observation model.
+            The observation model
+
+    Returns:
+        Array:
+            The log marginal likelihood of the observation
     """
     num_particles = states.shape[0]
     log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(observation, states)
@@ -287,8 +399,30 @@ def policy_logpdf(
     policy: RecurrentPolicy,
     params: Dict,
 ) -> Array:
-    """
-    Compute the logpdf of init and all future actions for a single trajectory
+    r"""Compute the logpdf of a sequence of actions under the policy.
+
+    Calculates the log probability of a sequence of actions given observations:
+    $\log p(a_{t:T}^n | z_{t:T}^n) = \sum_{k=t}^T \log p(a_k^n | a_{1:k-1}^n, z_{1:k}^n)$
+
+    Args:
+        time_idx: int
+            The starting time index
+        future_actions: Array
+            The sequence of future actions
+        future_observations: Array
+            The sequence of future observations
+        init_carry: list[Carry]
+            Initial policy carry state
+        init_observation: Array
+            Initial observation
+        policy: RecurrentPolicy
+            The policy to evaluate
+        params: Dict
+            Policy parameters
+
+    Returns:
+        Array:
+            The log probability of the action sequence
     """
     num_steps = future_actions.shape[0]
 
@@ -319,9 +453,25 @@ def transition_logpdf(
     action: Array,
     trans_model: TransitionModel,
 ):
-    """Computes the transition probability of the belief particles for a single trajectory.
+    r"""Compute transition probability between belief states.
 
-    The transition density is marginalized over the resampling indices.
+    Calculates log p(s_{t+1}|s_t, a_t) by marginalizing over the current
+    belief state particles and their weights:
+    $\log p(s_{t+1}|s_t, a_t) = \log \left( \sum_{m=1}^M \sum_{m'=1}^M w_t^{nm} w_{t+1}^{nm'} p(s_{t+1}^{nm'} | s_t^{nm}, a_t^n) \right)$
+
+    Args:
+        future_belief_state: BeliefState
+            Next belief state s_{t+1}
+        belief_state: BeliefState
+            Current belief state s_t
+        action: Array
+            Action a_t taken
+        trans_model: TransitionModel
+            State transition model p(s'|s,a)
+
+    Returns:
+        Array:
+            Log transition probability
     """
 
     def _log_transition(next_state, states, action):
@@ -339,56 +489,76 @@ def transition_logpdf(
 # misc functions
 @partial(jnp.vectorize, signature="(m,h),(m)->(h)")
 def weighted_mean(particles: Array, weights: Array):
-    """
-    Compute the weighted mean of the particles.
+    r"""Compute the weighted mean of the particles.
+
+    Calculates the weighted mean of particles:
+    $\mu = \frac{\sum_{m=1}^M w_m x_m}{\sum_{m=1}^M w_m}$
 
     Args:
-        particles (Array): The particles array of shape (m, h), where m is the number of particles and h is the dimension.
-        weights (Array): The weights array of shape (m,).
+        particles: Array
+            The particles array of shape (m, h), where m is the number of particles and h is the dimension
+        weights: Array
+            The weights array of shape (m,)
 
     Returns:
-        Array: The weighted mean of the particles of shape (h,).
+        Array:
+            The weighted mean of the particles of shape (h,)
     """
     return jnp.einsum("mh,m->h", particles, weights) / jnp.sum(weights)
 
 
 @partial(jnp.vectorize, signature="(m,h),(m)->(h,h)")
 def weighted_covar(particles: Array, weights: Array) -> Array:
-    """
-    Compute the weighted empirical covariance of the particles.
+    r"""Compute the weighted empirical covariance of the particles.
+
+    Calculates the weighted covariance matrix:
+    $\Sigma = \frac{\sum_{m=1}^M w_m (x_m - \mu)(x_m - \mu)^T}{\sum_{m=1}^M w_m}$
 
     Args:
-        particles (Array): The particles array of shape (m, h), where m is the number of particles and h is the dimension.
-        weights (Array): The weights array of shape (m,).
+        particles: Array
+            The particles array of shape (m, h), where m is the number of particles and h is the dimension
+        weights: Array
+            The weights array of shape (m,)
 
     Returns:
-        Array: The weighted covariance matrix of shape (h, h).
+        Array:
+            The weighted covariance matrix of shape (h, h)
     """
     centered = particles - weighted_mean(particles, weights)
     return jnp.einsum("mh,ml,m->hl", centered, centered, weights) / jnp.sum(weights)
 
 
 def log_ess(log_weights: Array) -> Array:
-    """Computes the log of the effective sample size.
+    r"""Computes the log of the effective sample size.
+
+    Calculates the log of the effective sample size (ESS):
+    $\log(ESS) = 2\log\left(\sum_{m=1}^M w_m\right) - \log\left(\sum_{m=1}^M w_m^2\right)$
 
     Args:
-        log_weights: Log-weights of particles.
+        log_weights: Array
+            Log-weights of particles
 
     Returns:
-        The logarithm of the effective sample size.
+        Array:
+            The logarithm of the effective sample size
     """
     return 2 * jax.nn.logsumexp(log_weights) - jax.nn.logsumexp(2 * log_weights)
 
 
 @partial(jnp.vectorize, signature="(m)->()")
 def effective_sample_size(log_weights: Array) -> Array:
-    """Computes the effective sample size.
+    r"""Computes the effective sample size.
+
+    Calculates the effective sample size (ESS):
+    $ESS = \frac{(\sum_{m=1}^M w_m)^2}{\sum_{m=1}^M w_m^2}$
 
     Args:
-        log_weights: Log-weights of particles.
+        log_weights: Array
+            Log-weights of particles
 
     Returns:
-        The effective sample size.
+        Array:
+            The effective sample size
     """
     return jnp.exp(log_ess(log_weights))
 
@@ -400,16 +570,28 @@ def batch_data(
     batch_size: int,
     skip_last: bool = True,
 ) -> list[Array]:
-    """Generates batched indices.
+    r"""Generates batched indices for data processing.
+
+    Creates batches of indices for processing data in mini-batches. Can optionally
+    skip the last incomplete batch.
 
     Args:
-        rng_key (Array): Random key for shuffling the data.
-        data_size (int): The size of the dataset to be batched.
-        batch_size (int): The size of each batch.
-        skip_last (bool, optional): If True, skips the last incomplete batch. Defaults to False.
+        rng_key: Array
+            Random key for shuffling the data
+        data_size: int
+            The size of the dataset to be batched
+        batch_size: int
+            The size of each batch
+        skip_last: bool, optional
+            If True, skips the last incomplete batch. Defaults to True
 
     Returns:
-        list[Array]: A list of batched indices.
+        list[Array]:
+            A list of batched indices
+
+    Notes:
+        - If skip_last=True, the last batch is dropped if it's smaller than batch_size
+        - The indices are randomly permuted before batching
     """
     batch_idx = random.permutation(rng_key, data_size)
 
@@ -426,61 +608,72 @@ def batch_data(
 
 
 def stitch_arrays(a: Array, b: Array, stitch: int, max_size: int):
-    """
-    Stitch two arrays `a` and `b` along the first axis up to a specified index.
+    r"""Stitch two arrays along the first axis up to a specified index.
 
-    This function creates a new array by selecting elements from `a` up to the
-    `stitch` index and elements from `b` for the remaining indices up to `max_size`.
+    Creates a new array by selecting elements from `a` up to the `stitch` index
+    and elements from `b` for the remaining indices up to `max_size`.
 
     Args:
-        a (Array): The first input array.
-        b (Array): The second input array.
-        stitch (int): The index up to which elements are taken from `a`.
-        max_size (int): The total size of the output array.
+        a: Array
+            The first input array
+        b: Array
+            The second input array
+        stitch: int
+            The index up to which elements are taken from `a`
+        max_size: int
+            The total size of the output array
 
     Returns:
-        Array: The stitched array with elements from `a` up to `stitch` index
-               and elements from `b` for the remaining indices.
+        Array:
+            The stitched array with elements from `a` up to `stitch` index
+            and elements from `b` for the remaining indices
     """
 
     return jnp.where(jnp.arange(max_size)[:, None] <= stitch, a, b)
 
 
 def custom_split(rng_key: PRNGKey, num: int):
-    """
-    Splits a random number generator key into multiple sub-keys.
+    r"""Splits a random number generator key into multiple sub-keys.
 
     Args:
-        rng_key (PRNGKey): The random number generator key to split.
-        num (int): The number of sub-keys to generate.
+        rng_key: PRNGKey
+            The random number generator key to split
+        num: int
+            The number of sub-keys to generate
 
     Returns:
-        tuple: A tuple containing the next key and an array of sub-keys.
+        tuple:
+            A tuple containing the next key and an array of sub-keys
     """
     key, *sub_keys = random.split(rng_key, num)
     return key, jnp.array(sub_keys)
 
 
 @jax.jit
-def flatten_particle_trajectories(particles: HistoryParticles) -> HistoryParticles:
-    """
-    Aligns particle trajectories in time and concatenates them to flatten the time dimension.
+def flatten_particle_trajectories(particles: HistoryParticles):
+    r"""Aligns particle trajectories in time and concatenates them to flatten the time dimension.
 
     Args:
-        particles (HistoryParticles): The particle trajectories to be flattened.
-            Must include a time component with shape (num_time_steps, batch_size, ...).
+        particles: HistoryParticles
+            The particle trajectories to be flattened.
+            Must include a time component with shape (num_time_steps, batch_size, ...)
 
     Returns:
-        HistoryParticles: The flattened particle trajectories with the time dimension concatenated.
+        HistoryParticles:
+            The flattened particle trajectories with the time dimension concatenated
+
+    Raises:
+        ValueError:
+            If particles do not include a time component
     """
 
     if particles.observations.ndim != 3:
         raise ValueError("`particles` must include a time component.")
 
-    actions = particles.actions[1:]
-    particles = jax.tree.map(lambda x: x[:-1], particles)
-    particles = particles._replace(actions=actions)
-    return jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles)
+    actions = particles.actions[1:].reshape((-1, particles.actions.shape[-1]))
+    carry = jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles.carry)
+    observations = particles.observations[:-1].reshape((-1, particles.observations.shape[-1]))
+    return actions, carry, observations
 
 
 @partial(jax.jit, static_argnames=("env_obj", "policy", "num_samples"))
@@ -489,32 +682,37 @@ def policy_evaluation(
     env_obj: POMDPEnv,
     policy: RecurrentPolicy,
     params: Parameters,
-    num_samples: int = 100,
+    num_samples: int = 1024,
 ):
-    """
-    Deploy the (deterministic) policy to sample trajectories and evaluate the average reward.
+    r"""Deploy the (deterministic) policy to sample trajectories and evaluate the average reward.
 
     Args:
-        rng_key (PRNGKey): The random number generator key.
-        env_obj (POMDPEnv): The partially observable Markov decision process environment.
-        policy (RecurrentPolicy): The policy to be evaluated.
-        params (Parameter): Stochastic policy parameters.
-        num_samples (int, optional): The number of samples to draw. Defaults to 100.
+        rng_key: PRNGKey
+            The random number generator key
+        env_obj: POMDPEnv
+            The partially observable Markov decision process environment
+        policy: RecurrentPolicy
+            The policy to be evaluated
+        params: Parameters
+            Stochastic policy parameters
+        num_samples: int, optional
+            The number of samples to draw. Defaults to 1024
 
     Returns:
-        tuple: A tuple containing the expected reward, states, and actions.
+        tuple:
+            A tuple containing:
+            - The expected reward
+            - The sequence of states
+            - The sequence of actions
     """
-    eval_params = deepcopy(params)
-    eval_params["log_std"] = -20.0 * jnp.ones_like(eval_params["log_std"])
 
     def body(carry, key):
         states, policy_carry, observations, time_idx = carry
 
         # Sample actions.
         key, action_key = random.split(key)
-        policy_carry, actions = policy.sample(
-            action_key, policy_carry, observations, eval_params
-        )
+        policy_carry, _, actions = \
+            policy.sample(action_key, policy_carry, observations, params)
 
         # Sample next states.
         key, state_keys = custom_split(key, num_samples + 1)
@@ -527,23 +725,58 @@ def policy_evaluation(
         obs_keys = random.split(key, num_samples)
         observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
-        return (states, policy_carry, observations, time_idx + 1), (
-            states,
-            actions,
-            rewards,
-        )
+        return (states, policy_carry, observations, time_idx + 1), \
+            (states, actions, rewards)
 
     key, state_key = random.split(rng_key)
     init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+
     key, obs_keys = custom_split(key, num_samples + 1)
     init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
     init_policy_carry = policy.reset(num_samples)
 
-    _, (states, actions, rewards) = jax.lax.scan(
-        body,
-        (init_states, init_policy_carry, init_observations, 1),
-        random.split(key, env_obj.num_time_steps),
+    _, (states, actions, rewards) = \
+        jax.lax.scan(
+            f=body,
+            init=(init_states, init_policy_carry, init_observations, 1),
+            xs=random.split(key, env_obj.num_time_steps),
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
     expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
     return expected_reward, states, actions
+
+
+def damping_schedule(
+    step: int,
+    total_steps: int,
+    steepness: float = 1.0,
+    init_value: float = 0.1,
+    max_value: float = 0.95
+) -> float:
+    r"""Generate smooth damping factor that increases over training.
+
+    Uses a sigmoid schedule to gradually increase damping from init_value to max_value:
+    $\beta = \frac{1}{1 + e^{-\alpha x}}$
+    where x is a scaled time variable and α is the steepness parameter.
+
+    Args:
+        step: int
+            Current training step
+        total_steps: int
+            Total number of training steps
+        steepness: float, optional
+            Controls slope of sigmoid curve. Defaults to 1.0
+        init_value: float, optional
+            Initial damping value. Defaults to 0.1
+        max_value: float, optional
+            Maximum damping value. Defaults to 0.95
+
+    Returns:
+        float:
+            Damping factor between init_value and max_value
+    """
+    x = (step / total_steps) * 12.0 - 6.0
+    beta = 1 / (1 + jnp.exp(-steepness * x))
+    # Rescale beta to start from initial_value and go up to max_value
+    beta_scaled = init_value + (max_value - init_value) * beta
+    return jnp.minimum(beta_scaled, max_value)
