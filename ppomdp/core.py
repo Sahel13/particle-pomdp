@@ -15,10 +15,9 @@ Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
 class HistoryParticles(NamedTuple):
-    observations: Array
     actions: Array
     carry: list[Carry]
-    log_probs: Array
+    observations: Array
 
 
 class HistoryState(NamedTuple):
@@ -66,6 +65,11 @@ class Reference(NamedTuple):
     belief_state: BeliefState
 
 
+class RewardFn(Protocol):
+    def __call__(self, s: Array, a: Array, t: Array) -> Array:
+        r"""The  reward function $r(s_t, a_t)$."""
+
+
 class SampleTransition(Protocol):
     def __call__(self, rng_key: PRNGKey, s: Array, a: Array) -> Array:
         r"""Sample from $f(s_t \mid s_{t-1}, a_{t-1})$."""
@@ -100,23 +104,6 @@ class ObservationModel(NamedTuple):
     log_prob: LogProbObservation
 
 
-class SamplePolicy(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array, params: Parameters) -> Array:
-        r"""Sample from $\pi_\phi(a_t \mid s_t)$."""
-
-
-class LogProbPolicy(Protocol):
-    def __call__(self, a: Array, s: Array, params: Parameters) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t)$."""
-
-
-class Policy(NamedTuple):
-    r"""The stochastic recurrent policy $\pi_\phi$."""
-
-    sample: SamplePolicy
-    log_prob: LogProbPolicy
-
-
 class ResetRecurrentPolicy(Protocol):
     def __call__(self, batch_size: int) -> list[Carry]:
         r"""Reset the recurrent state of the policy."""
@@ -129,8 +116,8 @@ class SampleRecurrentPolicy(Protocol):
         carry: list[Carry],
         observations: Array,
         params: Parameters,
-    ) -> tuple[list[Carry], Array]:
-        r"""Sample from $\pi_\phi(a_t, carry, \mid s_t)$."""
+    ) -> tuple[list[Carry], Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid z_t, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
@@ -141,7 +128,7 @@ class LogProbRecurrentPolicy(Protocol):
         observations: Array,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t, carry, \mid s_t,)$."""
+        r"""Compute the log density of $\pi_\phi(a_t, \mid z_t, carry)$."""
 
 
 class PathwiseCarryRecurrentPolicy(Protocol):
@@ -151,7 +138,7 @@ class PathwiseCarryRecurrentPolicy(Protocol):
         observations: Array,
         params: Parameters
     ) -> list[Carry]:
-        r"""Compute the carry of $\pi_\phi(a_t \mid s_t, carry)$."""
+        r"""Compute the carry of $\pi_\phi(a_t \mid z_t, carry)$."""
 
 
 class PathwiseLogProbRecurrentPolicy(Protocol):
@@ -160,7 +147,7 @@ class PathwiseLogProbRecurrentPolicy(Protocol):
         particles: HistoryParticles,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
+        r"""Compute the log density of $\pi_\phi(a_t \mid z_t, carry)$."""
 
 
 class SampleAndLogProbRecurrentPolicy(Protocol):
@@ -170,8 +157,8 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         carry: list[Carry],
         observations: Array,
         params: Parameters,
-    ) -> tuple[list[Carry], Array, Array]:
-        r"""Sample from $\pi_\phi(a_t, carry, \mid s_t)$ and compute its log density."""
+    ) -> tuple[list[Carry], Array, Array, Array]:
+        r"""Sample from $\pi_\phi(a_t, \mid z_t, carry)$ and compute its log density."""
 
 
 class CarryAndLogProbRecurrentPolicy(Protocol):
@@ -197,8 +184,7 @@ class InitializeRecurrentPolicy(Protocol):
     def __call__(
         self,
         rng_key: PRNGKey,
-        input_dim: int,
-        output_dim: int,
+        obs_dim: int,
         batch_dim: int,
         learning_rate: float,
     ) -> TrainState:
@@ -209,6 +195,7 @@ class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
 
     dim: int
+    init: InitializeRecurrentPolicy
     reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
@@ -217,9 +204,68 @@ class RecurrentPolicy(NamedTuple):
     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
     carry_and_log_prob: CarryAndLogProbRecurrentPolicy
     entropy: EntropyRecurrentPolicy
-    init: InitializeRecurrentPolicy
 
 
-class RewardFn(Protocol):
-    def __call__(self, s: Array, a: Array, t: Array) -> Array:
-        r"""The  reward function $r(s_t, a_t)$."""
+# class SampleRecurrentObservation(Protocol):
+#     def __call__(
+#         self,
+#         rng_key: PRNGKey,
+#         carry: list[Carry],
+#         actions: Array,
+#         params: Parameters,
+#     ) -> Array:
+#         r"""Sample from $q(z_{t+1} \mid a_t, carry)$."""
+#
+#
+# class LogProbRecurrentObservation(Protocol):
+#     def __call__(
+#         self,
+#         observations: Array,
+#         carry: list[Carry],
+#         actions: Array,
+#         params: Parameters
+#     ) -> Array:
+#         r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
+#
+#
+# class PathwiseLogProbRecurrentObservation(Protocol):
+#     def __call__(
+#         self,
+#         particles: HistoryParticles,
+#         params: Parameters
+#     ) -> Array:
+#         r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
+#
+#
+# class SampleAndLogProbRecurrentObservation(Protocol):
+#     def __call__(
+#         self,
+#         rng_key: PRNGKey,
+#         carry: list[Carry],
+#         actions: Array,
+#         params: Parameters,
+#     ) -> tuple[Array, Array]:
+#         r"""Sample from $q(z_{t+1} \mid a_t, carry)$ and compute its log density."""
+#
+#
+# class InitializeRecurrentObservation(Protocol):
+#     def __call__(
+#         self,
+#         rng_key: PRNGKey,
+#         obs_dim: int,
+#         action_dim: int,
+#         batch_dim: int,
+#         learning_rate: float,
+#     ) -> TrainState:
+#         r"""Initialize the recurrent state of the posterior over observations."""
+#
+#
+# class RecurrentObservation(NamedTuple):
+#     r"""The posterior distribution $q(z_{t+1} \mid a_t, carry)$."""
+#
+#     dim: int
+#     sample: SampleRecurrentObservation
+#     log_prob: LogProbRecurrentObservation
+#     pathwise_log_prob: PathwiseLogProbRecurrentObservation
+#     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
+#     init: InitializeRecurrentObservation

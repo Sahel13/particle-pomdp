@@ -137,8 +137,8 @@ def csmc_step(
     policy: RecurrentPolicy,
     params: Parameters,
     reward_fn: RewardFn,
-    tempering: float,
     slew_rate_penalty: float,
+    tempering: float,
     reference: Reference,
     history_state: HistoryState,
     belief_state: BeliefState,
@@ -159,10 +159,10 @@ def csmc_step(
             Parameters of recurrent policy $\phi$.
         reward_fn: RewardFn
             The reward function, $r(s_t, a_t)$.
-        tempering: float
-            The tempering parameter, $\eta$.
         slew_rate_penalty: float
             The slew rate penalty.
+        tempering: float
+            The tempering parameter, $\eta$.
         reference: Reference
             Reference trajectory of the conditional particle filter.
         history_state: HistoryState
@@ -231,9 +231,10 @@ def csmc_step(
 
     # 7. Reweight the history particles.
     log_potentials, rewards = jax.vmap(log_potential, in_axes=(0, 0, 0, None, None, None, None))(
-        belief_state, actions, particles.actions, time_idx, reward_fn, tempering, slew_rate_penalty
+        belief_state, actions, particles.actions, time_idx, reward_fn, slew_rate_penalty, tempering
     )
-    log_weights = log_potentials + history_state.log_weights
+
+    log_weights = history_state.log_weights + log_potentials
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
 
@@ -264,8 +265,8 @@ def csmc(
     policy: RecurrentPolicy,
     params: Parameters,
     reward_fn: RewardFn,
-    tempering: float,
     slew_rate_penalty: float,
+    tempering: float,
     reference: Reference,
 ) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     """
@@ -292,10 +293,10 @@ def csmc(
             Parameters of the recurrent policy.
         reward_fn: RewardFn
             The reward function.
-        tempering: float
-            The tempering parameter.
         slew_rate_penalty: float
             The slew rate penalty.
+        tempering: float
+            The tempering parameter.
         reference: Reference
             Reference trajectory of the conditional particle filter.
 
@@ -310,18 +311,18 @@ def csmc(
         time_idx, key, ref_state = args
 
         history_state, belief_state, belief_info, log_marginal_incr = csmc_step(
-            time_idx,
-            key,
-            trans_model,
-            obs_model,
-            policy,
-            params,
-            reward_fn,
-            tempering,
-            slew_rate_penalty,
-            ref_state,
-            history_state,
-            belief_state,
+            time_idx=time_idx,
+            rng_key=key,
+            trans_model=trans_model,
+            obs_model=obs_model,
+            policy=policy,
+            params=params,
+            reward_fn=reward_fn,
+            slew_rate_penalty=slew_rate_penalty,
+            tempering=tempering,
+            reference=ref_state,
+            history_state=history_state,
+            belief_state=belief_state,
         )
 
         log_marginal += log_marginal_incr
@@ -329,20 +330,20 @@ def csmc(
 
     init_key, loop_key = random.split(rng_key, 2)
     init_history_state, init_belief_state, init_belief_info = csmc_init(
-        init_key,
-        num_history_particles,
-        num_belief_particles,
-        prior_dist,
-        obs_model,
-        policy,
-        params,
-        jax.tree.map(lambda x: x[0], reference),
+        rng_key=init_key,
+        num_history_particles=num_history_particles,
+        num_belief_particles=num_belief_particles,
+        prior_dist=prior_dist,
+        obs_model=obs_model,
+        policy=policy,
+        params=params,
+        reference=jax.tree.map(lambda x: x[0], reference),
     )
 
     (_, _, log_marginal), (history_states, belief_states, belief_infos) = jax.lax.scan(
-        csmc_loop,
-        (init_history_state, init_belief_state, jnp.array(0.0)),
-        (
+        f=csmc_loop,
+        init=(init_history_state, init_belief_state, jnp.array(0.0)),
+        xs=(
             jnp.arange(1, num_time_steps + 1),  # time indices
             random.split(loop_key, num_time_steps),  # random keys
             jax.tree.map(lambda x: x[1:], reference)  # reference trajectory
