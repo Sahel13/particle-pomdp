@@ -173,7 +173,7 @@ def smc_step(
     # 3. Sample new actions.
     key, action_key = random.split(key)
     carry, actions, _ = policy_prior.sample(
-        action_key, particles.carry, particles.observations, policy_prior_params
+        action_key, particles.carry, particles.observations, particles.actions, policy_prior_params
     )
 
     # 4. Propagate the belief particles.

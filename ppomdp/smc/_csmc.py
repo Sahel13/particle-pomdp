@@ -37,40 +37,41 @@ def csmc_init(
     rng_key: PRNGKey,
     num_history_particles: int,
     num_belief_particles: int,
-    prior_dist: Distribution,
+    init_prior: Distribution,
+    policy_prior: RecurrentPolicy,
     obs_model: ObservationModel,
-    policy: RecurrentPolicy,
     reference: Reference,
 ) -> tuple[HistoryState, BeliefState, BeliefInfo]:
-    r"""Initialize the history and belief states for the nested CSMC algorithm.
+    """
+    Initializes the CSMC (Conditional Sequential Monte Carlo) algorithm by setting up the
+    necessary belief and history states, with specified priors and reference state.
 
-    This samples from
-    .. math::
-      \begin{align}
-        z_0^n &\sim \sum_{m=1}^M W_{s,0}^{nm} h(z_0 \mid s_0^{nm}), \\
-      \end{align}
+    The function creates belief particles based on the initial prior distribution and sets
+    up the belief state, which is reweighted using marginal observations sampled for each
+    history particle. It incorporates reference states into the initialized belief state
+    and observations. Additionally, it initializes the history state with dummy actions
+    and policy carry, replacing them with reference values where applicable.
 
-    for all $n \in \{1, \dots, N\}$.
+    Wraps up by returning the initialized history state, belief state, and belief info
+    structure for further iterations or processing.
 
     Args:
-        rng_key: PRNGKey
-        num_history_particles: int
-            The number of history particles $N$.
-        num_belief_particles: int
-            The number of belief particles $M$.
-        prior_dist: distrax.Distribution
-            The prior distribution for the initial state particles.
-        obs_model: ObservationModel
-            The observation model.
-        policy: RecurrentPolicy
-            The recurrent policy.
-        params: Parameters
-            Parameters of the recurrent policy.
-        reference: Reference
-            Reference state of the conditional particle filter.
+        rng_key: Random number generator key for stochastic operations.
+        num_history_particles: Number of particles in the history state.
+        num_belief_particles: Number of particles in the belief state.
+        init_prior: Initial prior distribution for belief particles.
+        policy_prior: Recurrent policy model defining priors over policies.
+        obs_model: Observation model for sampling and updating observations.
+        reference: Reference state containing pre-defined belief state and
+            history particles.
+
+    Returns:
+        tuple[HistoryState, BeliefState, BeliefInfo]: A tuple containing the
+        initialized history state, belief state, and belief information metrics
+        such as effective sample size, mean, and covariance of belief particles.
     """
     key, sub_key = random.split(rng_key)
-    belief_particles = prior_dist.sample(
+    belief_particles = init_prior.sample(
         seed=sub_key,
         sample_shape=(num_history_particles, num_belief_particles),
     )
@@ -107,8 +108,8 @@ def csmc_init(
     )
 
     # Initialize dummy actions and policy carry.
-    init_carry = policy.reset(num_history_particles)
-    dummy_actions = jnp.zeros((num_history_particles, policy.dim))
+    init_carry = policy_prior.reset(num_history_particles)
+    dummy_actions = jnp.zeros((num_history_particles, policy_prior.dim))
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
     init_carry = jax.tree_map(lambda x, y: x.at[0].set(y), init_carry, reference.history_particles.carry)
@@ -130,18 +131,18 @@ def csmc_init(
 
 
 def csmc_step(
-    time_idx: int,
     rng_key: PRNGKey,
+    policy_prior: RecurrentPolicy,
+    policy_prior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
-    policy: RecurrentPolicy,
-    params: Parameters,
     reward_fn: RewardFn,
     slew_rate_penalty: float,
     tempering: float,
     reference: Reference,
     history_state: HistoryState,
     belief_state: BeliefState,
+    time_idx: int,
 ) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     r"""A single step of the nested CSMC algorithm.
 
@@ -153,9 +154,9 @@ def csmc_step(
             The transition model for the state, $f(s_t \mid s_{t-1}, a_{t-1})$.
         obs_model: ObservationModel
             The observation model, $g(z_t \mid s_t)$.
-        policy: RecurrentPolicy
+        policy_prior: RecurrentPolicy
             The stochastic policy, $\pi_\phi$.
-        params: Parameters
+        policy_prior_params: Parameters
             Parameters of recurrent policy $\phi$.
         reward_fn: RewardFn
             The reward function, $r(s_t, a_t)$.
@@ -189,8 +190,8 @@ def csmc_step(
 
     # 3. Sample new actions.
     key, sub_key = random.split(key)
-    carry, actions, log_probs, _ = policy.sample_and_log_prob(
-        sub_key, particles.carry, particles.observations, params
+    carry, actions, _, _ = policy_prior.sample_and_log_prob(
+        sub_key, particles.carry, particles.observations, particles.actions, policy_prior_params
     )
 
     # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
@@ -256,17 +257,29 @@ def csmc_step(
     return history_state, belief_state, belief_info, log_marginal
 
 
-@partial(jax.jit, static_argnums=(1, 2, 3, 4, 5, 6, 7, 9))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "num_time_steps",
+        "num_history_particles",
+        "num_belief_particles",
+        "init_prior",
+        "policy_prior",
+        "trans_model",
+        "obs_model",
+        "reward_fn"
+    )
+)
 def csmc(
     rng_key: PRNGKey,
     num_time_steps: int,
     num_history_particles: int,
     num_belief_particles: int,
-    prior_dist: Distribution,
+    init_prior: Distribution,
+    policy_prior: RecurrentPolicy,
+    policy_prior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
-    policy: RecurrentPolicy,
-    params: Parameters,
     reward_fn: RewardFn,
     slew_rate_penalty: float,
     tempering: float,
@@ -284,15 +297,15 @@ def csmc(
             The number of belief particles.
         num_time_steps: int
             The number of time steps for the SMC algorithm.
-        prior_dist: Distribution
+        init_prior: Distribution
             The prior distribution for the initial state particles.
         trans_model: TransitionModel
             The transition model for the state.
         obs_model: ObservationModel
             The observation model.
-        policy: RecurrentPolicy
+        policy_prior: RecurrentPolicy
             The recurrent policy.
-        params: Parameters
+        policy_prior_params: Parameters
             Parameters of the recurrent policy.
         reward_fn: RewardFn
             The reward function.
@@ -313,20 +326,21 @@ def csmc(
         history_state, belief_state, log_marginal = carry
         time_idx, key, ref_state = args
 
-        history_state, belief_state, belief_info, log_marginal_incr = csmc_step(
-            time_idx=time_idx,
-            rng_key=key,
-            trans_model=trans_model,
-            obs_model=obs_model,
-            policy=policy,
-            params=params,
-            reward_fn=reward_fn,
-            slew_rate_penalty=slew_rate_penalty,
-            tempering=tempering,
-            reference=ref_state,
-            history_state=history_state,
-            belief_state=belief_state,
-        )
+        history_state, belief_state, belief_info, log_marginal_incr = \
+            csmc_step(
+                rng_key=key,
+                policy_prior=policy_prior,
+                policy_prior_params=policy_prior_params,
+                trans_model=trans_model,
+                obs_model=obs_model,
+                reward_fn=reward_fn,
+                slew_rate_penalty=slew_rate_penalty,
+                tempering=tempering,
+                reference=ref_state,
+                history_state=history_state,
+                belief_state=belief_state,
+                time_idx=time_idx,
+            )
 
         log_marginal += log_marginal_incr
         return (history_state, belief_state, log_marginal), (history_state, belief_state, belief_info)
@@ -336,9 +350,9 @@ def csmc(
         rng_key=init_key,
         num_history_particles=num_history_particles,
         num_belief_particles=num_belief_particles,
-        prior_dist=prior_dist,
+        init_prior=init_prior,
+        policy_prior=policy_prior,
         obs_model=obs_model,
-        policy=policy,
         reference=jax.tree.map(lambda x: x[0], reference),
     )
 

@@ -17,6 +17,7 @@ from ppomdp.core import (
     Parameters,
     HistoryParticles,
     RecurrentPolicy,
+    RecurrentObservation,
 )
 from ppomdp.policy.arch import (
     LSTMEncoder,
@@ -49,64 +50,70 @@ def create_recurrent_neural_gauss_policy(
         rng_key: PRNGKey,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
-        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations, actions)
         mean, log_std = decoder.apply({"params": params["decoder"]}, encodings)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
-        sample = dist.sample(seed=rng_key)
-        return next_carry, sample, bijector.forward(mean)
+        next_actions = dist.sample(seed=rng_key)
+        return next_carry, next_actions, bijector.forward(mean)
 
     def log_prob(
-        actions: Array,
+        next_actions: Array,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> Array:
-        _, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        _, encodings = encoder.apply({"params": params["encoder"]}, carry, observations, actions)
         mean, log_std = decoder.apply({"params": params["decoder"]}, encodings)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
-        return dist.log_prob(actions)
+        return dist.log_prob(next_actions)
 
     def sample_and_log_prob(
         rng_key: PRNGKey,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array, Array]:
-        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations, actions)
         mean, log_std = decoder.apply({"params": params["decoder"]}, encodings)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
-        sample, log_prob = dist.sample_and_log_prob(seed=rng_key)
-        return next_carry, sample, log_prob, bijector.forward(mean)
+        next_actions, log_prob = dist.sample_and_log_prob(seed=rng_key)
+        return next_carry, next_actions, log_prob, bijector.forward(mean)
 
     def carry_and_log_prob(
-        action: Array,
+        next_actions: Array,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
-        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations. actions)
         mean, log_std = decoder.apply({"params": params["decoder"]}, encodings)
         base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
         dist = Transformed(distribution=base, bijector=bijector)
-        log_prob = dist.log_prob(action)
-        return next_carry, log_prob
+        log_probs = dist.log_prob(next_actions)
+        return next_carry, log_probs
 
     @jax.jit
     def pathwise_carry(
         init_carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ):
-        def body(carry, obs):
-            next_carry, _ = encoder.apply({"params": params["encoder"]}, carry, obs)
+        def body(carry, args):
+            obs, act = args
+            next_carry, _ = encoder.apply({"params": params["encoder"]}, carry, obs, act)
             return next_carry, next_carry
 
-        _, all_carry = jax.lax.scan(body, init_carry, observations)
+        _, all_carry = jax.lax.scan(body, init_carry, (observations, actions))
 
         def concat_trees(x, y):
             return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
@@ -118,10 +125,11 @@ def create_recurrent_neural_gauss_policy(
         params: Parameters
     ) -> Array:
         def body(t, log_probs):
-            actions = particles.actions[t]
-            observations = particles.observations[t - 1]
+            next_actions = particles.actions[t]
             carry = jax.tree.map(lambda x: x[t - 1], particles.carry)
-            log_prob_incs = log_prob(actions, carry, observations, params)
+            observations = particles.observations[t - 1]
+            actions = particles.actions[t - 1]
+            log_prob_incs = log_prob(next_actions, carry, observations, actions, params)
             return log_probs + log_prob_incs
 
         num_time_steps, batch_size, _ = particles.actions.shape
@@ -139,6 +147,7 @@ def create_recurrent_neural_gauss_policy(
     def init(
         rng_key: PRNGKey,
         obs_dim: int,
+        action_dim: int,
         batch_dim: int,
     ) -> Parameters:
         obs_key, encoder_key, decoder_key = random.split(rng_key, 3)
@@ -146,10 +155,11 @@ def create_recurrent_neural_gauss_policy(
         # initialize encoder network
         dummy_carry = encoder.reset(batch_dim)
         dummy_observation = random.normal(obs_key, (batch_dim, obs_dim))
-        encoder_params = encoder.init(encoder_key, dummy_carry, dummy_observation)["params"]
+        dummy_action = random.normal(obs_key, (batch_dim, action_dim))
+        encoder_params = encoder.init(encoder_key, dummy_carry, dummy_observation, dummy_action)["params"]
 
         # initialize decoder network
-        _, dummy_encoding = encoder.apply({"params": encoder_params}, dummy_carry, dummy_observation)
+        _, dummy_encoding = encoder.apply({"params": encoder_params}, dummy_carry, dummy_observation, dummy_action)
         decoder_params = decoder.init(decoder_key, dummy_encoding)["params"]
 
         # merge parameters
@@ -211,29 +221,44 @@ def train_recurrent_neural_gauss_policy_pathwise(
 def train_recurrent_neural_gauss_policy_stepwise(
     policy: RecurrentPolicy,
     learner: TrainState,
-    actions: Array,
+    next_actions: Array,
     carry: List[Carry],
     observations: Array,
+    actions: Array,
     damping: float = 1.0
 ):
-    r"""Performs a single training step for the recurrent neural Gaussian policy.
+    """
+    Trains a recurrent neural Gaussian policy in a stepwise manner using the
+    provided learner and policy parameters. The function computes the loss
+    based on the policy log probabilities scaled by a damping factor and
+    updates the learner's parameters using gradient descent.
 
     Args:
-        policy (RecurrentPolicy): The policy to be trained
-        learner (TrainState): Current training state
-        actions (Array): Batch of actions
-        carry (List[Carry]): List of recurrent state carries
-        observations (Array): Batch of observations
-        damping (float, optional): Damping factor for the loss. Defaults to 1.0.
+        policy (RecurrentPolicy): The recurrent policy to be trained. This policy
+            defines how the log probabilities are calculated.
+        learner (TrainState): The training state containing the model parameters
+            and optimizer state that are updated during training.
+        next_actions (Array): The sequence of actions predicted by the policy for
+            the next step, used for log probability computation.
+        carry (List[Carry]): The recurrent carry state passed across steps in the
+            recurrent model. Contains hidden state information.
+        observations (Array): The input data or observations considered by the
+            policy for decision-making.
+        actions (Array): The actions corresponding to the given observations.
+        damping (float, optional): A scaling factor for the calculated log
+            probabilities. Defaults to 1.0.
 
     Returns:
-        tuple[TrainState, float]: Updated training state and loss value
+        Tuple[TrainState, Array]: A tuple containing the updated learner with
+            adjusted gradients and the computed loss value. The loss represents
+            the negative mean log probability of the next actions given the input.
     """
     def loss_fn(params):
         log_probs = damping * policy.log_prob(
-            actions=actions,
+            next_actions=next_actions,
             carry=carry,
             observations=observations,
+            actions=actions,
             params=params
         )
         return -1.0 * jnp.mean(log_probs)
@@ -292,6 +317,132 @@ def train_multihead_recurrent_neural_gauss_policy_stepwise(
             params=posterior_param
         )
         log_probs = (1. - damping) * prior_log_probs + damping * posterior_log_probs
+        return -1.0 * jnp.mean(log_probs)
+
+    loss, grads = jax.value_and_grad(loss_fn)(learner.params)
+    learner = learner.apply_gradients(grads=grads)
+    return learner, loss
+
+
+
+def create_recurrent_neural_gauss_observation(
+    encoder: Union[LSTMEncoder, GRUEncoder],
+    decoder: NeuralGaussDecoder,
+) -> RecurrentObservation:
+
+    def sample(
+        rng_key: PRNGKey,
+        carry: list[Carry],
+        observations: Array,
+        actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        mean, log_std = decoder.apply({"params": params["decoder"]}, encodings, actions)
+        dist = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+        sample = dist.sample(seed=rng_key)
+        return next_carry, sample
+
+    def log_prob(
+        next_observations: Array,
+        carry: list[Carry],
+        observations: Array,
+        actions: Array,
+        params: Parameters,
+    ) -> Array:
+        _, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        mean, log_std = decoder.apply({"params": params["decoder"]}, encodings, actions)
+        dist = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+        return dist.log_prob(next_observations)
+
+    def sample_and_log_prob(
+        rng_key: PRNGKey,
+        carry: list[Carry],
+        observations: Array,
+        actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array, Array]:
+        next_carry, encodings = encoder.apply({"params": params["encoder"]}, carry, observations)
+        mean, log_std = decoder.apply({"params": params["decoder"]}, encodings, actions)
+        dist = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+        sample, log_prob = dist.sample_and_log_prob(seed=rng_key)
+        return next_carry, sample, log_prob
+
+    def reset(batch_size: int,) -> list[Carry]:
+        return encoder.reset(batch_size)
+
+    def init(
+        rng_key: PRNGKey,
+        obs_dim: int,
+        action_dim: int,
+        batch_dim: int,
+    ) -> Parameters:
+        obs_key, encoder_key, decoder_key = random.split(rng_key, 3)
+
+        # initialize encoder network
+        dummy_carry = encoder.reset(batch_dim)
+        dummy_observation = random.normal(obs_key, (batch_dim, obs_dim))
+        encoder_params = encoder.init(encoder_key, dummy_carry, dummy_observation)["params"]
+
+        # initialize decoder network
+        dummy_action = random.normal(obs_key, (batch_dim, action_dim))
+        _, dummy_encoding = encoder.apply({"params": encoder_params}, dummy_carry, dummy_observation)
+        decoder_params = decoder.init(decoder_key, dummy_encoding, dummy_action)["params"]
+
+        # merge parameters
+        params = {"encoder": encoder_params, "decoder": decoder_params}
+        return params
+
+    return RecurrentObservation(
+        dim=decoder.dim,
+        init=init,
+        reset=reset,
+        sample=sample,
+        log_prob=log_prob,
+        sample_and_log_prob=sample_and_log_prob,
+    )
+
+
+@partial(jax.jit, static_argnames=("policy_prior", "policy_posterior", "observation_posterior"))
+def train_multihead_recurrent_neural_gauss_dist_stepwise(
+    policy_prior: RecurrentPolicy,
+    policy_posterior: RecurrentPolicy,
+    observation_posterior: RecurrentObservation,
+    learner: TrainState,
+    actions: Array,
+    carry: List[Carry],
+    observations: Array,
+    next_observations: Array,
+    damping: float = 1.0
+):
+
+    def loss_fn(params):
+        policy_prior_param = {"encoder": params["encoder"], "decoder": params["policy_prior_decoder"]}
+        policy_posterior_param = {"encoder": params["encoder"], "decoder": params["policy_posterior_decoder"]}
+        observation_posterior_param = {"encoder": params["encoder"], "decoder": params["observation_posterior_decoder"]}
+
+        prior_log_prob_actions = policy_prior.log_prob(
+            actions=actions,
+            carry=carry,
+            observations=observations,
+            params=policy_prior_param
+        )
+        posterior_log_prob_actions = policy_posterior.log_prob(
+            actions=actions,
+            carry=carry,
+            observations=observations,
+            params=policy_posterior_param
+        )
+        posterior_log_prob_observations = observation_posterior.log_prob(
+            next_observations=next_observations,
+            carry=carry,
+            observations=observations,
+            actions=actions,
+            params=observation_posterior_param
+        )
+        log_probs = (1. - damping) * prior_log_prob_actions \
+                    + damping * posterior_log_prob_actions \
+                    + 0. * damping * posterior_log_prob_observations
         return -1.0 * jnp.mean(log_probs)
 
     loss, grads = jax.value_and_grad(loss_fn)(learner.params)

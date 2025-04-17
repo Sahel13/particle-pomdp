@@ -16,6 +16,7 @@ from ppomdp.core import (
     ObservationModel,
     RewardFn,
     RecurrentPolicy,
+    RecurrentObservation
 )
 from ppomdp.utils import (
     resample_belief,
@@ -23,6 +24,7 @@ from ppomdp.utils import (
     propagate_belief,
     reweight_belief,
     sample_marginal_obs,
+    log_marginal_obs,
     log_potential,
     weighted_mean,
     weighted_covar,
@@ -118,6 +120,8 @@ def reg_smc_step(
     policy_prior_params: Parameters,
     policy_posterior: RecurrentPolicy,
     policy_posterior_params: Parameters,
+    observation_posterior: RecurrentObservation,
+    observation_posterior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     reward_fn: RewardFn,
@@ -204,10 +208,10 @@ def reg_smc_step(
 
     # 3. Sample new actions.
     key, action_key = random.split(key)
-    carry, actions, prior_log_probs, _ = policy_prior.sample_and_log_prob(
+    carry, actions, prior_log_actions, _ = policy_prior.sample_and_log_prob(
         action_key, particles.carry, particles.observations, policy_prior_params
     )
-    post_log_probs = policy_posterior.log_prob(
+    post_log_actions = policy_posterior.log_prob(
         actions, particles.carry, particles.observations, policy_posterior_params,
     )
 
@@ -222,6 +226,12 @@ def reg_smc_step(
     key, sub_keys = custom_split(key, num_particles + 1)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         sub_keys, obs_model, belief_state
+    )
+    prior_log_obs = jax.vmap(log_marginal_obs, in_axes=(None, 0, 0))(
+        obs_model, observations, belief_state
+    )
+    post_log_obs = observation_posterior.log_prob(
+        observations, particles.carry, particles.observations, actions, observation_posterior_params,
     )
 
     # 6. Reweight the belief particles.
@@ -244,8 +254,10 @@ def reg_smc_step(
 
     log_weights = history_state.log_weights \
                   + (1. - damping) * log_potentials \
-                  - damping * prior_log_probs \
-                  + damping * post_log_probs
+                  - 0. * damping * prior_log_obs \
+                  + 0. * damping * post_log_obs \
+                  - damping * prior_log_actions \
+                  + damping * post_log_actions
 
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
@@ -278,6 +290,7 @@ def reg_smc_step(
         "init_prior",
         "policy_prior",
         "policy_posterior",
+        "observation_posterior",
         "trans_model",
         "obs_model",
         "reward_fn"
@@ -293,6 +306,8 @@ def regularized_smc(
     policy_prior_params: Parameters,
     policy_posterior: RecurrentPolicy,
     policy_posterior_params: Parameters,
+    observation_posterior: RecurrentObservation,
+    observation_posterior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     reward_fn: RewardFn,
@@ -355,6 +370,8 @@ def regularized_smc(
                 policy_prior_params=policy_prior_params,
                 policy_posterior=policy_posterior,
                 policy_posterior_params=policy_posterior_params,
+                observation_posterior=observation_posterior,
+                observation_posterior_params=observation_posterior_params,
                 trans_model=trans_model,
                 obs_model=obs_model,
                 reward_fn=reward_fn,

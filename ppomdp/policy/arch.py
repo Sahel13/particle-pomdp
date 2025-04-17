@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import Callable, Union
+from typing import Callable, Union, Optional
 
 from jax import Array, numpy as jnp
 from flax import linen as nn
@@ -22,9 +22,16 @@ class LSTMEncoder(nn.Module):
     recurr_size: tuple[int, ...]
 
     @nn.compact
-    def __call__(self, carry: list[LSTMCarry], s: Array) -> tuple[list[LSTMCarry], Array]:
-        # pass inputs through features layer
-        y = self.feature_fn(s)
+    def __call__(
+        self,
+        carry: list[LSTMCarry],
+        z: Array,
+        a: Optional[Array] = None
+    ) -> tuple[list[LSTMCarry], Array]:
+
+        # concat inputs and pass through features layer
+        x = jnp.concatenate([z, a], axis=-1) if a is not None else z
+        y = self.feature_fn(x)
 
         # pass features through encoding layers
         for size in self.encoder_size:
@@ -66,13 +73,20 @@ class GRUEncoder(nn.Module):
     recurr_size: tuple[int, ...]
 
     @nn.compact
-    def __call__(self, carry: list[GRUCarry], s: Array) -> tuple[list[GRUCarry], Array]:
-        # pass inputs through features layer
-        y = self.feature_fn(s)
+    def __call__(
+        self,
+        carry: list[GRUCarry],
+        z: Array,
+        a: Optional[Array] = None
+    ) -> tuple[list[GRUCarry], Array]:
+
+        # concat inputs and pass through features layer
+        x = jnp.concatenate([z, a], axis=-1) if a is not None else z
+        y = self.feature_fn(x)
 
         # pass features through encoding layers
         for size in self.encoder_size:
-            y = nn.relu(nn.Dense(size)(y))
+            y = nn.tanh(nn.Dense(size)(y))
         y = nn.Dense(self.recurr_size[0])(y)
 
         # pass encodings through recurrent layers

@@ -114,20 +114,22 @@ class SampleRecurrentPolicy(Protocol):
         rng_key: PRNGKey,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
-        r"""Sample from $\pi_\phi(a_t \mid z_t, carry)$."""
+        r"""Sample from $\pi_\phi(a_t \mid z_t, a_{t-1}, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        actions: Array,
+        next_actions: Array,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t, \mid z_t, carry)$."""
+        r"""Compute the log density of $\pi_\phi(a_t, \mid z_t, a_{t-1}, carry)$."""
 
 
 class PathwiseCarryRecurrentPolicy(Protocol):
@@ -135,9 +137,10 @@ class PathwiseCarryRecurrentPolicy(Protocol):
         self,
         init_carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters
     ) -> list[Carry]:
-        r"""Compute the carry of $\pi_\phi(a_t \mid z_t, carry)$."""
+        r"""Compute the carry of $\pi_\phi(a_t \mid z_t, a_{t-1}, carry)$."""
 
 
 class PathwiseLogProbRecurrentPolicy(Protocol):
@@ -146,7 +149,7 @@ class PathwiseLogProbRecurrentPolicy(Protocol):
         particles: HistoryParticles,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid z_t, carry)$."""
+        r"""Compute the pathwise log density of $\pi_\phi$."""
 
 
 class SampleAndLogProbRecurrentPolicy(Protocol):
@@ -155,17 +158,19 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         rng_key: PRNGKey,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array, Array]:
-        r"""Sample from $\pi_\phi(a_t, \mid z_t, carry)$ and compute its log density."""
+        r"""Sample from $\pi_\phi(a_t, \mid z_t, a_{t-1}, carry)$ and compute its log density."""
 
 
 class CarryAndLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        action: Array,
+        next_action: Array,
         carry: list[Carry],
         observations: Array,
+        actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
         r"""Compute log density of action and update carry."""
@@ -184,6 +189,7 @@ class InitializeRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         obs_dim: int,
+        action_dim: int,
         batch_dim: int,
     ) -> Parameters:
         r"""Initialize the recurrent state of the policy."""
