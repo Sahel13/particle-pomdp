@@ -210,66 +210,64 @@ class RecurrentPolicy(NamedTuple):
     entropy: EntropyRecurrentPolicy
 
 
-# class SampleRecurrentObservation(Protocol):
-#     def __call__(
-#         self,
-#         rng_key: PRNGKey,
-#         carry: list[Carry],
-#         actions: Array,
-#         params: Parameters,
-#     ) -> Array:
-#         r"""Sample from $q(z_{t+1} \mid a_t, carry)$."""
-#
-#
-# class LogProbRecurrentObservation(Protocol):
-#     def __call__(
-#         self,
-#         observations: Array,
-#         carry: list[Carry],
-#         actions: Array,
-#         params: Parameters
-#     ) -> Array:
-#         r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
-#
-#
-# class PathwiseLogProbRecurrentObservation(Protocol):
-#     def __call__(
-#         self,
-#         particles: HistoryParticles,
-#         params: Parameters
-#     ) -> Array:
-#         r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
-#
-#
-# class SampleAndLogProbRecurrentObservation(Protocol):
-#     def __call__(
-#         self,
-#         rng_key: PRNGKey,
-#         carry: list[Carry],
-#         actions: Array,
-#         params: Parameters,
-#     ) -> tuple[Array, Array]:
-#         r"""Sample from $q(z_{t+1} \mid a_t, carry)$ and compute its log density."""
-#
-#
-# class InitializeRecurrentObservation(Protocol):
-#     def __call__(
-#         self,
-#         rng_key: PRNGKey,
-#         obs_dim: int,
-#         action_dim: int,
-#         batch_dim: int,
-#         learning_rate: float,
-#     ) -> TrainState:
-#         r"""Initialize the recurrent state of the posterior over observations."""
-#
-#
-# class RecurrentObservation(NamedTuple):
-#     r"""The posterior distribution $q(z_{t+1} \mid a_t, carry)$."""
-#
-#     dim: int
-#     sample: SampleRecurrentObservation
-#     log_prob: LogProbRecurrentObservation
-#     pathwise_log_prob: PathwiseLogProbRecurrentObservation
-#     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
-#     init: InitializeRecurrentObservation
+class SampleRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        carry: list[Carry],
+        observations: Array,
+        actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        r"""Sample from $q(z_{t+1} \mid a_t, carry)$."""
+
+
+class LogProbRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        next_observations: Array,
+        carry: list[Carry],
+        observations: Array,
+        actions: Array,
+        params: Parameters
+    ) -> Array:
+        r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
+
+
+class SampleAndLogProbRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        carry: list[Carry],
+        observations: Array,
+        actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array, Array]:
+        r"""Sample from $q(z_{t+1} \mid a_t, carry)$ and compute its log density."""
+
+
+class InitializeRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        obs_dim: int,
+        action_dim: int,
+        batch_dim: int,
+    ) -> Parameters:
+        r"""Initialize the recurrent state of the posterior over observations."""
+
+
+class ResetRecurrentObservation(Protocol):
+    def __call__(self, batch_size: int) -> list[Carry]:
+        r"""Reset the recurrent state of the policy."""
+
+
+class RecurrentObservation(NamedTuple):
+    r"""The posterior distribution $q(z_{t+1} \mid a_t, carry)$."""
+
+    dim: int
+    init: InitializeRecurrentObservation
+    reset: ResetRecurrentObservation
+    sample: SampleRecurrentObservation
+    log_prob: LogProbRecurrentObservation
+    sample_and_log_prob: SampleAndLogProbRecurrentObservation

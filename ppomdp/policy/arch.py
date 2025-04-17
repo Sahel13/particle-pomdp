@@ -169,9 +169,10 @@ class NeuralGaussDecoder(nn.Module):
     init_log_std: Callable = nn.initializers.ones
 
     @nn.compact
-    def __call__(self, x: Array) -> tuple[Array, Array]:
+    def __call__(self, x: Array, z: Optional[Array] = None) -> tuple[Array, Array]:
         log_std = self.param("log_std", self.init_log_std, self.output_dim)
 
+        x = jnp.concatenate([x, z], axis=-1) if z is not None else x
         for size in self.decoder_size:
             x = nn.relu(nn.Dense(size)(x))
         y = nn.Dense(self.output_dim)(x)

@@ -117,7 +117,7 @@ def propagate_belief(
 def reweight_belief(
     model: ObservationModel,
     state: BeliefState,
-    obs: Array
+    observation: Array
 ) -> BeliefState:
     r"""Update particle weights based on new observation.
 
@@ -130,7 +130,7 @@ def reweight_belief(
         state: BeliefState
             The belief state associated with the n-th history trajectory.
             Leaves have shape (M, ...).
-        obs: Array
+        observation: Array
             The observation $z_t^n$.
 
     Returns:
@@ -138,7 +138,7 @@ def reweight_belief(
             Updated belief state with new weights computed as:
             $w_t^{nm} = \frac{w_{t-1}^{nm} p(z_t^n | s_t^{nm})}{\sum_{m'=1}^M w_{t-1}^{nm'} p(z_t^n | s_t^{nm'})}$
     """
-    log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(obs, state.particles)
+    log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(observation, state.particles)
     log_weights += state.log_weights
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jnp.exp(log_weights - logsum_weights)
@@ -168,9 +168,35 @@ def sample_marginal_obs(
         Array:
             A sampled observation from the marginal distribution
     """
-    key1, key2 = random.split(rng_key)
-    x = random.choice(key1, state.particles, p=state.weights)
-    return obs_model.sample(key2, x)
+    key, sub_key = random.split(rng_key)
+    x = random.choice(sub_key, state.particles, p=state.weights)
+    return obs_model.sample(key, x)
+
+
+def log_marginal_obs(
+    obs_model: ObservationModel,
+    observation: Array,
+    state: BeliefState
+) -> Array:
+    r"""Sample an observation from the marginal observation distribution.
+
+    Samples an observation from the weighted mixture of observation models:
+    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$
+
+    Args:
+        obs_model: ObservationModel
+            The observation model
+        observation:
+        state: BeliefState
+            The belief state associated with the n-th history trajectory.
+            Leaves have shape (M, ...).
+
+    Returns:
+        Array:
+            A sampled observation from the marginal distribution
+    """
+    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(observation, state.particles)
+    return jax.nn.logsumexp(log_probs + state.log_weights) - jax.nn.logsumexp(state.log_weights)
 
 
 def expected_reward(
@@ -670,10 +696,12 @@ def flatten_particle_trajectories(particles: HistoryParticles):
     if particles.observations.ndim != 3:
         raise ValueError("`particles` must include a time component.")
 
-    actions = particles.actions[1:].reshape((-1, particles.actions.shape[-1]))
-    carry = jax.tree.map(lambda x: x.reshape((-1, x.shape[-1])), particles.carry)
+    actions = particles.actions[:-1].reshape((-1, particles.actions.shape[-1]))
+    next_actions = particles.actions[1:].reshape((-1, particles.actions.shape[-1]))
     observations = particles.observations[:-1].reshape((-1, particles.observations.shape[-1]))
-    return actions, carry, observations
+    next_observations = particles.observations[1:].reshape((-1, particles.observations.shape[-1]))
+    carry = jax.tree.map(lambda x: x[:-1].reshape((-1, x.shape[-1])), particles.carry)
+    return actions, next_actions, observations, next_observations, carry
 
 
 @partial(jax.jit, static_argnames=("env_obj", "policy", "num_samples"))
@@ -706,13 +734,13 @@ def policy_evaluation(
             - The sequence of actions
     """
 
-    def body(carry, key):
-        states, policy_carry, observations, time_idx = carry
+    def body(args, key):
+        states, actions, carry, observations, time_idx = args
 
         # Sample actions.
         key, action_key = random.split(key)
-        policy_carry, _, actions = \
-            policy.sample(action_key, policy_carry, observations, params)
+        carry, _, actions = \
+            policy.sample(action_key, carry, observations, actions, params)
 
         # Sample next states.
         key, state_keys = custom_split(key, num_samples + 1)
@@ -725,21 +753,21 @@ def policy_evaluation(
         obs_keys = random.split(key, num_samples)
         observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
-        return (states, policy_carry, observations, time_idx + 1), \
+        return (states,  actions, carry, observations, time_idx + 1), \
             (states, actions, rewards)
 
     key, state_key = random.split(rng_key)
     init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
 
     key, obs_keys = custom_split(key, num_samples + 1)
+    init_carry = policy.reset(num_samples)
     init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
-    init_policy_carry = policy.reset(num_samples)
+    init_actions = jnp.zeros((num_samples, policy.dim))
 
-    _, (states, actions, rewards) = \
-        jax.lax.scan(
-            f=body,
-            init=(init_states, init_policy_carry, init_observations, 1),
-            xs=random.split(key, env_obj.num_time_steps),
+    _, (states, actions, rewards) = jax.lax.scan(
+        f=body,
+        init=(init_states, init_actions, init_carry, init_observations, 1),
+        xs=random.split(key, env_obj.num_time_steps),
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
     average_reward = jnp.mean(jnp.sum(rewards, axis=0))
