@@ -4,7 +4,6 @@ import chex
 from jax import Array
 
 from flax.core import FrozenDict
-from flax.training.train_state import TrainState
 
 LSTMCarry = tuple[Array, Array]
 GRUCarry = Array
@@ -186,8 +185,7 @@ class InitializeRecurrentPolicy(Protocol):
         rng_key: PRNGKey,
         obs_dim: int,
         batch_dim: int,
-        learning_rate: float,
-    ) -> TrainState:
+    ) -> Parameters:
         r"""Initialize the recurrent state of the policy."""
 
 

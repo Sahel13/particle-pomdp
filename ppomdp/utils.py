@@ -55,8 +55,8 @@ def resample_belief(
     Notes:
         - If ESS > 0.75M, returns original state with only indices updated
         - If ESS ≤ 0.75M, performs resampling and resets weights
-        - The effective sample size is calculated as: 
-          \[ESS = \frac{(\sum_{m=1}^M w_m)^2}{\sum_{m=1}^M w_m^2}\]
+        - The effective sample size is calculated as:
+          $ESS = \frac{(\sum_{m=1}^M w_m)^2}{\sum_{m=1}^M w_m^2}$
     """
     num_particles = belief_state.particles.shape[0]
 
@@ -136,7 +136,7 @@ def reweight_belief(
     Returns:
         BeliefState:
             Updated belief state with new weights computed as:
-            \[w_t^{nm} = \frac{w_{t-1}^{nm} p(z_t^n | s_t^{nm})}{\sum_{m'=1}^M w_{t-1}^{nm'} p(z_t^n | s_t^{nm'})}\]
+            $w_t^{nm} = \frac{w_{t-1}^{nm} p(z_t^n | s_t^{nm})}{\sum_{m'=1}^M w_{t-1}^{nm'} p(z_t^n | s_t^{nm'})}$
     """
     log_weights = jax.vmap(model.log_prob, in_axes=(None, 0))(obs, state.particles)
     log_weights += state.log_weights
@@ -742,8 +742,8 @@ def policy_evaluation(
             xs=random.split(key, env_obj.num_time_steps),
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
-    expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
-    return expected_reward, states, actions
+    average_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    return average_reward, states, actions
 
 
 def damping_schedule(
