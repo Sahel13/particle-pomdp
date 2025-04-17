@@ -46,6 +46,10 @@ class LSTMEncoder(nn.Module):
             carry.append((c, h))
         return carry
 
+    @property
+    def dim(self):
+        return self.recurr_size[-1]
+
 
 class GRUEncoder(nn.Module):
     """
@@ -85,6 +89,10 @@ class GRUEncoder(nn.Module):
             h = jnp.zeros(mem_shape)  # GRUCarry
             carry.append(h)
         return carry
+
+    @property
+    def dim(self):
+        return self.recurr_size[-1]
 
 
 class MLPDecoder(nn.Module):
@@ -138,3 +146,29 @@ class MLPConditioner(nn.Module):
 
         x = x.reshape(*batch_shape, self.event_dim, self.num_params)
         return x
+
+
+class NeuralGaussDecoder(nn.Module):
+
+    decoder_size: tuple[int, ...]
+    output_dim: int
+    init_log_std: Callable = nn.initializers.ones
+
+    @nn.compact
+    def __call__(self, x: Array) -> tuple[Array, Array]:
+        log_std = self.param("log_std", self.init_log_std, self.output_dim)
+
+        for size in self.decoder_size:
+            x = nn.relu(nn.Dense(size)(x))
+        y = nn.Dense(self.output_dim)(x)
+        return y, log_std
+
+    @property
+    def dim(self) -> int:
+        return self.output_dim
+
+    def entropy(self, log_std: Array) -> Array:
+        return 0.5 * (
+            self.output_dim * jnp.log(2.0 * jnp.pi * jnp.exp(1))
+            + jnp.linalg.slogdet(jnp.diag(jnp.exp(2. * log_std)))[1]
+        )

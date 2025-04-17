@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable, Union
+from typing import Callable, Union, List
 
 import jax
 import optax
@@ -7,10 +7,10 @@ import optax
 from jax import Array, random, numpy as jnp
 from flax import linen as nn
 from flax.training.train_state import TrainState
-
 from distrax import (
     Bijector,
     MultivariateNormalDiag,
+    Uniform,
     Transformed,
 )
 
@@ -28,7 +28,7 @@ from ppomdp.arch import (
 )
 
 
-class RecurrentNeuralGauss(nn.Module):
+class RecurrentNeuralGaussPolicy(nn.Module):
     """
     Neural policy module for processing sequences with recurrent encoding and dense decoding layers.
 
@@ -58,15 +58,15 @@ class RecurrentNeuralGauss(nn.Module):
         return self.encoder.reset(batch_size)
 
 
-def create_recurrent_gauss_policy(
-    network: RecurrentNeuralGauss,
+def create_recurrent_neural_gauss_policy(
+    network: RecurrentNeuralGaussPolicy,
     bijector: Bijector
 ) -> RecurrentPolicy:
     """
     Creates a squashed neural policy that conforms to the RecurrentPolicy interface.
 
     Args:
-        network (RecurrentNeuralGauss): The neural network used for the policy
+        network (RecurrentNeuralGaussPolicy): The neural network used for the policy
         bijector (Chain): policy bijector to enforce action limits
 
     Returns:
@@ -162,14 +162,14 @@ def create_recurrent_gauss_policy(
 
     def init(
         rng_key: PRNGKey,
-        input_dim: int,
-        output_dim: int,
+        state_dim: int,
+        action_dim: int,
         batch_dim: int,
-        learning_rate: float,
+        learning_rate: float
     ) -> TrainState:
         input_key, param_key = random.split(rng_key, 2)
         dummy_carry = network.reset(batch_dim)
-        dummy_input = random.normal(input_key, (batch_dim, input_dim))
+        dummy_input = random.normal(input_key, (batch_dim, state_dim))
         init_params = network.init(param_key, dummy_carry, dummy_input)["params"]
         train_state = TrainState.create(
             apply_fn=network.apply,
@@ -193,13 +193,14 @@ def create_recurrent_gauss_policy(
 
 
 @partial(jax.jit, static_argnames="policy")
-def train_recurrent_gauss_policy_pathwise(
+def train_recurrent_neural_gauss_policy_pathwise(
     policy: RecurrentPolicy,
     train_state: TrainState,
     particles: HistoryParticles,
+    damping: float = 1.0
 ) -> tuple[TrainState, Array]:
     def loss_fn(params):
-        log_probs = policy.pathwise_log_prob(particles, params)
+        log_probs = damping * policy.pathwise_log_prob(particles, params)
         return -1.0 * jnp.mean(log_probs)
 
     loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
@@ -208,13 +209,21 @@ def train_recurrent_gauss_policy_pathwise(
 
 
 @partial(jax.jit, static_argnames="policy")
-def train_recurrent_gauss_policy_stepwise(
+def train_recurrent_neural_gauss_policy_stepwise(
     policy: RecurrentPolicy,
     train_state: TrainState,
-    particles: HistoryParticles,
+    actions: Array,
+    carry: List[Carry],
+    observations: Array,
+    damping: float = 1.0
 ):
     def loss_fn(params):
-        log_probs = policy.log_prob(particles.actions, particles.carry, particles.observations, params)
+        log_probs = damping * policy.log_prob(
+            actions=actions,
+            carry=carry,
+            observations=observations,
+            params=params
+        )
         return -1.0 * jnp.mean(log_probs)
 
     loss, grads = jax.value_and_grad(loss_fn)(train_state.params)

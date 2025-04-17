@@ -12,11 +12,11 @@ from flax.training.train_state import TrainState
 from distrax import Bijector, MultivariateNormalDiag
 
 from ppomdp.core import (
+    PRNGKey,
     Carry,
     Parameters,
     RecurrentPolicy,
     HistoryParticles,
-    PRNGKey
 )
 from ppomdp.arch import (
     LSTMEncoder,
@@ -113,7 +113,7 @@ class RecurrentNeuralFlow(nn.Module):
         return self.base.entropy()
 
 
-def create_recurrent_flow_policy(flow: RecurrentNeuralFlow) -> RecurrentPolicy:
+def create_recurrent_neural_flow_policy(flow: RecurrentNeuralFlow) -> RecurrentPolicy:
     """
     Creates a policy from a recurrent neural flow that conforms to the RecurrentPolicy interface.
 
@@ -240,7 +240,7 @@ def create_recurrent_flow_policy(flow: RecurrentNeuralFlow) -> RecurrentPolicy:
 
 
 @partial(jax.jit, static_argnums=(0,))
-def train_recurrent_flow_policy(
+def train_recurrent_neural_flow_policy_pathwise(
     policy: RecurrentPolicy,
     train_state: TrainState,
     particles: HistoryParticles,
