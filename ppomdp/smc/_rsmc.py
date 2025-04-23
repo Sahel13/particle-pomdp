@@ -16,7 +16,6 @@ from ppomdp.core import (
     ObservationModel,
     RewardFn,
     RecurrentPolicy,
-    RecurrentObservation
 )
 from ppomdp.utils import (
     resample_belief,
@@ -24,7 +23,6 @@ from ppomdp.utils import (
     propagate_belief,
     reweight_belief,
     sample_marginal_obs,
-    log_marginal_obs,
     log_potential,
     weighted_mean,
     weighted_covar,
@@ -34,7 +32,7 @@ from ppomdp.utils import (
 )
 
 
-def reg_smc_init(
+def rsmc_init(
     rng_key: PRNGKey,
     num_history_particles: int,
     num_belief_particles: int,
@@ -114,14 +112,12 @@ def reg_smc_init(
     return history_state, belief_state, belief_info
 
 
-def reg_smc_step(
+def rsmc_step(
     rng_key: PRNGKey,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
     policy_posterior: RecurrentPolicy,
     policy_posterior_params: Parameters,
-    observation_posterior: RecurrentObservation,
-    observation_posterior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     reward_fn: RewardFn,
@@ -209,10 +205,18 @@ def reg_smc_step(
     # 3. Sample new actions.
     key, action_key = random.split(key)
     carry, actions, prior_log_actions, _ = policy_prior.sample_and_log_prob(
-        action_key, particles.carry, particles.observations, policy_prior_params
+        action_key,
+        particles.carry,
+        particles.actions,
+        particles.observations,
+        policy_prior_params
     )
     post_log_actions = policy_posterior.log_prob(
-        actions, particles.carry, particles.observations, policy_posterior_params,
+        actions,
+        particles.carry,
+        particles.actions,
+        particles.observations,
+        policy_posterior_params,
     )
 
     # 4. Propagate the belief particles.
@@ -226,12 +230,6 @@ def reg_smc_step(
     key, sub_keys = custom_split(key, num_particles + 1)
     observations = jax.vmap(sample_marginal_obs, in_axes=(0, None, 0))(
         sub_keys, obs_model, belief_state
-    )
-    prior_log_obs = jax.vmap(log_marginal_obs, in_axes=(None, 0, 0))(
-        obs_model, observations, belief_state
-    )
-    post_log_obs = observation_posterior.log_prob(
-        observations, particles.carry, particles.observations, actions, observation_posterior_params,
     )
 
     # 6. Reweight the belief particles.
@@ -247,17 +245,19 @@ def reg_smc_step(
     # 7. Reweight the history particles.
     log_potentials, rewards = jax.vmap(
         log_potential, in_axes=(0, 0, 0, None, None, None, None))(
-        belief_state, actions, particles.actions, time_idx, reward_fn, slew_rate_penalty, tempering
+        belief_state,
+        actions,
+        particles.actions,
+        time_idx,
+        reward_fn,
+        slew_rate_penalty,
+        tempering
     )
-
-    # log_weights = history_state.log_weights + log_potentials
 
     log_weights = history_state.log_weights \
                   + (1. - damping) * log_potentials \
-                  - 0. * damping * prior_log_obs \
-                  + 0. * damping * post_log_obs \
                   - damping * prior_log_actions \
-                  + damping * post_log_actions
+                  + damping * post_log_actions \
 
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
@@ -290,13 +290,12 @@ def reg_smc_step(
         "init_prior",
         "policy_prior",
         "policy_posterior",
-        "observation_posterior",
         "trans_model",
         "obs_model",
         "reward_fn"
     )
 )
-def regularized_smc(
+def rsmc(
     rng_key: PRNGKey,
     num_time_steps: int,
     num_history_particles: int,
@@ -306,8 +305,6 @@ def regularized_smc(
     policy_prior_params: Parameters,
     policy_posterior: RecurrentPolicy,
     policy_posterior_params: Parameters,
-    observation_posterior: RecurrentObservation,
-    observation_posterior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
     reward_fn: RewardFn,
@@ -364,14 +361,12 @@ def regularized_smc(
         time_idx, key = args
 
         history_state, belief_state, belief_info, log_marginal_incr = \
-            reg_smc_step(
+            rsmc_step(
                 rng_key=key,
                 policy_prior=policy_prior,
                 policy_prior_params=policy_prior_params,
                 policy_posterior=policy_posterior,
                 policy_posterior_params=policy_posterior_params,
-                observation_posterior=observation_posterior,
-                observation_posterior_params=observation_posterior_params,
                 trans_model=trans_model,
                 obs_model=obs_model,
                 reward_fn=reward_fn,
@@ -385,11 +380,12 @@ def regularized_smc(
             )
 
         log_marginal += log_marginal_incr
-        return (history_state, belief_state, log_marginal), (history_state, belief_state, belief_info)
+        return (history_state, belief_state, log_marginal), \
+            (history_state, belief_state, belief_info)
 
     init_key, loop_key = random.split(rng_key, 2)
     init_history_state, init_belief_state, init_belief_info = \
-        reg_smc_init(
+        rsmc_init(
             rng_key=init_key,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,

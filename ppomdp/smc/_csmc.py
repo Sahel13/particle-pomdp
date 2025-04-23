@@ -185,16 +185,16 @@ def csmc_step(
     # 2. Resample the belief particles.
     key, sub_keys = custom_split(key, num_particles + 1)
     belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
-        sub_keys, belief_state, multinomial_resampling
+        sub_keys, belief_state, systematic_resampling
     )
 
     # 3. Sample new actions.
     key, sub_key = random.split(key)
     carry, actions, _, _ = policy_prior.sample_and_log_prob(
-        sub_key, particles.carry, particles.observations, particles.actions, policy_prior_params
+        sub_key, particles.carry, particles.actions, particles.observations, policy_prior_params
     )
 
-    # replace zeroth carry, action, and log_prob with reference carry, action, and log_prob
+    # replace zeroth carry and action with reference carry and action
     carry = jax.tree.map(lambda x, y: x.at[0].set(y), carry, reference.history_particles.carry)
     actions = actions.at[0].set(reference.history_particles.actions)
 
@@ -231,7 +231,13 @@ def csmc_step(
 
     # 7. Reweight the history particles.
     log_potentials, rewards = jax.vmap(log_potential, in_axes=(0, 0, 0, None, None, None, None))(
-        belief_state, actions, particles.actions, time_idx, reward_fn, slew_rate_penalty, tempering
+        belief_state,
+        actions,
+        particles.actions,
+        time_idx,
+        reward_fn,
+        slew_rate_penalty,
+        tempering
     )
 
     log_weights = history_state.log_weights + log_potentials
@@ -343,7 +349,8 @@ def csmc(
             )
 
         log_marginal += log_marginal_incr
-        return (history_state, belief_state, log_marginal), (history_state, belief_state, belief_info)
+        return (history_state, belief_state, log_marginal), \
+            (history_state, belief_state, belief_info)
 
     init_key, loop_key = random.split(rng_key, 2)
     init_history_state, init_belief_state, init_belief_info = csmc_init(
