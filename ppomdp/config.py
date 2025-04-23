@@ -8,14 +8,17 @@ class NSMC(NamedTuple):
     num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     batch_size: int = 256
 
     # Network architecture
-    encoder_size: tuple[int, ...] = (256, 256)
-    recurr_size: tuple[int, ...] = (128, 128)
-    decoder_size: tuple[int, ...] = (256, 256)
-    init_log_std: float = 1.0
+    encoder_dense_sizes: tuple[int, ...] = (256, 256)
+    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
+    decoder_dense_sizes: tuple[int, ...] = (256, 256)
+    init_std: float = 1.0
+
+    # damped version
+    damping: Optional[float] = 0.0
 
 
 class NSMCExperiment(NamedTuple):
@@ -30,14 +33,17 @@ class NSMCExperiment(NamedTuple):
     num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     batch_size: int = 256
 
     # Network architecture
-    encoder_size: tuple[int, ...] = (256, 256)
-    recurr_size: tuple[int, ...] = (128, 128)
-    decoder_size: tuple[int, ...] = (256, 256)
-    init_log_std: float = 1.0
+    encoder_dense_sizes: tuple[int, ...] = (256, 256)
+    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
+    decoder_dense_sizes: tuple[int, ...] = (256, 256)
+    init_std: float = 1.0
+
+    # damped version
+    damping: Optional[float] = 0.0
 
     # Logger settings
     use_logger: bool = True

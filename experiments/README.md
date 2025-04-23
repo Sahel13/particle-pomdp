@@ -27,11 +27,12 @@ python nsmc_experiment.py \
     --num_belief_particles 32 \
     --slew_rate_penalty 0.05 \
     --tempering 0.5 \
-    --learning_rate 0.0001 \
+    --learning_rate 0.0003 \
     --batch_size 256 \
-    --encoder_size 256 256 \
-    --recurr_size 128 128 \
-    --decoder_size 256 256
+    --encoder_dense_sizes 256 256 \
+    --encoder_recurr_sizes 128 128 \
+    --decoder_dense_sizes 256 256 \
+    --init_std 2.0
 ```
 
 ### DVRL

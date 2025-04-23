@@ -28,12 +28,13 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
-from ppomdp.smc import smc, backward_tracing
+from ppomdp.smc import rsmc, backward_tracing
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_stepwise
+    initialize_multihead_recurrent_gauss_policy,
+    train_multihead_recurrent_neural_gauss_policy_stepwise,
 )
 from ppomdp.utils import batch_data, policy_evaluation, flatten_trajectories
 from ppomdp.config import NSMCExperiment
@@ -68,6 +69,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             "encoder_dense_sizes": config.encoder_dense_sizes,
             "encoder_recurr_sizes": config.encoder_recurr_sizes,
             "decoder_dense_sizes": config.decoder_dense_sizes,
+            "damping": config.damping,
         }
 
         experiment_name = f"{config.experiment_group}-seed-{seed}"
@@ -93,72 +95,98 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
     encoder_recurr_sizes = config.encoder_recurr_sizes
     decoder_dense_sizes = config.decoder_dense_sizes
     init_std = config.init_std
+    damping = config.damping
 
     # Initialize JAX random key
     key = random.key(seed)
 
     # Create network and policy
-    encoder = GRUEncoder(
+    joint_bijector = Block(Tanh(), ndims=1)
+    joint_encoder = GRUEncoder(
         feature_fn=lambda x: x,
         dense_sizes=encoder_dense_sizes,
         recurr_sizes=encoder_recurr_sizes,
-        use_layer_norm=True,
+        use_layer_norm=True
     )
-    decoder = NeuralGaussDecoder(
+    prior_decoder = NeuralGaussDecoder(
         decoder_sizes=decoder_dense_sizes,
         output_dim=env_obj.action_dim,
         init_log_std=constant(jnp.log(init_std)),
     )
-    bijector = Block(Tanh(), ndims=1)
-
-    policy = create_recurrent_neural_gauss_policy(
-        encoder=encoder,
-        decoder=decoder,
-        bijector=bijector
+    policy_prior = create_recurrent_neural_gauss_policy(
+        encoder=joint_encoder,
+        decoder=prior_decoder,
+        bijector=joint_bijector
     )
+    posterior_decoder = NeuralGaussDecoder(
+        decoder_sizes=decoder_dense_sizes,
+        output_dim=env_obj.action_dim,
+        init_log_std=constant(jnp.log(init_std)),
+    )
+    policy_posterior = create_recurrent_neural_gauss_policy(
+        encoder=joint_encoder,
+        decoder=posterior_decoder,
+        bijector=joint_bijector
+    )
+
     key, sub_key = random.split(key, 2)
-    params = policy.init(
+    joint_params = initialize_multihead_recurrent_gauss_policy(
         rng_key=sub_key,
         obs_dim=env_obj.obs_dim,
         action_dim=env_obj.action_dim,
         batch_dim=num_history_particles,
+        encoder=joint_encoder,
+        prior_decoder=prior_decoder,
+        posterior_decoder=posterior_decoder,
     )
     learner = TrainState.create(
-        params=params,
-        apply_fn=lambda *_: None,
+        apply_fn=None,
+        params=joint_params,
         tx=optax.adam(learning_rate)
     )
 
     num_steps = 0
 
     # Check policy performance before training
+    policy_prior_params = {
+        "encoder": learner.params["encoder"],
+        "decoder": learner.params["prior_decoder"]
+    }
+    policy_posterior_params = {
+        "encoder": learner.params["encoder"],
+        "decoder": learner.params["posterior_decoder"]
+    }
+
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
+    avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy_posterior, policy_posterior_params)
     print(f"Step: {num_steps:6d} | Average reward: {avg_reward:8.3f}")
 
     if logger:
         logger.log_metrics({
             "average_reward": avg_reward,
-            "policy_entropy": policy.entropy(learner.params),
+            "policy_entropy": policy_posterior.entropy(policy_posterior_params),
         }, step=num_steps)
 
     # Training loop
     while num_steps <= total_time_steps:
         # Run the particle filter
         key, sub_key = random.split(key)
-        history_states, belief_states, belief_infos, log_marginal = smc(
+        history_states, belief_states, belief_infos, log_marginal = rsmc(
             rng_key=sub_key,
             num_time_steps=env_obj.num_time_steps,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
             init_prior=env_obj.prior_dist,
-            policy_prior=policy,
-            policy_prior_params=learner.params,
+            policy_prior=policy_prior,
+            policy_prior_params=policy_prior_params,
+            policy_posterior=policy_posterior,
+            policy_posterior_params=policy_posterior_params,
             trans_model=env_obj.trans_model,
             obs_model=env_obj.obs_model,
             reward_fn=env_obj.reward_fn,
             slew_rate_penalty=slew_rate_penalty,
-            tempering=tempering
+            tempering=tempering,
+            damping=damping,
         )
         num_steps += num_history_particles * (env_obj.num_time_steps + 1)
 
@@ -169,7 +197,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
         )
 
         # Update policy parameters
-        actions, next_actions, observations, _, carry = \
+        actions, next_actions, observations, next_observations, carry = \
             flatten_trajectories(traced_history)
         data_size, _ = observations.shape
 
@@ -181,31 +209,42 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             observations_batch = jax.tree.map(lambda x: x[batch_idx, ...], observations)
             carry_batch = jax.tree.map(lambda x: x[batch_idx, ...], carry)
 
-            learner, _ = train_recurrent_neural_gauss_policy_stepwise(
-                policy=policy,
+            learner, _ = train_multihead_recurrent_neural_gauss_policy_stepwise(
                 learner=learner,
+                policy_prior=policy_prior,
+                policy_posterior=policy_posterior,
                 next_actions=next_action_batch,
                 carry=carry_batch,
                 actions=action_batch,
                 observations=observations_batch,
+                damping=damping
             )
+
+        policy_prior_params = {
+            "encoder": learner.params["encoder"],
+            "decoder": learner.params["prior_decoder"]
+        }
+        policy_posterior_params = {
+            "encoder": learner.params["encoder"],
+            "decoder": learner.params["posterior_decoder"]
+        }
 
         # Evaluate the policy
         key, sub_key = random.split(key)
-        avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
+        avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy_posterior, policy_posterior_params)
 
         if logger:
             logger.log_metrics({
                 "average_reward": avg_reward,
                 "log_marginal": log_marginal,
-                "policy_entropy": policy.entropy(learner.params),
+                "policy_entropy": policy_posterior.entropy(policy_posterior_params),
             }, step=num_steps)
 
         print(
             f"Step: {num_steps:6d} | "
             f"Log marginal: {log_marginal:8.3f} | "
             f"Average reward: {avg_reward:8.3f} | "
-            f"Entropy: {policy.entropy(learner.params):8.4f}"
+            f"Entropy: {policy_posterior.entropy(policy_posterior_params):8.4f}"
         )
 
     # Finish wandb logging if enabled

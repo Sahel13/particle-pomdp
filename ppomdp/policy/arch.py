@@ -128,17 +128,17 @@ class MLPDecoder(nn.Module):
     a standard multi layer perceptron as an action decoder
 
     Attributes:
-        decoder_size (tuple[int, ...]): Sizes of the decoder layers.
+        decoder_sizes (tuple[int, ...]): Sizes of the decoder layers.
         output_dim (int): Size of the output layer.
     """
 
-    decoder_size: tuple[int, ...]
+    decoder_sizes: tuple[int, ...]
     output_dim: int
 
     @nn.compact
     def __call__(self, x: Array) -> Array:
         # pass result through decoder layers
-        for size in self.decoder_size:
+        for size in self.decoder_sizes:
             x = nn.relu(nn.Dense(size)(x))
         return nn.Dense(self.output_dim)(x)
 
@@ -151,12 +151,12 @@ class MLPConditioner(nn.Module):
 
     Attributes:
         event_dim (int): Dimensionality of the event space.
-        hidden_size (tuple[int, ...]): Sizes of the hidden layers.
+        hidden_sizes (tuple[int, ...]): Sizes of the hidden layers.
         num_params (int): Number of parameters per bijector.
     """
 
     event_dim: int
-    hidden_size: tuple[int, ...]
+    hidden_sizes: tuple[int, ...]
     num_params: int  # number of parameters per bijector
 
     @nn.compact
@@ -164,7 +164,7 @@ class MLPConditioner(nn.Module):
         batch_shape = x.shape[:-1]
 
         x = jnp.hstack([x, context])
-        for size in self.hidden_size:
+        for size in self.hidden_sizes:
             x = nn.relu(nn.Dense(size)(x))
         x = nn.Dense(
             self.event_dim * self.num_params,
@@ -185,7 +185,7 @@ class NeuralGaussDecoder(nn.Module):
     distribution. The log standard deviation is stored as a learnable parameter.
 
     Attributes:
-        decoder_size (tuple[int, ...]): Sizes of the hidden layers in the decoder network.
+        decoder_sizes (tuple[int, ...]): Sizes of the hidden layers in the decoder network.
         output_dim (int): Dimensionality of the output Gaussian distribution.
         init_log_std (Callable): Initializer for the log standard deviation parameter.
                                 Defaults to ones initialization.
@@ -197,7 +197,7 @@ class NeuralGaussDecoder(nn.Module):
     4. Returns both the mean and log standard deviation for the Gaussian distribution
     """
 
-    decoder_size: tuple[int, ...]
+    decoder_sizes: tuple[int, ...]
     output_dim: int
     init_log_std: Callable = nn.initializers.ones
 
@@ -206,7 +206,7 @@ class NeuralGaussDecoder(nn.Module):
         log_std = self.param("log_std", self.init_log_std, self.output_dim)
 
         # x = jnp.concatenate([x, z], axis=-1) if z is not None else x
-        for size in self.decoder_size:
+        for size in self.decoder_sizes:
             x = nn.relu(nn.Dense(size)(x))
         y = nn.Dense(self.output_dim)(x)
         return y, log_std

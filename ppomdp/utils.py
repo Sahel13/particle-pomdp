@@ -74,7 +74,7 @@ def resample_belief(
         return state._replace(resampling_indices=resampling_idx)
 
     resampled_state = jax.lax.cond(
-        effective_sample_size(belief_state.log_weights) < 0.75 * num_particles,
+        effective_sample_size(belief_state.log_weights) < 0.5 * num_particles,
         true_fn,
         false_fn,
         belief_state,
@@ -322,7 +322,7 @@ def resample_history(
         resampling_idx = jnp.arange(num_particles, dtype=jnp.int32)
         return state._replace(resampling_indices=resampling_idx)
 
-    predicate = effective_sample_size(history_state.log_weights) < 0.75 * num_particles
+    predicate = effective_sample_size(history_state.log_weights) < 0.5 * num_particles
     resampled_state = jax.lax.cond(predicate, true_fn, false_fn, history_state)
     return resampled_state
 
@@ -676,7 +676,7 @@ def custom_split(rng_key: PRNGKey, num: int):
 
 
 @jax.jit
-def flatten_particle_trajectories(particles: HistoryParticles):
+def flatten_trajectories(particles: HistoryParticles):
     r"""Aligns particle trajectories in time and concatenates them to flatten the time dimension.
 
     Args:
