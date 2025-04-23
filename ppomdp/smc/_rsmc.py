@@ -204,14 +204,14 @@ def rsmc_step(
 
     # 3. Sample new actions.
     key, action_key = random.split(key)
-    carry, actions, prior_log_actions, _ = policy_prior.sample_and_log_prob(
+    carry, actions, actions_prior_log_prob, _ = policy_prior.sample_and_log_prob(
         action_key,
         particles.carry,
         particles.actions,
         particles.observations,
         policy_prior_params
     )
-    post_log_actions = policy_posterior.log_prob(
+    actions_post_log_prob = policy_posterior.log_prob(
         actions,
         particles.carry,
         particles.actions,
@@ -256,8 +256,8 @@ def rsmc_step(
 
     log_weights = history_state.log_weights \
                   + (1. - damping) * log_potentials \
-                  - damping * prior_log_actions \
-                  + damping * post_log_actions \
+                  - damping * actions_prior_log_prob \
+                  + damping * actions_post_log_prob \
 
     logsum_weights = jax.nn.logsumexp(log_weights)
     weights = jax.nn.softmax(log_weights)
@@ -356,7 +356,7 @@ def rsmc(
             with the normalizing constant estimate.
     """
 
-    def smc_loop(carry, args):
+    def rsmc_loop(carry, args):
         history_state, belief_state, log_marginal = carry
         time_idx, key = args
 
@@ -395,7 +395,7 @@ def rsmc(
         )
 
     (_, _, log_marginal), (history_states, belief_states, belief_infos) = jax.lax.scan(
-        f=smc_loop,
+        f=rsmc_loop,
         init=(
             init_history_state,
             init_belief_state,
