@@ -173,7 +173,11 @@ def smc_step(
     # 3. Sample new actions.
     key, action_key = random.split(key)
     carry, actions, _ = policy_prior.sample(
-        action_key, particles.carry, particles.observations, particles.actions, policy_prior_params
+        action_key,
+        particles.carry,
+        particles.actions,
+        particles.observations,
+        policy_prior_params
     )
 
     # 4. Propagate the belief particles.
@@ -202,7 +206,13 @@ def smc_step(
     # 7. Reweight the history particles.
     log_potentials, rewards = jax.vmap(
         log_potential, in_axes=(0, 0, 0, None, None, None, None))(
-        belief_state, actions, particles.actions, time_idx, reward_fn, slew_rate_penalty, tempering
+        belief_state,
+        actions,
+        particles.actions,
+        time_idx,
+        reward_fn,
+        slew_rate_penalty,
+        tempering
     )
 
     log_weights = history_state.log_weights + log_potentials

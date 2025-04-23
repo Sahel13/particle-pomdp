@@ -1,10 +1,10 @@
 from copy import deepcopy
-from typing import Callable, Union, Optional
+from typing import Callable, Optional
 
 from jax import Array, numpy as jnp
 from flax import linen as nn
 
-from ppomdp.core import Carry, LSTMCarry, GRUCarry
+from ppomdp.core import LSTMCarry, GRUCarry
 
 
 class LSTMEncoder(nn.Module):
@@ -13,13 +13,15 @@ class LSTMEncoder(nn.Module):
 
     Attributes:
         feature_fn (Callable): Function to extract features from the input sequence.
-        encoder_size (tuple[int, ...]): Sizes of the encoding layers.
-        recurr_size (tuple[int, ...]): Sizes of the recurrent layers.
+        dense_sizes (tuple[int, ...]): Sizes of the dense layers before the recurrent layers.
+        recurr_sizes (tuple[int, ...]): Sizes of the recurrent layers.
+        use_layer_norm (bool): Whether to use layer normalization in the encoder layers.
     """
 
     feature_fn: Callable
-    encoder_size: tuple[int, ...]
-    recurr_size: tuple[int, ...]
+    dense_sizes: tuple[int, ...]
+    recurr_sizes: tuple[int, ...]
+    use_layer_norm: bool = True
 
     @nn.compact
     def __call__(
@@ -30,24 +32,29 @@ class LSTMEncoder(nn.Module):
     ) -> tuple[list[LSTMCarry], Array]:
 
         # concat inputs and pass through features layer
-        x = jnp.concatenate([z, a], axis=-1) if a is not None else z
-        y = self.feature_fn(x)
+        # z = jnp.concatenate([z, a], axis=-1) if a is not None else z
+        y = self.feature_fn(z)
 
-        # pass features through encoding layers
-        for size in self.encoder_size:
-            y = nn.relu(nn.Dense(size)(y))
-        y = nn.Dense(self.recurr_size[0])(y)
+        # pass features through dense layers
+        for size in self.dense_sizes:
+            y = nn.Dense(size)(y)
+            if self.use_layer_norm:
+                y = nn.LayerNorm()(y)
+            y = nn.relu(y)
+        y = nn.Dense(self.recurr_sizes[0])(y)
+        if self.use_layer_norm:
+            y = nn.LayerNorm()(y)
 
         # pass encodings through recurrent layers
         next_carry = deepcopy(carry)
-        for k, size in enumerate(self.recurr_size):
+        for k, size in enumerate(self.recurr_sizes):
             next_carry[k], y = nn.LSTMCell(size)(carry[k], y)
 
         return next_carry, y
 
     def reset(self, batch_size) -> list[LSTMCarry]:
         carry = []
-        for size in self.recurr_size:
+        for size in self.recurr_sizes:
             mem_shape = (batch_size, size)
             c, h = jnp.zeros(mem_shape), jnp.zeros(mem_shape)  # LSTMCarry
             carry.append((c, h))
@@ -55,7 +62,7 @@ class LSTMEncoder(nn.Module):
 
     @property
     def dim(self):
-        return self.recurr_size[-1]
+        return self.recurr_sizes[-1]
 
 
 class GRUEncoder(nn.Module):
@@ -64,13 +71,15 @@ class GRUEncoder(nn.Module):
 
     Attributes:
         feature_fn (Callable): Function to extract features from the input sequence.
-        encoder_size (tuple[int, ...]): Sizes of the encoding layers.
-        recurr_size (tuple[int, ...]): Sizes of the recurrent layers.
+        dense_sizes (tuple[int, ...]): Sizes of the dense layers before the recurrent layers.
+        recurr_sizes (tuple[int, ...]): Sizes of the recurrent layers.
+        use_layer_norm (bool): Whether to use layer normalization in the encoder layers.
     """
 
     feature_fn: Callable
-    encoder_size: tuple[int, ...]
-    recurr_size: tuple[int, ...]
+    dense_sizes: tuple[int, ...]
+    recurr_sizes: tuple[int, ...]
+    use_layer_norm: bool = True
 
     @nn.compact
     def __call__(
@@ -81,24 +90,29 @@ class GRUEncoder(nn.Module):
     ) -> tuple[list[GRUCarry], Array]:
 
         # concat inputs and pass through features layer
-        x = jnp.concatenate([z, a], axis=-1) if a is not None else z
-        y = self.feature_fn(x)
+        # z = jnp.concatenate([z, a], axis=-1) if a is not None else z
+        y = self.feature_fn(z)
 
-        # pass features through encoding layers
-        for size in self.encoder_size:
-            y = nn.tanh(nn.Dense(size)(y))
-        y = nn.Dense(self.recurr_size[0])(y)
+        # pass features through dense layers
+        for size in self.dense_sizes:
+            y = nn.Dense(size)(y)
+            if self.use_layer_norm:
+                y = nn.LayerNorm()(y)
+            y = nn.relu(y)
+        y = nn.Dense(self.recurr_sizes[0])(y)
+        if self.use_layer_norm:
+            y = nn.LayerNorm()(y)
 
         # pass encodings through recurrent layers
         next_carry = deepcopy(carry)
-        for k, size in enumerate(self.recurr_size):
+        for k, size in enumerate(self.recurr_sizes):
             next_carry[k], y = nn.GRUCell(size)(carry[k], y)
 
         return next_carry, y
 
     def reset(self, batch_size) -> list[GRUCarry]:
         carry = []
-        for size in self.recurr_size:
+        for size in self.recurr_sizes:
             mem_shape = (batch_size, size)
             h = jnp.zeros(mem_shape)  # GRUCarry
             carry.append(h)
@@ -106,7 +120,7 @@ class GRUEncoder(nn.Module):
 
     @property
     def dim(self):
-        return self.recurr_size[-1]
+        return self.recurr_sizes[-1]
 
 
 class MLPDecoder(nn.Module):
@@ -163,6 +177,25 @@ class MLPConditioner(nn.Module):
 
 
 class NeuralGaussDecoder(nn.Module):
+    """
+    A neural network decoder that outputs parameters for a Gaussian distribution.
+
+    This decoder processes input features through a series of dense layers and outputs
+    both a mean vector and log standard deviation vector for a multivariate Gaussian
+    distribution. The log standard deviation is stored as a learnable parameter.
+
+    Attributes:
+        decoder_size (tuple[int, ...]): Sizes of the hidden layers in the decoder network.
+        output_dim (int): Dimensionality of the output Gaussian distribution.
+        init_log_std (Callable): Initializer for the log standard deviation parameter.
+                                Defaults to ones initialization.
+
+    The decoder architecture:
+    1. Processes input through dense layers with ReLU activation
+    2. Outputs a mean vector of size output_dim
+    3. Maintains a learnable log standard deviation parameter
+    4. Returns both the mean and log standard deviation for the Gaussian distribution
+    """
 
     decoder_size: tuple[int, ...]
     output_dim: int
@@ -172,7 +205,7 @@ class NeuralGaussDecoder(nn.Module):
     def __call__(self, x: Array, z: Optional[Array] = None) -> tuple[Array, Array]:
         log_std = self.param("log_std", self.init_log_std, self.output_dim)
 
-        x = jnp.concatenate([x, z], axis=-1) if z is not None else x
+        # x = jnp.concatenate([x, z], axis=-1) if z is not None else x
         for size in self.decoder_size:
             x = nn.relu(nn.Dense(size)(x))
         y = nn.Dense(self.output_dim)(x)

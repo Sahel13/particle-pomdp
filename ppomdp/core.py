@@ -113,8 +113,8 @@ class SampleRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
         r"""Sample from $\pi_\phi(a_t \mid z_t, a_{t-1}, carry)$."""
@@ -125,8 +125,8 @@ class LogProbRecurrentPolicy(Protocol):
         self,
         next_actions: Array,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
         params: Parameters
     ) -> Array:
         r"""Compute the log density of $\pi_\phi(a_t, \mid z_t, a_{t-1}, carry)$."""
@@ -136,8 +136,8 @@ class PathwiseCarryRecurrentPolicy(Protocol):
     def __call__(
         self,
         init_carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
         params: Parameters
     ) -> list[Carry]:
         r"""Compute the carry of $\pi_\phi(a_t \mid z_t, a_{t-1}, carry)$."""
@@ -157,8 +157,8 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array, Array]:
         r"""Sample from $\pi_\phi(a_t, \mid z_t, a_{t-1}, carry)$ and compute its log density."""
@@ -169,8 +169,8 @@ class CarryAndLogProbRecurrentPolicy(Protocol):
         self,
         next_action: Array,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
         r"""Compute log density of action and update carry."""
@@ -215,8 +215,9 @@ class SampleRecurrentObservation(Protocol):
         self,
         rng_key: PRNGKey,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
+        next_actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
         r"""Sample from $q(z_{t+1} \mid a_t, carry)$."""
@@ -227,8 +228,9 @@ class LogProbRecurrentObservation(Protocol):
         self,
         next_observations: Array,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
+        next_actions: Array,
         params: Parameters
     ) -> Array:
         r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
@@ -239,11 +241,25 @@ class SampleAndLogProbRecurrentObservation(Protocol):
         self,
         rng_key: PRNGKey,
         carry: list[Carry],
-        observations: Array,
         actions: Array,
+        observations: Array,
+        next_actions: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array, Array]:
         r"""Sample from $q(z_{t+1} \mid a_t, carry)$ and compute its log density."""
+
+
+class CarryAndLogProbRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        next_observations: Array,
+        carry: list[Carry],
+        actions: Array,
+        observations: Array,
+        next_actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        r"""Compute log density of observation and update carry."""
 
 
 class InitializeRecurrentObservation(Protocol):
@@ -271,3 +287,4 @@ class RecurrentObservation(NamedTuple):
     sample: SampleRecurrentObservation
     log_prob: LogProbRecurrentObservation
     sample_and_log_prob: SampleAndLogProbRecurrentObservation
+    carry_and_log_prob: CarryAndLogProbRecurrentObservation

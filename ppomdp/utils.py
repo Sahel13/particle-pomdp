@@ -740,7 +740,7 @@ def policy_evaluation(
         # Sample actions.
         key, action_key = random.split(key)
         carry, _, actions = \
-            policy.sample(action_key, carry, observations, actions, params)
+            policy.sample(action_key, carry, actions, observations, params)
 
         # Sample next states.
         key, state_keys = custom_split(key, num_samples + 1)
@@ -761,8 +761,8 @@ def policy_evaluation(
 
     key, obs_keys = custom_split(key, num_samples + 1)
     init_carry = policy.reset(num_samples)
-    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
     init_actions = jnp.zeros((num_samples, policy.dim))
+    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
 
     _, (states, actions, rewards) = jax.lax.scan(
         f=body,
