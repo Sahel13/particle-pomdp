@@ -16,23 +16,21 @@ if len(sys.argv) > 1:
             print(f"Setting CUDA_VISIBLE_DEVICES to {sys.argv[i + 1]}")
             break
 
-import tyro
-from tqdm import tqdm
-
 import jax
-from jax import random
-from jax import numpy as jnp
-
-from baselines.slac import SLACExperiment
-from baselines.slac import (
-    pomdp_init,
-    pomdp_step,
-    step_and_train,
-    create_train_state,
-    policy_evaluation,
-)
-from wandb_logger import WandbLogger
+import tyro
+from brax.training.replay_buffers import UniformSamplingQueue
 from common import get_pomdp, get_unique_identifier
+from jax import random
+from tqdm import tqdm
+from wandb_logger import WandbLogger
+
+from baselines.slac import (
+    SLACExperiment,
+    create_train_state,
+    gradient_step,
+    policy_evaluation,
+    sim_trajectories,
+)
 
 
 def run_single_seed(config: SLACExperiment, seed: int) -> None:
@@ -48,7 +46,6 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
         slac_config = {
             "algorithm": "slac",
             "environment": config.env_id,
-            "num_seeds": config.num_seeds,
             "cuda_device": config.cuda_device,
             "total_time_steps": config.total_time_steps,
             "num_belief_particles": config.num_belief_particles,
@@ -71,7 +68,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
             experiment_group=config.experiment_group,
             experiment_tags=config.experiment_tags,
             experiment_config=slac_config,
-            logger_directory=config.logger_directory
+            logger_directory=config.logger_directory,
         )
 
     total_time_steps = config.total_time_steps
@@ -89,30 +86,26 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
     key = random.key(seed)
     key, sub_key = random.split(key)
     train_state, policy_network, _ = create_train_state(
-        rng_key=sub_key,
-        env_obj=env_obj,
-        policy_lr=policy_lr,
-        critic_lr=critic_lr
-    )
-
-    # Initialize POMDP state
-    key, init_key = random.split(key)
-    pomdp_state = pomdp_init(
-        rng_key=init_key,
-        env_obj=env_obj,
-        policy_state=train_state.policy_state,
-        policy_network=policy_network,
-        num_belief_particles=num_belief_particles,
-        random_actions=True,
+        rng_key=sub_key, env_obj=env_obj, policy_lr=policy_lr, critic_lr=critic_lr
     )
 
     # Set up the replay buffer
-    from brax.training.replay_buffers import UniformSamplingQueue
-    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
+    key, init_key = random.split(key)
+    pomdp_states = sim_trajectories(
+        init_key,
+        env_obj,
+        train_state.policy_state,
+        policy_network,
+        num_belief_particles,
+        random_actions=True,
+    )
+
+    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_states)
+    buffer_size = buffer_size // env_obj.num_time_steps
     buffer_obj = UniformSamplingQueue(
         max_replay_size=buffer_size,
         dummy_data_sample=buffer_entry_prototype,
-        sample_batch_size=batch_size
+        sample_batch_size=batch_size,
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -120,21 +113,46 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
 
     key, buffer_key = random.split(key)
     buffer_state = buffer_obj.init(buffer_key)
-    buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
+    buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
     # Pre-fill the buffer with random actions
-    for global_step in range(1, learning_starts):
+    for global_step in range(
+        env_obj.num_time_steps, total_time_steps, env_obj.num_time_steps
+    ):
         key, sub_key = random.split(key)
-        pomdp_state = pomdp_step(
-            rng_key=sub_key,
-            env_obj=env_obj,
-            policy_state=train_state.policy_state,
-            policy_network=policy_network,
-            pomdp_state=pomdp_state,
-            num_belief_particles=num_belief_particles,
-            random_actions=True
-        )
-        buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
+        if global_step <= learning_starts:
+            pomdp_states = sim_trajectories(
+                sub_key,
+                env_obj,
+                train_state.policy_state,
+                policy_network,
+                num_belief_particles,
+                random_actions=True,
+            )
+        else:
+            pomdp_states = sim_trajectories(
+                sub_key,
+                env_obj,
+                train_state.policy_state,
+                policy_network,
+                num_belief_particles,
+                random_actions=False,
+            )
+
+        buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
+
+        if global_step > learning_starts:
+            buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
+            key, train_key = random.split(key)
+            train_state, *_ = gradient_step(
+                train_key,
+                train_state,
+                pomdp_states_batch,
+                policy_network,
+                alpha,
+                gamma,
+                tau,
+            )
 
         if global_step % 2000 == 0:
             key, sub_key = random.split(key)
@@ -146,58 +164,15 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
             )
 
             if logger:
-                logger.log_metrics({
-                    "expected_reward": expected_reward,
-                    "policy_log_std": train_state.policy_state.params['log_std'][0]
-                }, step=global_step)
+                logger.log_metrics(
+                    {
+                        "expected_reward": expected_reward,
+                        "policy_log_std": train_state.policy_state.params["log_std"][0],
+                    },
+                    step=global_step,
+                )
 
             print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
-
-    # Ensure that training starts with a fresh episode
-    pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
-
-    # Number of steps to take using the `lax.scan` loop
-    steps_per_epoch = 2000
-
-    # Training loop
-    for global_step in range(
-        learning_starts, total_time_steps, steps_per_epoch
-    ):
-        key, sub_key = random.split(key)
-        pomdp_state, buffer_state, train_state = \
-            step_and_train(
-                rng_key=sub_key,
-                env_obj=env_obj,
-                train_state=train_state,
-                policy_network=policy_network,
-                pomdp_state=pomdp_state,
-                buffer_obj=buffer_obj,
-                buffer_state=buffer_state,
-                num_belief_particles=num_belief_particles,
-                num_steps=steps_per_epoch,
-                alpha=alpha,
-                gamma=gamma, tau=tau
-            )
-
-        key, sub_key = random.split(key)
-        expected_reward, _, _ = policy_evaluation(
-            rng_key=sub_key,
-            env_obj=env_obj,
-            policy_state=train_state.policy_state,
-            policy_network=policy_network,
-        )
-
-        if logger:
-            logger.log_metrics({
-                "expected_reward": expected_reward,
-                "policy_log_std": train_state.policy_state.params['log_std'][0]
-            }, step=global_step + steps_per_epoch)
-
-        print(
-            f"Step: {global_step + steps_per_epoch:6d} | "
-            + f"Expected reward: {expected_reward:6.2f} | "
-            + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
-        )
 
     # Finish wandb logging if enabled
     if logger:
