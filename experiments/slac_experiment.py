@@ -29,7 +29,7 @@ from baselines.slac import (
     create_train_state,
     gradient_step,
     policy_evaluation,
-    sim_trajectory,
+    sim_trajectories,
 )
 
 
@@ -91,7 +91,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
 
     # Set up the replay buffer
     key, init_key = random.split(key)
-    pomdp_states = sim_trajectory(
+    pomdp_states = sim_trajectories(
         init_key,
         env_obj,
         train_state.policy_state,
@@ -121,7 +121,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
     ):
         key, sub_key = random.split(key)
         if global_step <= learning_starts:
-            pomdp_states = sim_trajectory(
+            pomdp_states = sim_trajectories(
                 sub_key,
                 env_obj,
                 train_state.policy_state,
@@ -130,7 +130,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
                 random_actions=True,
             )
         else:
-            pomdp_states = sim_trajectory(
+            pomdp_states = sim_trajectories(
                 sub_key,
                 env_obj,
                 train_state.policy_state,

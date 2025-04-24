@@ -201,7 +201,6 @@ def critic_train_step(
 ) -> tuple[JointTrainState, Array]:
 
     def critic_loss(params):
-
         def body(carry, _pomdp_state):
             loss, key, policy_carry = carry
             key, action_key, state_key, next_state_key = random.split(key, 4)
@@ -410,7 +409,7 @@ def create_train_state(
         "random_actions",
     ),
 )
-def sim_trajectory(
+def sim_trajectories(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
     policy_state: TrainState,
@@ -418,7 +417,7 @@ def sim_trajectory(
     num_belief_particles: int,
     random_actions: bool,
 ):
-    """Simulate a trajectory with the SLAC policy."""
+    """Simulate trajectories with the SLAC policy."""
 
     def body(pomdp_state, key):
         pomdp_state = pomdp_step(
