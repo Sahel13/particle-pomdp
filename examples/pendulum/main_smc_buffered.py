@@ -53,7 +53,7 @@ num_epochs = 100
 
 buffer_capacity = 512
 min_num_buffer_samples = 256
-num_batches_per_epoch = 24
+num_batches_per_epoch = 32
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
