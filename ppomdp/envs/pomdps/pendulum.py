@@ -117,7 +117,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
 # prior_dist = Deterministic(jnp.zeros(state_dim))
 prior_dist = MultivariateNormalDiag(
     loc=jnp.zeros(state_dim),
-    scale_diag=jnp.array([1e-2, 1e-1])
+    scale_diag=jnp.array([1e-2, 1e-2])
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)

@@ -1,4 +1,5 @@
 import os
+
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 import jax
@@ -7,9 +8,10 @@ jax.config.update("jax_enable_x64", True)
 
 import optax
 
-from jax import random, numpy as jnp
+from jax import Array, random, numpy as jnp
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
+from brax.training.replay_buffers import UniformSamplingQueue
 from distrax import Block
 
 from ppomdp.smc import smc, backward_tracing
@@ -17,14 +19,24 @@ from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_pathwise,
+    train_recurrent_neural_gauss_policy_pathwise_weighted,
 )
-from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.utils import policy_evaluation
 
 import time
 import matplotlib.pyplot as plt
+from copy import deepcopy
+from typing import NamedTuple
 
 from ppomdp.envs.pomdps import PendulumEnv as env
+
+
+# Define a structure for buffer data
+class TrajectorySample(NamedTuple):
+    actions: Array
+    observations: Array
+    log_probs: Array
+    log_marginal: Array
 
 
 rng_key = random.PRNGKey(1)
@@ -36,8 +48,12 @@ slew_rate_penalty = 0.001
 tempering = 0.5
 
 learning_rate = 3e-4
-batch_size = 32
+batch_size = 16
 num_epochs = 100
+
+buffer_capacity = 512
+min_num_buffer_samples = 256
+num_batches_per_epoch = 24
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
@@ -70,6 +86,20 @@ learner = TrainState.create(
     tx=optax.adam(learning_rate)
 )
 
+# Initialize the replay buffer
+dummy_sample = TrajectorySample(
+    actions=jnp.zeros((env.num_time_steps + 1, policy.dim)),
+    observations=jnp.zeros((env.num_time_steps + 1, env.obs_dim)),
+    log_probs=jnp.zeros((1,)),
+    log_marginal=jnp.zeros((1,))
+)
+buffer_obj = UniformSamplingQueue(
+    max_replay_size=buffer_capacity,
+    dummy_data_sample=dummy_sample,
+    sample_batch_size=batch_size
+)
+key, sub_key = random.split(key)
+buffer_state = buffer_obj.init(sub_key)
 
 num_steps = 0
 
@@ -112,21 +142,55 @@ for i in range(1, num_epochs + 1):
     traced_history, traced_belief, _ = \
         backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
-    # update policy parameters
-    loss = 0.0
-    key, sub_key = random.split(key)
-    batch_indices = batch_data(sub_key, num_history_particles, batch_size)
-    for batch_idx in batch_indices:
-        action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
-        observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
+    # Calculate pathwise log probabilities for the generated trajectories
+    log_probs = policy.pathwise_log_prob(
+        actions=traced_history.actions,
+        observations=traced_history.observations,
+        params=learner.params
+    )
 
-        learner, batch_loss = train_recurrent_neural_gauss_policy_pathwise(
-            policy=policy,
-            learner=learner,
-            actions=action_batch,
-            observations=observation_batch,
-        )
-        loss += batch_loss
+    # Insert new data into the buffer
+    samples = TrajectorySample(
+        actions=jnp.swapaxes(traced_history.actions, 0, 1),
+        observations=jnp.swapaxes(traced_history.observations, 0, 1),
+        log_probs=log_probs,
+        log_marginal=log_marginal * jnp.ones_like(log_probs)
+    )
+    buffer_state = buffer_obj.insert(buffer_state, samples)
+
+    target_params = deepcopy(learner.params)
+    target_log_marginal = log_marginal
+
+    # Train the policy using samples from the buffer
+    if buffer_obj.size(buffer_state) >= min_num_buffer_samples:
+        for _ in range(num_batches_per_epoch):
+
+            # Sample a batch from the buffer
+            key, sub_key = random.split(key)
+            buffer_state, buffer_batch = buffer_obj.sample(buffer_state)
+
+            sample_actions = jnp.swapaxes(buffer_batch.actions, 0, 1)
+            sample_observations = jnp.swapaxes(buffer_batch.observations, 0, 1)
+            sample_log_probs = jnp.squeeze(buffer_batch.log_probs)
+            sample_log_marginal = jnp.squeeze(buffer_batch.log_marginal)
+
+            target_log_probs = policy.pathwise_log_prob(
+                actions=sample_actions,
+                observations=sample_observations,
+                params=target_params
+            )
+
+            log_weights = (target_log_probs - sample_log_probs) + (sample_log_marginal - target_log_marginal)
+            importance_weights = jnp.exp(log_weights)
+
+            # Perform training step with pathwise importance sampling
+            learner, _ = train_recurrent_neural_gauss_policy_pathwise_weighted(
+                learner=learner,
+                policy=policy,
+                actions=sample_actions,
+                observations=sample_observations,
+                importance_weights=importance_weights,
+            )
 
     entropy = policy.entropy(learner.params)
     end_time = time.time()

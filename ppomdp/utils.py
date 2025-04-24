@@ -777,9 +777,9 @@ def policy_evaluation(
 def damping_schedule(
     step: int,
     total_steps: int,
-    steepness: float = 1.0,
     init_value: float = 0.1,
-    max_value: float = 0.95
+    max_value: float = 0.95,
+    steepness: float = 1.0,
 ) -> float:
     r"""Generate smooth damping factor that increases over training.
 
@@ -803,8 +803,17 @@ def damping_schedule(
         float:
             Damping factor between init_value and max_value
     """
+    # Scale step to range roughly [-6, 6] for sigmoid input
+    # This makes the steepest change happen around the middle of training
     x = (step / total_steps) * 12.0 - 6.0
+
+    # Calculate sigmoid
     beta = 1 / (1 + jnp.exp(-steepness * x))
-    # Rescale beta to start from initial_value and go up to max_value
+
+    # Rescale beta from [0, 1] range to [init_value, max_value] range
     beta_scaled = init_value + (max_value - init_value) * beta
+
+    # Ensure value does not exceed max_value (due to potential float issues)
+    # Note: If init_value < max_value, beta is <= 1, this might seem redundant,
+    # but adds robustness.
     return jnp.minimum(beta_scaled, max_value)

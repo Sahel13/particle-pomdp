@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -14,17 +14,19 @@ from distrax import Block
 
 from ppomdp.smc import rsmc, backward_tracing
 from ppomdp.bijector import Tanh
-from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
+from ppomdp.policy.arch import (
+    GRUEncoder,
+    NeuralGaussDecoder
+)
 from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
     initialize_multihead_recurrent_gauss_policy,
-    train_multihead_recurrent_neural_gauss_policy_stepwise,
+    train_multihead_recurrent_neural_gauss_policy_pathwise
 )
 from ppomdp.utils import (
     batch_data,
     damping_schedule,
     policy_evaluation,
-    flatten_particle_trajectories
 )
 
 import time
@@ -38,13 +40,13 @@ rng_key = random.PRNGKey(33)
 num_history_particles = 128
 num_belief_particles = 32
 
-slew_rate_penalty = 0.0
-tempering = 0.85
-init_damping = 0.25
-max_damping = 0.25
+slew_rate_penalty = 0.001
+tempering = 0.5
+init_damping = 0.05
+max_damping = 0.75
 
 learning_rate = 3e-4
-batch_size = 256
+batch_size = 32
 num_epochs = 100
 
 joint_bijector = Block(Tanh(), ndims=1)
@@ -57,9 +59,9 @@ joint_encoder = GRUEncoder(
 
 ###
 prior_decoder = NeuralGaussDecoder(
-    decoder_size=(256, 256),
+    decoder_sizes=(256, 256),
     output_dim=env.action_dim,
-    init_log_std=constant(jnp.log(2.0)),
+    init_log_std=constant(jnp.log(1.0)),
 )
 policy_prior = create_recurrent_neural_gauss_policy(
     encoder=joint_encoder,
@@ -69,9 +71,9 @@ policy_prior = create_recurrent_neural_gauss_policy(
 
 ###
 posterior_decoder = NeuralGaussDecoder(
-    decoder_size=(256, 256),
+    decoder_sizes=(256, 256),
     output_dim=env.action_dim,
-    init_log_std=constant(jnp.log(2.0)),
+    init_log_std=constant(jnp.log(1.0)),
 )
 policy_posterior = create_recurrent_neural_gauss_policy(
     encoder=joint_encoder,
@@ -89,18 +91,29 @@ joint_params = initialize_multihead_recurrent_gauss_policy(
     prior_decoder=prior_decoder,
     posterior_decoder=posterior_decoder,
 )
+optimizer = optax.chain(
+    optax.clip_by_global_norm(10.0),
+    optax.adam(learning_rate)
+)
 learner = TrainState.create(
     apply_fn=None,
     params=joint_params,
-    tx=optax.adam(learning_rate)
+    tx=optimizer
 )
-
 
 num_steps = 0
 
 # The training loop
 for i in range(1, num_epochs + 1):
     start_time = time.time()
+
+    # update damping param
+    damping = damping_schedule(
+        step=i,
+        total_steps=num_epochs,
+        init_value=init_damping,
+        max_value=max_damping
+    )
 
     policy_prior_params = {
         "encoder": learner.params["encoder"],
@@ -111,21 +124,13 @@ for i in range(1, num_epochs + 1):
         "decoder": learner.params["posterior_decoder"]
     }
 
-    # update damping param
-    damping = damping_schedule(
-        step=i,
-        total_steps=num_epochs,
-        init_value=init_damping,
-        max_value=max_damping
-    )
-
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
     avg_reward, *_ = policy_evaluation(
         rng_key=sub_key,
         env_obj=env,
-        policy=policy_prior,
-        params=policy_prior_params,
+        policy=policy_posterior,
+        params=policy_posterior_params,
         num_samples=1024
     )
     entropy = policy_posterior.entropy(policy_posterior_params)
@@ -159,28 +164,21 @@ for i in range(1, num_epochs + 1):
         backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
     # update policy parameters
-    actions, next_actions, observations, next_observations, carry = \
-        flatten_particle_trajectories(traced_history)
-    data_size, _ = observations.shape
-
     key, sub_key = random.split(key)
-    batch_indices = batch_data(sub_key, data_size, batch_size)
+    batch_indices = batch_data(sub_key, num_history_particles, batch_size)
     for batch_idx in batch_indices:
-        action_batch = jax.tree.map(lambda x: x[batch_idx, ...], actions)
-        next_action_batch = jax.tree.map(lambda x: x[batch_idx, ...], next_actions)
-        observations_batch = jax.tree.map(lambda x: x[batch_idx, ...], observations)
-        carry_batch = jax.tree.map(lambda x: x[batch_idx, ...], carry)
+        action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
+        observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
 
-        learner, _ = train_multihead_recurrent_neural_gauss_policy_stepwise(
-            learner=learner,
-            policy_prior=policy_prior,
-            policy_posterior=policy_posterior,
-            next_actions=next_action_batch,
-            carry=carry_batch,
-            actions=action_batch,
-            observations=observations_batch,
-            damping=damping
-        )
+        learner, _ = \
+            train_multihead_recurrent_neural_gauss_policy_pathwise(
+                learner=learner,
+                policy_prior=policy_prior,
+                policy_posterior=policy_posterior,
+                actions=action_batch,
+                observations=observation_batch,
+                damping=damping,
+            )
 
     end_time = time.time()
     time_diff = end_time - start_time
@@ -188,7 +186,7 @@ for i in range(1, num_epochs + 1):
     print(
         f"Epoch: {i:3d}, "
         f"Num steps: {num_steps:6d}, "
-        f"Log marginal: {log_marginal:.3f}, "
+        f"Log marginal: {log_marginal / tempering:.3f}, "
         f"Reward: {avg_reward:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Damping: {damping:.3f}, "
@@ -205,8 +203,8 @@ _, states, actions = \
     policy_evaluation(
         rng_key=sub_key,
         env_obj=env,
-        policy=policy_prior,
-        params=policy_prior_params,
+        policy=policy_posterior,
+        params=policy_posterior_params,
         num_samples=16
     )
 

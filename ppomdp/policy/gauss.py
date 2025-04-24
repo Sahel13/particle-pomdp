@@ -15,19 +15,17 @@ from ppomdp.core import (
     PRNGKey,
     Carry,
     Parameters,
-    HistoryParticles,
     RecurrentPolicy,
     RecurrentObservation,
 )
 from ppomdp.policy.arch import (
-    LSTMEncoder,
-    GRUEncoder,
+    RecurrentEncoder,
     NeuralGaussDecoder
 )
 
 
 def create_recurrent_neural_gauss_policy(
-    encoder: Union[LSTMEncoder, GRUEncoder],
+    encoder: RecurrentEncoder,
     decoder: NeuralGaussDecoder,
     bijector: Bijector
 ) -> RecurrentPolicy:
@@ -103,7 +101,6 @@ def create_recurrent_neural_gauss_policy(
 
     @jax.jit
     def pathwise_carry(
-        init_carry: list[Carry],
         actions: Array,
         observations: Array,
         params: Parameters,
@@ -113,6 +110,8 @@ def create_recurrent_neural_gauss_policy(
             next_carry, _ = encoder.apply({"params": params["encoder"]}, carry, obs, act)
             return next_carry, next_carry
 
+        _, batch_size, _ = observations.shape
+        init_carry = encoder.reset(batch_size)
         _, all_carry = jax.lax.scan(body, init_carry, (observations, actions))
 
         def concat_trees(x, y):
@@ -120,22 +119,38 @@ def create_recurrent_neural_gauss_policy(
 
         return concat_trees(init_carry, all_carry)
 
+    @jax.jit
     def pathwise_log_prob(
-        particles: HistoryParticles,
+        actions: Array,
+        observations: Array,
         params: Parameters
     ) -> Array:
-        def body(t, log_probs):
-            next_actions = particles.actions[t]
-            carry = jax.tree.map(lambda x: x[t - 1], particles.carry)
-            observations = particles.observations[t - 1]
-            actions = particles.actions[t - 1]
-            log_prob_incs = log_prob(next_actions, carry, actions, observations, params)
-            return log_probs + log_prob_incs
 
-        num_time_steps, batch_size, _ = particles.actions.shape
-        init_log_probs = jnp.zeros(batch_size)
-        log_probs = jax.lax.fori_loop(1, num_time_steps, body, init_log_probs)
-        return log_probs
+        def log_prob_fn(carry, args):
+            _next_actions, _observations, _actions = args
+            next_carry, log_prob_incs = \
+                carry_and_log_prob(
+                    next_actions=_next_actions,
+                    carry=carry,
+                    actions=_actions,
+                    observations=_observations,
+                    params=params
+                )
+            return next_carry, log_prob_incs
+
+        _, batch_size, _ = actions.shape
+        init_carry = encoder.reset(batch_size)
+
+        _, log_probs = jax.lax.scan(
+            f=log_prob_fn,
+            init=init_carry,
+            xs=(
+                actions[1:, ...],
+                observations[:-1, ...],
+                actions[:-1, ...]
+            )
+        )
+        return jnp.sum(log_probs, axis=0)
 
     def entropy(params: Parameters) -> Array:
         log_std = params["decoder"]["log_std"]
@@ -184,83 +199,28 @@ def create_recurrent_neural_gauss_policy(
 def train_recurrent_neural_gauss_policy_pathwise(
     learner: TrainState,
     policy: RecurrentPolicy,
-    particles: HistoryParticles,
-    damping: float = 1.0
+    actions: Array,
+    observations: Array,
 ) -> tuple[TrainState, Array]:
     """
     Trains a recurrent neural Gaussian policy using a pathwise gradient-based
-    approach. This function optimizes the policy parameters through gradient
-    updates with respect to the provided particles and current state of the
-    learner.
+    approach. This function optimizes the policy parameters by maximizing the
+    log probability of the observed actions given the observations.
 
     Args:
-        policy (RecurrentPolicy): The policy to be trained, which must define
-            the necessary methods for computing pathwise log probabilities.
         learner (TrainState): The current state of the training process,
             including model parameters and optimizers.
-        particles (HistoryParticles): The data structure representing
-            the history particles over which the policy's log probability
-            is computed.
-        damping (float): A scaling factor applied to the computed log probabilities
-            during the gradient computation. Defaults to 1.0.
+        policy (RecurrentPolicy): The policy to be trained, which must define
+            the necessary methods for computing pathwise log probabilities.
+        actions (Array): The array of actions used for computing the log probabilities.
+        observations (Array): The array of observations corresponding to the actions.
 
     Returns:
         tuple[TrainState, Array]: A tuple containing the updated learner's
         training state and the computed loss value.
     """
     def loss_fn(params):
-        log_probs = damping * policy.pathwise_log_prob(particles, params)
-        return -1.0 * jnp.mean(log_probs)
-
-    loss, grads = jax.value_and_grad(loss_fn)(learner.params)
-    learner = learner.apply_gradients(grads=grads)
-    return learner, loss
-
-
-@partial(jax.jit, static_argnames="policy")
-def train_recurrent_neural_gauss_policy_stepwise(
-    learner: TrainState,
-    policy: RecurrentPolicy,
-    next_actions: Array,
-    carry: List[Carry],
-    actions: Array,
-    observations: Array,
-    damping: float = 1.0
-):
-    """
-    Trains a recurrent neural Gaussian policy in a stepwise manner using the
-    provided learner and policy parameters. The function computes the loss
-    based on the policy log probabilities scaled by a damping factor and
-    updates the learner's parameters using gradient descent.
-
-    Args:
-        policy (RecurrentPolicy): The recurrent policy to be trained. This policy
-            defines how the log probabilities are calculated.
-        learner (TrainState): The training state containing the model parameters
-            and optimizer state that are updated during training.
-        next_actions (Array): The sequence of actions predicted by the policy for
-            the next step, used for log probability computation.
-        carry (List[Carry]): The recurrent carry state passed across steps in the
-            recurrent model. Contains hidden state information.
-        observations (Array): The input data or observations considered by the
-            policy for decision-making.
-        actions (Array): The actions corresponding to the given observations.
-        damping (float, optional): A scaling factor for the calculated log
-            probabilities. Defaults to 1.0.
-
-    Returns:
-        Tuple[TrainState, Array]: A tuple containing the updated learner with
-            adjusted gradients and the computed loss value. The loss represents
-            the negative mean log probability of the next actions given the input.
-    """
-    def loss_fn(params):
-        log_probs = damping * policy.log_prob(
-            next_actions=next_actions,
-            carry=carry,
-            actions=actions,
-            observations=observations,
-            params=params
-        )
+        log_probs = policy.pathwise_log_prob(actions, observations, params)
         return -1.0 * jnp.mean(log_probs)
 
     loss, grads = jax.value_and_grad(loss_fn)(learner.params)
@@ -273,7 +233,7 @@ def initialize_multihead_recurrent_gauss_policy(
     obs_dim: int,
     action_dim: int,
     batch_dim: int,
-    encoder: GRUEncoder,
+    encoder: RecurrentEncoder,
     prior_decoder: NeuralGaussDecoder,
     posterior_decoder: NeuralGaussDecoder,
 ) -> dict:
@@ -324,7 +284,8 @@ def train_multihead_recurrent_neural_gauss_policy_pathwise(
     learner: TrainState,
     policy_prior: RecurrentPolicy,
     policy_posterior: RecurrentPolicy,
-    particles: HistoryParticles,
+    actions: Array,
+    observations: Array,
     damping: float = 1.0
 ) -> tuple[TrainState, Array]:
     """Train a multihead recurrent neural Gaussian policy using pathwise gradients.
@@ -344,7 +305,8 @@ def train_multihead_recurrent_neural_gauss_policy_pathwise(
         learner: Current training state with optimizer and parameters
         policy_prior: Prior policy model
         policy_posterior: Posterior policy model
-        particles: History particles containing actions, observations, and carry states
+        actions (Array): The array of actions used for computing the log probabilities.
+        observations (Array): The array of observations corresponding to the actions.
         damping: Interpolation factor λ between prior and posterior policies.
                 Must be in [0, 1]. Defaults to 1.0.
 
@@ -365,8 +327,8 @@ def train_multihead_recurrent_neural_gauss_policy_pathwise(
         prior_param = {"encoder": params["encoder"], "decoder": params["prior_decoder"]}
         posterior_param = {"encoder": params["encoder"], "decoder": params["posterior_decoder"]}
 
-        prior_log_probs = policy_prior.pathwise_log_prob(particles, prior_param)
-        posterior_log_probs = policy_posterior.pathwise_log_prob(particles, posterior_param)
+        prior_log_probs = policy_prior.pathwise_log_prob(actions, observations, prior_param)
+        posterior_log_probs = policy_posterior.pathwise_log_prob(actions, observations, posterior_param)
         log_probs = (1. - damping) * prior_log_probs + damping * posterior_log_probs
         return -1.0 * jnp.mean(log_probs)
 
@@ -374,70 +336,10 @@ def train_multihead_recurrent_neural_gauss_policy_pathwise(
     learner = learner.apply_gradients(grads=grads)
     return learner, loss
 
-
-@partial(jax.jit, static_argnames=("policy_prior", "policy_posterior"))
-def train_multihead_recurrent_neural_gauss_policy_stepwise(
-    learner: TrainState,
-    policy_prior: RecurrentPolicy,
-    policy_posterior: RecurrentPolicy,
-    next_actions: Array,
-    carry: List[Carry],
-    actions: Array,
-    observations: Array,
-    damping: float = 1.0
-):
-    """Train a multi-head recurrent neural Gaussian policy with a single update step.
-
-    This function performs one training step for a multi-head recurrent neural network
-    policy with Gaussian distribution outputs. It combines prior and posterior policies
-    using weighted log probabilities according to the damping parameter.
-
-    The training objective optimizes a weighted combination:
-    log p(a) = (1-λ) log p_prior(a) + λ log p_posterior(a)
-
-    Args:
-        learner (TrainState): Current training state with optimizer and parameters
-        policy_prior (RecurrentPolicy): Prior policy model
-        policy_posterior (RecurrentPolicy): Posterior policy model
-        next_actions (Array): Batch of next actions to predict
-        carry (List[Carry]): Recurrent state carries containing hidden states
-        observations (Array): Batch of observations with shape (batch_size, obs_dim)
-        actions (Array): Current batch of actions with shape (batch_size, action_dim)
-        damping (float, optional): Interpolation factor λ between prior and posterior.
-                                  Defaults to 1.0.
-
-    Returns:
-        Tuple[TrainState, float]: Updated training state and scalar loss value
-    """
-
-    def loss_fn(params):
-        prior_param = {"encoder": params["encoder"], "decoder": params["prior_decoder"]}
-        posterior_param = {"encoder": params["encoder"], "decoder": params["posterior_decoder"]}
-
-        prior_log_probs = policy_prior.log_prob(
-            next_actions=next_actions,
-            carry=carry,
-            actions=actions,
-            observations=observations,
-            params=prior_param
-        )
-        posterior_log_probs = policy_posterior.log_prob(
-            next_actions=next_actions,
-            carry=carry,
-            actions=actions,
-            observations=observations,
-            params=posterior_param
-        )
-        log_probs = (1. - damping) * prior_log_probs + damping * posterior_log_probs
-        return -1.0 * jnp.mean(log_probs)
-
-    loss, grads = jax.value_and_grad(loss_fn)(learner.params)
-    learner = learner.apply_gradients(grads=grads)
-    return learner, loss
 
 
 def create_recurrent_neural_gauss_observation(
-    encoder: Union[LSTMEncoder, GRUEncoder],
+    encoder: RecurrentEncoder,
     decoder: NeuralGaussDecoder,
 ) -> RecurrentObservation:
 
@@ -531,33 +433,33 @@ def create_recurrent_neural_gauss_observation(
     )
 
 
-@partial(jax.jit, static_argnames="observation_posterior")
-def train_recurrent_neural_gauss_observation_stepwise(
-    learner: TrainState,
-    observation_posterior: RecurrentObservation,
-    next_observations: Array,
-    carry: List[Carry],
-    actions: Array,
-    observations: Array,
-    next_actions: Array,
-    damping: float = 1.0
-):
-
-    def loss_fn(params):
-        posterior_log_prob_observations = observation_posterior.log_prob(
-            next_observations=next_observations,
-            carry=carry,
-            actions=actions,
-            observations=observations,
-            next_actions=next_actions,
-            params=params
-        )
-        log_probs = damping * posterior_log_prob_observations
-        return -1.0 * jnp.mean(log_probs)
-
-    loss, grads = jax.value_and_grad(loss_fn)(learner.params)
-    learner = learner.apply_gradients(grads=grads)
-    return learner, loss
+# @partial(jax.jit, static_argnames="observation_posterior")
+# def train_recurrent_neural_gauss_observation_stepwise(
+#     learner: TrainState,
+#     observation_posterior: RecurrentObservation,
+#     next_observations: Array,
+#     carry: List[Carry],
+#     actions: Array,
+#     observations: Array,
+#     next_actions: Array,
+#     damping: float = 1.0
+# ):
+#
+#     def loss_fn(params):
+#         posterior_log_prob_observations = observation_posterior.log_prob(
+#             next_observations=next_observations,
+#             carry=carry,
+#             actions=actions,
+#             observations=observations,
+#             next_actions=next_actions,
+#             params=params
+#         )
+#         log_probs = damping * posterior_log_prob_observations
+#         return -1.0 * jnp.mean(log_probs)
+#
+#     loss, grads = jax.value_and_grad(loss_fn)(learner.params)
+#     learner = learner.apply_gradients(grads=grads)
+#     return learner, loss
 
 
 # @partial(
@@ -625,3 +527,40 @@ def train_recurrent_neural_gauss_observation_stepwise(
 #     loss, grads = jax.value_and_grad(loss_fn)(learner.params)
 #     learner = learner.apply_gradients(grads=grads)
 #     return learner, loss
+
+
+@partial(jax.jit, static_argnames="policy")
+def train_recurrent_neural_gauss_policy_pathwise_weighted(
+    learner: TrainState,
+    policy: RecurrentPolicy,
+    actions: Array,
+    observations: Array,
+    importance_weights: Array,
+) -> tuple[TrainState, Array]:
+    """
+    Trains a recurrent neural Gaussian policy pathwise using importance sampling.
+
+    This function computes the loss based on the pathwise policy log probabilities,
+    weighted by importance sampling ratios (clipped for stability), and updates
+    the learner's parameters using gradient descent.
+    Assumes pathwise_log_prob handles carry internally.
+
+    Args:
+        learner (TrainState): The training state containing model parameters
+            and optimizer state.
+        policy (RecurrentPolicy): The recurrent policy being trained.
+        actions (Array): Actions tensor with shape (T, batch_size, action_dim).
+        observations (Array): Observations tensor with shape (T, batch_size, obs_dim).
+        importance_weights (Array): Importance weights per trajectory
+
+    Returns:
+        Tuple[TrainState, Array]: Updated learner state and the computed loss.
+    """
+    def loss_fn(params):
+        log_probs = policy.pathwise_log_prob(actions, observations, params)
+        loss = -1.0 * jnp.average(log_probs, weights=importance_weights)
+        return loss
+
+    loss, grads = jax.value_and_grad(loss_fn)(learner.params)
+    learner = learner.apply_gradients(grads=grads)
+    return learner, loss

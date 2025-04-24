@@ -135,7 +135,6 @@ class LogProbRecurrentPolicy(Protocol):
 class PathwiseCarryRecurrentPolicy(Protocol):
     def __call__(
         self,
-        init_carry: list[Carry],
         actions: Array,
         observations: Array,
         params: Parameters
@@ -146,7 +145,8 @@ class PathwiseCarryRecurrentPolicy(Protocol):
 class PathwiseLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        particles: HistoryParticles,
+        actions: Array,
+        observations: Array,
         params: Parameters
     ) -> Array:
         r"""Compute the pathwise log density of $\pi_\phi$."""

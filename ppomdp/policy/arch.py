@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from jax import Array, numpy as jnp
 from flax import linen as nn
@@ -139,7 +139,8 @@ class MLPDecoder(nn.Module):
     def __call__(self, x: Array) -> Array:
         # pass result through decoder layers
         for size in self.decoder_sizes:
-            x = nn.relu(nn.Dense(size)(x))
+            x = nn.Dense(size)(x)
+            x = nn.relu(x)
         return nn.Dense(self.output_dim)(x)
 
 
@@ -165,7 +166,8 @@ class MLPConditioner(nn.Module):
 
         x = jnp.hstack([x, context])
         for size in self.hidden_sizes:
-            x = nn.relu(nn.Dense(size)(x))
+            x = nn.Dense(size)(x)
+            x = nn.relu(x)
         x = nn.Dense(
             self.event_dim * self.num_params,
             kernel_init=nn.initializers.zeros,
@@ -207,7 +209,8 @@ class NeuralGaussDecoder(nn.Module):
 
         # x = jnp.concatenate([x, z], axis=-1) if z is not None else x
         for size in self.decoder_sizes:
-            x = nn.relu(nn.Dense(size)(x))
+            x = nn.Dense(size)(x)
+            x = nn.relu(x)
         y = nn.Dense(self.output_dim)(x)
         return y, log_std
 
@@ -220,3 +223,9 @@ class NeuralGaussDecoder(nn.Module):
             self.output_dim * jnp.log(2.0 * jnp.pi * jnp.exp(1))
             + jnp.linalg.slogdet(jnp.diag(jnp.exp(2. * log_std)))[1]
         )
+
+
+RecurrentEncoder = Union[
+    LSTMEncoder,
+    GRUEncoder,
+]
