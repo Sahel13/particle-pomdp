@@ -455,7 +455,7 @@ def policy_logpdf(
     def body(k, val):
         carry, log_prob = val
         next_carry, log_prob_inc = policy.carry_and_log_prob(
-            next_action=future_actions[k],
+            next_actions=future_actions[k],
             carry=carry,
             actions=None,
             observations=future_observations[k - 1],
@@ -464,7 +464,7 @@ def policy_logpdf(
         return next_carry, log_prob + log_prob_inc
 
     carry, log_prob = policy.carry_and_log_prob(
-        next_action=future_actions[time_idx],
+        next_actions=future_actions[time_idx],
         carry=init_carry,
         actions=None,
         observations=init_observation,
@@ -493,7 +493,7 @@ def transition_logpdf(
         )
         return jax.nn.logsumexp(logpdfs + belief_state.log_weights)
 
-    log_transitions = jax.vmap(log_transition_single, in_axes=(0, None, None))(
+    log_transitions = jax.vmap(log_transition_single, in_axes=(0, None))(
         future_belief_state.particles, belief_state.particles
     )
     return jnp.sum(log_transitions)
