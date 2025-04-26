@@ -71,22 +71,10 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
             logger_directory=config.logger_directory,
         )
 
-    total_time_steps = config.total_time_steps
-    num_belief_particles = config.num_belief_particles
-    buffer_size = config.buffer_size
-    learning_starts = config.learning_starts
-    policy_lr = config.policy_lr
-    critic_lr = config.critic_lr
-    batch_size = config.batch_size
-    alpha = config.alpha
-    gamma = config.gamma
-    tau = config.tau
-
-    # Initialize JAX random key
     key = random.key(seed)
     key, sub_key = random.split(key)
     train_state, policy_network, _ = create_train_state(
-        rng_key=sub_key, env_obj=env_obj, policy_lr=policy_lr, critic_lr=critic_lr
+        sub_key, env_obj, config.policy_lr, config.critic_lr
     )
 
     # Set up the replay buffer
@@ -96,16 +84,16 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
         env_obj,
         train_state.policy_state,
         policy_network,
-        num_belief_particles,
+        config.num_belief_particles,
         random_actions=True,
     )
 
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_states)
-    buffer_size = buffer_size // env_obj.num_time_steps
+    buffer_size = config.buffer_size // env_obj.num_time_steps
     buffer_obj = UniformSamplingQueue(
         max_replay_size=buffer_size,
         dummy_data_sample=buffer_entry_prototype,
-        sample_batch_size=batch_size,
+        sample_batch_size=config.batch_size,
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -117,16 +105,16 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
 
     # Pre-fill the buffer with random actions
     for global_step in range(
-        env_obj.num_time_steps, total_time_steps, env_obj.num_time_steps
+        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
     ):
         key, sub_key = random.split(key)
-        if global_step <= learning_starts:
+        if global_step <= config.learning_starts:
             pomdp_states = sim_trajectories(
                 sub_key,
                 env_obj,
                 train_state.policy_state,
                 policy_network,
-                num_belief_particles,
+                config.num_belief_particles,
                 random_actions=True,
             )
         else:
@@ -135,13 +123,13 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
                 env_obj,
                 train_state.policy_state,
                 policy_network,
-                num_belief_particles,
+                config.num_belief_particles,
                 random_actions=False,
             )
 
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
-        if global_step > learning_starts:
+        if global_step > config.learning_starts:
             buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
             key, train_key = random.split(key)
             train_state, *_ = gradient_step(
@@ -149,18 +137,16 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
                 train_state,
                 pomdp_states_batch,
                 policy_network,
-                alpha,
-                gamma,
-                tau,
+                config.alpha,
+                config.gamma,
+                config.tau,
             )
 
-        if global_step % 2000 == 0:
+        if global_step % (20 * env_obj.num_time_steps) == 0:
+            # Evaluate the policy and log metrics
             key, sub_key = random.split(key)
             expected_reward, _, _ = policy_evaluation(
-                rng_key=sub_key,
-                env_obj=env_obj,
-                policy_state=train_state.policy_state,
-                policy_network=policy_network,
+                sub_key, env_obj, train_state.policy_state, policy_network
             )
 
             if logger:
