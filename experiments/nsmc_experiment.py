@@ -16,31 +16,27 @@ if len(sys.argv) > 1:
             print(f"Setting CUDA_VISIBLE_DEVICES to {sys.argv[i + 1]}")
             break
 
-import tyro
-from tqdm import tqdm
-
 import jax
 import optax
-
-from jax import random
-from jax import numpy as jnp
+import tyro
+from common import get_pomdp, get_unique_identifier
+from distrax import Block
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from distrax import Block
+from jax import numpy as jnp
+from jax import random
+from tqdm import tqdm
+from wandb_logger import WandbLogger
 
-from ppomdp.smc import smc, backward_tracing
 from ppomdp.bijector import Tanh
+from ppomdp.config import NSMCExperiment
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_stepwise
+    train_recurrent_neural_gauss_policy_pathwise,
 )
-from ppomdp.utils import batch_data, policy_evaluation, flatten_trajectories
-from ppomdp.config import NSMCExperiment
-
-from wandb_logger import WandbLogger
-from common import get_pomdp, get_unique_identifier
-
+from ppomdp.smc import backward_tracing, smc
+from ppomdp.utils import batch_data, policy_evaluation
 
 
 def run_single_seed(config: NSMCExperiment, seed: int) -> None:
@@ -56,7 +52,6 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
         nsmc_config = {
             "algorithm": "nsmc",
             "environment": config.env_id,
-            "num_seeds": config.num_seeds,
             "cuda_device": config.cuda_device,
             "num_history_particles": config.num_history_particles,
             "num_belief_particles": config.num_belief_particles,
@@ -79,7 +74,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             experiment_group=config.experiment_group,
             experiment_tags=config.experiment_tags,
             experiment_config=nsmc_config,
-            logger_directory=config.logger_directory
+            logger_directory=config.logger_directory,
         )
 
     num_history_particles = config.num_history_particles
@@ -112,9 +107,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
     bijector = Block(Tanh(), ndims=1)
 
     policy = create_recurrent_neural_gauss_policy(
-        encoder=encoder,
-        decoder=decoder,
-        bijector=bijector
+        encoder=encoder, decoder=decoder, bijector=bijector
     )
     key, sub_key = random.split(key, 2)
     params = policy.init(
@@ -124,23 +117,24 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
         batch_dim=num_history_particles,
     )
     learner = TrainState.create(
-        params=params,
-        apply_fn=lambda *_: None,
-        tx=optax.adam(learning_rate)
+        params=params, apply_fn=lambda *_: None, tx=optax.adam(learning_rate)
     )
 
     num_steps = 0
 
     # Check policy performance before training
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
-    print(f"Step: {num_steps:6d} | Average reward: {avg_reward:8.3f}")
+    expected_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
+    print(f"Step: {num_steps:6d} | Expected reward: {expected_reward:8.3f}")
 
     if logger:
-        logger.log_metrics({
-            "average_reward": avg_reward,
-            "policy_entropy": policy.entropy(learner.params),
-        }, step=num_steps)
+        logger.log_metrics(
+            {
+                "expected_reward": expected_reward,
+                "policy_entropy": policy.entropy(learner.params),
+            },
+            step=num_steps,
+        )
 
     # Training loop
     while num_steps <= total_time_steps:
@@ -158,54 +152,43 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             obs_model=env_obj.obs_model,
             reward_fn=env_obj.reward_fn,
             slew_rate_penalty=slew_rate_penalty,
-            tempering=tempering
+            tempering=tempering,
         )
         num_steps += num_history_particles * (env_obj.num_time_steps + 1)
 
         # Get the smoothed trajectories using genealogy tracking
         key, sub_key = random.split(key)
-        traced_history, _, _ = backward_tracing(
+        traced_history, *_ = backward_tracing(
             sub_key, history_states, belief_states, belief_infos
         )
 
         # Update policy parameters
-        actions, next_actions, observations, _, carry = \
-            flatten_trajectories(traced_history)
-        data_size, _ = observations.shape
-
-        key, sub_key = random.split(key)
-        batch_indices = batch_data(sub_key, data_size, batch_size)
+        key, batch_key = random.split(key)
+        batch_indices = batch_data(batch_key, num_history_particles, batch_size)
         for batch_idx in batch_indices:
-            action_batch = jax.tree.map(lambda x: x[batch_idx, ...], actions)
-            next_action_batch = jax.tree.map(lambda x: x[batch_idx, ...], next_actions)
-            observations_batch = jax.tree.map(lambda x: x[batch_idx, ...], observations)
-            carry_batch = jax.tree.map(lambda x: x[batch_idx, ...], carry)
-
-            learner, _ = train_recurrent_neural_gauss_policy_stepwise(
-                policy=policy,
-                learner=learner,
-                next_actions=next_action_batch,
-                carry=carry_batch,
-                actions=action_batch,
-                observations=observations_batch,
+            history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
+            learner, _ = train_recurrent_neural_gauss_policy_pathwise(
+                learner, policy, history_batch.actions, history_batch.observations
             )
 
         # Evaluate the policy
-        key, sub_key = random.split(key)
-        avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
+        key, eval_key = random.split(key)
+        expected_reward, *_ = policy_evaluation(eval_key, env_obj, policy, learner.params)
 
         if logger:
-            logger.log_metrics({
-                "average_reward": avg_reward,
-                "log_marginal": log_marginal,
-                "policy_entropy": policy.entropy(learner.params),
-            }, step=num_steps)
+            logger.log_metrics(
+                {
+                    "expected_reward": expected_reward,
+                    "log_marginal": log_marginal,
+                    "policy_entropy": policy.entropy(learner.params),
+                },
+                step=num_steps,
+            )
 
         print(
             f"Step: {num_steps:6d} | "
             f"Log marginal: {log_marginal:8.3f} | "
-            f"Average reward: {avg_reward:8.3f} | "
-            f"Entropy: {policy.entropy(learner.params):8.4f}"
+            f"Expected reward: {expected_reward:8.3f}"
         )
 
     # Finish wandb logging if enabled

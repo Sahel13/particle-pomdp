@@ -23,18 +23,18 @@ class NSMC(NamedTuple):
 
 class NSMCExperiment(NamedTuple):
     # Environment settings
-    env_id: str = "cartpole"
+    env_id: str
     num_seeds: int = 10
     cuda_device: str = "0"
 
     # Algorithm hyperparameters
-    total_time_steps: int = 1000000
+    total_time_steps: int = int(1e6)
     num_history_particles: int = 128
     num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
     learning_rate: float = 3e-4
-    batch_size: int = 256
+    batch_size: int = 16
 
     # Network architecture
     encoder_dense_sizes: tuple[int, ...] = (256, 256)
@@ -48,6 +48,6 @@ class NSMCExperiment(NamedTuple):
     # Logger settings
     use_logger: bool = True
     project_name: str = "particle-pomdp"
-    experiment_group: str = "nsmc-cartpole"
-    experiment_tags: Optional[List[str]] = ["nsmc", "cartpole", "test"]
+    experiment_group: str = "nsmc"
+    experiment_tags: Optional[List[str]] = ["nsmc", "test"]
     logger_directory: str = "logs"
