@@ -455,16 +455,18 @@ def policy_logpdf(
     def body(k, val):
         carry, log_prob = val
         next_carry, log_prob_inc = policy.carry_and_log_prob(
-            action=future_actions[k],
+            next_action=future_actions[k],
             carry=carry,
+            actions=None,
             observations=future_observations[k - 1],
             params=params,
         )
         return next_carry, log_prob + log_prob_inc
 
     carry, log_prob = policy.carry_and_log_prob(
-        action=future_actions[time_idx],
+        next_action=future_actions[time_idx],
         carry=init_carry,
+        actions=None,
         observations=init_observation,
         params=params,
     )
@@ -479,37 +481,22 @@ def transition_logpdf(
     action: Array,
     trans_model: TransitionModel,
 ):
-    r"""Compute transition probability between belief states.
+    """Compute the transition probability between belief states."""
 
-    Calculates log p(s_{t+1}|s_t, a_t) by marginalizing over the current
-    belief state particles and their weights:
-    $\log p(s_{t+1}|s_t, a_t) = \log \left( \sum_{m=1}^M \sum_{m'=1}^M w_t^{nm} w_{t+1}^{nm'} p(s_{t+1}^{nm'} | s_t^{nm}, a_t^n) \right)$
+    def log_transition_single(next_state, states):
+        """Compute the transition probability to a single `next_state`.
 
-    Args:
-        future_belief_state: BeliefState
-            Next belief state s_{t+1}
-        belief_state: BeliefState
-            Current belief state s_t
-        action: Array
-            Action a_t taken
-        trans_model: TransitionModel
-            State transition model p(s'|s,a)
-
-    Returns:
-        Array:
-            Log transition probability
-    """
-
-    def _log_transition(next_state, states, action):
+        This is marginalized over the resampling indices (assuming multinomial resampling).
+        """
         logpdfs = jax.vmap(trans_model.log_prob, in_axes=(None, 0, None))(
             next_state, states, action
         )
         return jax.nn.logsumexp(logpdfs + belief_state.log_weights)
 
-    log_transitions = jax.vmap(_log_transition, in_axes=(0, None, None))(
-        future_belief_state.particles, belief_state.particles, action
+    log_transitions = jax.vmap(log_transition_single, in_axes=(0, None, None))(
+        future_belief_state.particles, belief_state.particles
     )
-    return jax.nn.logsumexp(log_transitions + future_belief_state.log_weights)
+    return jnp.sum(log_transitions)
 
 
 # misc functions
