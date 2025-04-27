@@ -25,12 +25,12 @@ class P3O(NamedTuple):
 
 class P3OExperiment(NamedTuple):
     # Environment settings
-    env_id: str = "cartpole"
+    env_id: str
     num_seeds: int = 10
     cuda_device: str = "0"
 
     # Algorithm hyperparameters
-    total_time_steps: int = 1000000
+    total_time_steps: int = int(1e6)
     num_history_particles: int = 128
     num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
@@ -52,6 +52,6 @@ class P3OExperiment(NamedTuple):
     # Logger settings
     use_logger: bool = True
     project_name: str = "particle-pomdp"
-    experiment_group: str = "nsmc-cartpole"
-    experiment_tags: Optional[List[str]] = ["nsmc", "cartpole", "test"]
+    experiment_group: str = "nsmc"
+    experiment_tags: Optional[List[str]] = ["nsmc", "test"]
     logger_directory: str = "logs"
