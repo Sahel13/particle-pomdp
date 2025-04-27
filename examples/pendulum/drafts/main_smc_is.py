@@ -39,28 +39,27 @@ class TrajectorySample(NamedTuple):
     log_marginal: Array
 
 
-rng_key = random.PRNGKey(1)
+rng_key = random.PRNGKey(2)
 
 num_history_particles = 128
 num_belief_particles = 32
 
 slew_rate_penalty = 0.001
-tempering = 0.5
+tempering = 0.75
 
 learning_rate = 3e-4
 batch_size = 16
 num_epochs = 100
 
-buffer_capacity = 512
-min_num_buffer_samples = 256
+max_buffer_size = 512
+min_buffer_size = 256
 num_batches_per_epoch = 32
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
-    dense_sizes=(256, 128),
-    recurr_sizes=(64, 64),
+    dense_sizes=(256, 256),
+    recurr_sizes=(128, 128),
     use_layer_norm=True,
-
 )
 decoder = NeuralGaussDecoder(
     decoder_sizes=(256, 256),
@@ -83,7 +82,7 @@ params = policy.init(
 learner = TrainState.create(
     params=params,
     apply_fn=lambda *_: None,
-    tx=optax.adam(learning_rate)
+    tx=optax.rmsprop(learning_rate)
 )
 
 # Initialize the replay buffer
@@ -94,7 +93,7 @@ dummy_sample = TrajectorySample(
     log_marginal=jnp.zeros((1,))
 )
 buffer_obj = UniformSamplingQueue(
-    max_replay_size=buffer_capacity,
+    max_replay_size=max_buffer_size,
     dummy_data_sample=dummy_sample,
     sample_batch_size=batch_size
 )
@@ -162,7 +161,7 @@ for i in range(1, num_epochs + 1):
     target_log_marginal = log_marginal
 
     # Train the policy using samples from the buffer
-    if buffer_obj.size(buffer_state) >= min_num_buffer_samples:
+    if buffer_obj.size(buffer_state) >= min_buffer_size:
         for _ in range(num_batches_per_epoch):
 
             # Sample a batch from the buffer

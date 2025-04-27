@@ -3,63 +3,79 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 import jax
 jax.config.update("jax_enable_x64", True)
-# jax.config.update("jax_disable_jit", True)
 
 import optax
 
 from jax import random, numpy as jnp
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from distrax import Block
+from distrax import RationalQuadraticSpline
 
 from ppomdp.core import Reference
-from ppomdp.smc import smc, csmc, backward_tracing, mcmc_backward_sampling
-from ppomdp.bijector import Tanh
-from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
-from ppomdp.policy.gauss import (
-    create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_pathwise,
+from ppomdp.smc import smc, csmc, backward_tracing
+from ppomdp.policy.arch import GRUEncoder, MLPDecoder, MLPConditioner
+from ppomdp.policy.flow import (
+    RecurrentNeuralFlow,
+    create_recurrent_neural_flow_policy,
+    train_recurrent_neural_flow_policy_pathwise
 )
 from ppomdp.utils import batch_data, policy_evaluation
-from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
+from copy import deepcopy
 import matplotlib.pyplot as plt
 
-from ppomdp.envs.pomdps import PendulumEnv as env
+from ppomdp.envs.pomdps import LightDark1DEnv as env
 
 
-rng_key = random.PRNGKey(1)
+rng_key = random.PRNGKey(123)
 
-num_history_particles = 128
-num_belief_particles = 32
-num_target_samples = 512
+num_history_particles = 256
+num_belief_particles = 256
 
-slew_rate_penalty = 0.0
-tempering = 0.5
-num_moves = 1
+slew_rate_penalty = 0.0015
+tempering = 8.
+num_moves = 5
 
 learning_rate = 3e-4
-batch_size = 32
-num_epochs = 1
+batch_size = 64
+num_epochs = 2000
 
-bijector = Block(Tanh(), ndims=1)
+num_bins = 16
+num_transforms = 4
+
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
     dense_sizes=(256, 256),
     recurr_sizes=(64, 64),
     use_layer_norm=True,
 )
-decoder = NeuralGaussDecoder(
+decoder = MLPDecoder(
     decoder_sizes=(256, 256),
     output_dim=env.action_dim,
-    init_log_std=constant(jnp.log(1.0)),
 )
-policy = create_recurrent_neural_gauss_policy(
+conditioners = [
+    MLPConditioner(
+        event_dim=env.action_dim,
+        hidden_sizes=(256, 256),
+        num_params=3 * num_bins + 1,
+    ) for _ in range(num_transforms)
+]
+
+
+def inner_bijector(params):
+    return RationalQuadraticSpline(params, range_min=-1.0, range_max=1.0)
+
+
+flow = RecurrentNeuralFlow(
+    dim=env.action_dim,
     encoder=encoder,
     decoder=decoder,
-    bijector=bijector
+    conditioners=conditioners,
+    inner_bijector=inner_bijector,
+    init_log_std=constant(jnp.log(1.0)),
 )
+policy = create_recurrent_neural_flow_policy(flow)
 
 key, sub_key = random.split(rng_key, 2)
 params = policy.init(
@@ -69,18 +85,18 @@ params = policy.init(
     batch_dim=num_history_particles,
 )
 learner = TrainState.create(
-    apply_fn=None,
     params=params,
+    apply_fn=lambda *_: None,
     tx=optax.adam(learning_rate)
 )
 
-# run init nested smc
+# run nested conditional smc
 key, sub_key = random.split(key)
-history_states, belief_states, belief_infos, _ = \
+history_states, belief_states, belief_infos, log_marginal = \
     smc(
         rng_key=sub_key,
         num_time_steps=env.num_time_steps,
-        num_history_particles=int(num_history_particles),
+        num_history_particles=num_history_particles,
         num_belief_particles=num_belief_particles,
         init_prior=env.prior_dist,
         policy_prior=policy,
@@ -89,30 +105,13 @@ history_states, belief_states, belief_infos, _ = \
         obs_model=env.obs_model,
         reward_fn=env.reward_fn,
         slew_rate_penalty=slew_rate_penalty,
-        tempering=tempering,
-        history_resample_fn=systematic_resampling,
-        belief_resample_fn=multinomial_resampling,
+        tempering=tempering
     )
 
-# # trace ancestors of history states
-# key, sub_key = random.split(key)
-# traced_history, traced_belief, _ = \
-#     backward_tracing(sub_key, history_states, belief_states, belief_infos)
-
-# backward sample history states
+# trace ancestors of history states
 key, sub_key = random.split(key)
-traced_history, traced_belief = mcmc_backward_sampling(
-    rng_key=sub_key,
-    num_samples=num_target_samples,
-    policy_prior=policy,
-    policy_prior_params=learner.params,
-    trans_model=env.trans_model,
-    reward_fn=env.reward_fn,
-    slew_rate_penalty=slew_rate_penalty,
-    tempering=tempering,
-    history_states=history_states,
-    belief_states=belief_states,
-)
+traced_history, traced_belief, _ = \
+    backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
 # sample a new reference
 key, sub_key = random.split(key)
@@ -121,8 +120,6 @@ reference = Reference(
     history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
     belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
 )
-
-num_steps = 0
 
 for i in range(1, num_epochs + 1):
     start_time = time.time()
@@ -155,31 +152,12 @@ for i in range(1, num_epochs + 1):
                 slew_rate_penalty=slew_rate_penalty,
                 tempering=tempering,
                 reference=reference,
-                history_resample_fn=multinomial_resampling,
-                belief_resample_fn=multinomial_resampling,
             )
 
-        num_steps += (env.num_time_steps + 1) * num_history_particles
-
-        # # trace ancestors of history states
-        # key, sub_key = random.split(key)
-        # traced_history, traced_belief, _ = \
-        #     backward_tracing(sub_key, history_states, belief_states, belief_infos)
-
-        # backward sample history states
+        # trace ancestors of history states
         key, sub_key = random.split(key)
-        traced_history, traced_belief = mcmc_backward_sampling(
-            rng_key=sub_key,
-            num_samples=num_target_samples,
-            policy_prior=policy,
-            policy_prior_params=learner.params,
-            trans_model=env.trans_model,
-            reward_fn=env.reward_fn,
-            slew_rate_penalty=slew_rate_penalty,
-            tempering=tempering,
-            history_states=history_states,
-            belief_states=belief_states,
-        )
+        traced_history, traced_belief, _ = \
+            backward_tracing(sub_key, history_states, belief_states, belief_infos)
 
         # sample a new reference
         key, sub_key = random.split(key)
@@ -197,7 +175,7 @@ for i in range(1, num_epochs + 1):
         action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
         observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
 
-        learner, batch_loss = train_recurrent_neural_gauss_policy_pathwise(
+        learner, batch_loss = train_recurrent_neural_flow_policy_pathwise(
             policy=policy,
             learner=learner,
             actions=action_batch,
@@ -205,37 +183,62 @@ for i in range(1, num_epochs + 1):
         )
         loss += batch_loss
 
-    entropy = policy.entropy(learner.params)
+    # entropy = policy.entropy(train_state.params)
     end_time = time.time()
     time_diff = end_time - start_time
 
     print(
         f"Epoch: {i:3d}, "
-        f"Num steps: {num_steps:6d}, "
-        f"Log marginal: {log_marginal:.3f}, "
         f"Reward: {avg_reward:.3f}, "
-        f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )
 
+eval_params = deepcopy(learner.params)
+eval_params["log_std"] = -20.0 * jnp.ones((env.action_dim,))
 
-from ppomdp.smc.utils import weighted_mean
+key, sub_key = random.split(key)
+history_states, belief_states, belief_infos, _ = \
+    smc(
+        rng_key=sub_key,
+        num_time_steps=env.num_time_steps,
+        num_history_particles=num_history_particles,
+        num_belief_particles=num_belief_particles,
+        init_prior=env.prior_dist,
+        policy_prior=policy,
+        policy_prior_params=eval_params,
+        trans_model=env.trans_model,
+        obs_model=env.obs_model,
+        reward_fn=env.reward_fn,
+        slew_rate_penalty=0.0,
+        tempering=0.0,
+    )
 
-states = weighted_mean(traced_belief.particles, traced_belief.weights)
-actions = traced_history.actions
+observations = history_states.particles.observations
+actions = history_states.particles.actions
+state_means = belief_infos.mean
+state_covars = belief_infos.covar
 
-# Plot traced history observations and actions
-fig, axs = plt.subplots(3, 1, figsize=(10, 8))
-fig.suptitle("Traced History Trajectories")
+fig, axs = plt.subplots(4, 1, figsize=(10, 8))
+for n in range(num_history_particles):
+    axs[0].plot(state_means[:, n, :])
+    axs[0].set_title('Mean over Time')
+    axs[0].set_xlabel('Time Step')
+    axs[0].set_ylabel('State')
 
-axs[0].plot(states[..., 0])
-axs[0].grid(True)
+    axs[1].plot(state_covars[:, n, 0, 0])
+    axs[1].set_title('Variance over Time')
+    axs[1].set_xlabel('Time Step')
+    axs[1].set_ylabel('Variance')
 
-axs[1].plot(states[..., 2])
-axs[1].grid(True)
+    axs[2].plot(actions[:, n, :])
+    axs[2].set_title('Action over Time')
+    axs[2].set_xlabel('Time Step')
+    axs[2].set_ylabel('Action')
 
-axs[2].plot(actions[..., 0])
-axs[2].grid(True)
+    axs[3].plot(observations[:, n, :])
+    axs[3].set_title('Observation over Time')
+    axs[3].set_xlabel('Time Step')
+    axs[3].set_ylabel('Observation')
 
 plt.tight_layout()
 plt.show()
@@ -245,24 +248,17 @@ _, states, actions = policy_evaluation(
     rng_key=sub_key,
     env_obj=env,
     policy=policy,
-    params=learner.params,
+    params=eval_params,
     num_samples=16
 )
 
-fig, axs = plt.subplots(3, 1, figsize=(10, 8))
-fig.suptitle("Simulated trajectories")
+fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
 axs[0].plot(states[..., 0])
-axs[0].set_ylabel("Angle")
-axs[0].grid(True)
+axs[0].set_ylabel("States")
 
-axs[1].plot(states[..., 1])
-axs[1].set_ylabel("Angular Velocity")
-axs[1].grid(True)
-
-axs[2].plot(actions[..., 0])
-axs[2].set_ylabel("Actions")
-axs[2].grid(True)
+axs[1].plot(actions[..., 0])
+axs[1].set_ylabel("Action")
 
 plt.tight_layout()
 plt.show()

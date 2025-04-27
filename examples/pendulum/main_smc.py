@@ -12,7 +12,7 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
-from ppomdp.smc import smc, backward_tracing
+from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
@@ -20,6 +20,7 @@ from ppomdp.policy.gauss import (
     train_recurrent_neural_gauss_policy_pathwise,
 )
 from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
@@ -31,32 +32,33 @@ rng_key = random.PRNGKey(1)
 
 num_history_particles = 128
 num_belief_particles = 32
+num_target_samples = 256
 
-slew_rate_penalty = 0.001
+slew_rate_penalty = 0.05
 tempering = 0.5
 
 learning_rate = 3e-4
-batch_size = 32
-num_epochs = 100
+batch_size = 16
+num_epochs = 50
 
+bijector = Block(Tanh(), ndims=1)
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
-    dense_sizes=(256, 128),
-    recurr_sizes=(64, 64),
+    dense_sizes=(256, 256),
+    recurr_sizes=(128, 128),
     use_layer_norm=True,
-
 )
 decoder = NeuralGaussDecoder(
     decoder_sizes=(256, 256),
     output_dim=env.action_dim,
     init_log_std=constant(jnp.log(1.0)),
 )
-bijector = Block(Tanh(), ndims=1)
 policy = create_recurrent_neural_gauss_policy(
     encoder=encoder,
     decoder=decoder,
     bijector=bijector
 )
+
 key, sub_key = random.split(rng_key, 2)
 params = policy.init(
     rng_key=sub_key,
@@ -67,9 +69,8 @@ params = policy.init(
 learner = TrainState.create(
     params=params,
     apply_fn=lambda *_: None,
-    tx=optax.adam(learning_rate)
+    tx=optax.adam(learning_rate),
 )
-
 
 num_steps = 0
 
@@ -84,7 +85,7 @@ for i in range(1, num_epochs + 1):
         env_obj=env,
         policy=policy,
         params=learner.params,
-        num_samples=1024
+        num_samples=1024,
     )
 
     # run nested smc
@@ -102,20 +103,37 @@ for i in range(1, num_epochs + 1):
             obs_model=env.obs_model,
             reward_fn=env.reward_fn,
             slew_rate_penalty=slew_rate_penalty,
-            tempering=tempering
+            tempering=tempering,
+            history_resample_fn=systematic_resampling,
+            belief_resample_fn=multinomial_resampling,
         )
 
     num_steps += (env.num_time_steps + 1) * num_history_particles
 
-    # trace ancestors of history states
+    # # trace ancestors of history states
+    # key, sub_key = random.split(key)
+    # traced_history, traced_belief, _ = \
+    #     backward_tracing(sub_key, history_states, belief_states, belief_infos)
+
+    # backward sample history states
     key, sub_key = random.split(key)
-    traced_history, traced_belief, _ = \
-        backward_tracing(sub_key, history_states, belief_states, belief_infos)
+    traced_history, traced_belief = mcmc_backward_sampling(
+        rng_key=sub_key,
+        num_samples=num_target_samples,
+        policy_prior=policy,
+        policy_prior_params=learner.params,
+        trans_model=env.trans_model,
+        reward_fn=env.reward_fn,
+        slew_rate_penalty=slew_rate_penalty,
+        tempering=tempering,
+        history_states=history_states,
+        belief_states=belief_states,
+    )
 
     # update policy parameters
     loss = 0.0
     key, sub_key = random.split(key)
-    batch_indices = batch_data(sub_key, num_history_particles, batch_size)
+    batch_indices = batch_data(sub_key, num_target_samples, batch_size)
     for batch_idx in batch_indices:
         action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
         observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
@@ -141,13 +159,36 @@ for i in range(1, num_epochs + 1):
         f"Time per epoch: {time_diff:.3f}s"
     )
 
+
+from ppomdp.smc.utils import weighted_mean
+
+states = weighted_mean(traced_belief.particles, traced_belief.weights)
+actions = traced_history.actions
+
+# Plot traced history observations and actions
+fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+fig.suptitle("Traced History Trajectories")
+
+axs[0].plot(states[..., 0])
+axs[0].grid(True)
+
+axs[1].plot(states[..., 1])
+axs[1].grid(True)
+
+axs[2].plot(actions[..., 0])
+axs[2].grid(True)
+
+plt.tight_layout()
+plt.show()
+
 key, sub_key = random.split(key)
 _, states, actions = policy_evaluation(
     rng_key=sub_key,
     env_obj=env,
     policy=policy,
     params=learner.params,
-    num_samples=16
+    num_samples=1024,
+    stochastic=False,
 )
 
 fig, axs = plt.subplots(3, 1, figsize=(10, 8))

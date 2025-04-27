@@ -9,16 +9,16 @@ from flax.linen.initializers import constant
 from distrax import Block
 
 from ppomdp.core import Reference
-from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
-from ppomdp.csmc import csmc
+from ppomdp.smc._smc import smc, backward_tracing
+from ppomdp.smc._csmc import csmc
 
 from ppomdp.bijector import Tanh
 from ppomdp.utils import batch_data
-from ppomdp.arch import GRUEncoder, MLPDecoder
-from ppomdp.gauss import (
-    RecurrentNeuralGauss,
-    create_recurrent_gauss_policy,
-    train_recurrent_gauss_policy_pathwise
+from ppomdp.policy.arch import GRUEncoder, MLPDecoder
+from ppomdp.policy.gauss import (
+    RecurrentNeuralGaussPolicy,
+    create_recurrent_neural_gauss_policy,
+    train_recurrent_neural_gauss_policy_pathwise
 )
 
 import time
@@ -52,7 +52,7 @@ decoder = MLPDecoder(
     output_dim=env.action_dim,
 )
 
-network = RecurrentNeuralGauss(
+network = RecurrentNeuralGaussPolicy(
     encoder=encoder,
     decoder=decoder,
     init_log_std=constant(jnp.log(1.0)),
@@ -61,7 +61,7 @@ network = RecurrentNeuralGauss(
 bijector = Block(Tanh(), ndims=1)
 
 key, sub_key = random.split(rng_key, 2)
-policy = create_recurrent_gauss_policy(network, bijector)
+policy = create_recurrent_neural_gauss_policy(network, bijector)
 train_state = policy.init(
     rng_key=sub_key,
     input_dim=env.obs_dim,
@@ -73,20 +73,8 @@ train_state = policy.init(
 # run init nested smc
 key, sub_key = random.split(key)
 history_states, belief_states, belief_infos, _ = \
-    smc(
-        sub_key,
-        env.num_time_steps,
-        num_history_particles,
-        num_belief_particles,
-        env.prior_dist,
-        env.trans_model,
-        env.obs_model,
-        policy,
-        train_state.params,
-        env.reward_fn,
-        tempering,
-        slew_rate_penalty
-    )
+    smc(sub_key, env.num_time_steps, num_history_particles, num_belief_particles, env.prior_dist, policy,
+        train_state.params, env.trans_model, env.obs_model, env.reward_fn, tempering, slew_rate_penalty)
 
 # trace ancestors of history states
 key, sub_key = random.split(key)
@@ -123,20 +111,9 @@ for i in range(1, num_epochs + 1):
     # evaluate current policy
     key, sub_key = random.split(key)
     history_states, _, _, _ = \
-        smc(
-            sub_key,
-            env.num_time_steps,
-            int(4 * num_history_particles),
-            int(4 * num_belief_particles),
-            env.prior_dist,
-            env.trans_model,
-            env.obs_model,
-            policy,
-            train_state.params,
-            env.reward_fn,
-            tempering=0.0,
-            slew_rate_penalty=0.0,
-        )
+        smc(sub_key, env.num_time_steps, int(4 * num_history_particles), int(4 * num_belief_particles), env.prior_dist,
+            policy, train_state.params, env.trans_model, env.obs_model, env.reward_fn, slew_rate_penalty=0.0,
+            tempering=0.0)
     expected_reward = jnp.mean(jnp.sum(history_states.rewards, axis=0))
 
     for _ in range(num_moves):
@@ -194,7 +171,7 @@ for i in range(1, num_epochs + 1):
     for batch_idx in batch_indices:
         history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
         train_state, batch_loss = \
-            train_recurrent_gauss_policy_pathwise(policy, train_state, history_batch)
+            train_recurrent_neural_gauss_policy_pathwise(policy, train_state, history_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)
