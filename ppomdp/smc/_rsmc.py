@@ -17,18 +17,19 @@ from ppomdp.core import (
     RewardFn,
     RecurrentPolicy,
 )
-from ppomdp.utils import (
+from ppomdp.utils import custom_split
+from ppomdp.smc.utils import (
     resample_belief,
-    resample_history,
     propagate_belief,
     reweight_belief,
     sample_marginal_obs,
     log_potential,
-    weighted_mean,
-    weighted_covar,
-    effective_sample_size,
+    resample_history,
+    multinomial_resampling,
     systematic_resampling,
-    custom_split
+    effective_sample_size,
+    weighted_mean,
+    weighted_covar
 )
 
 
@@ -124,7 +125,8 @@ def rsmc_step(
     slew_rate_penalty: float,
     tempering: float,
     damping: float,
-    resample_fn: Callable,
+    history_resample_fn: Callable,
+    belief_resample_fn: Callable,
     history_state: HistoryState,
     belief_state: BeliefState,
     time_idx: int
@@ -191,7 +193,7 @@ def rsmc_step(
 
     # 1. Resample the history particles.
     key, sub_key = random.split(rng_key)
-    history_state = resample_history(sub_key, history_state, resample_fn)
+    history_state = resample_history(sub_key, history_state, history_resample_fn)
     particles = history_state.particles
     resampling_idx = history_state.resampling_indices
     belief_state = jax.tree.map(lambda x: x[resampling_idx], belief_state)
@@ -199,7 +201,7 @@ def rsmc_step(
     # 2. Resample the belief particles.
     key, sub_keys = custom_split(key, num_particles + 1)
     belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
-        sub_keys, belief_state, resample_fn
+        sub_keys, belief_state, belief_resample_fn
     )
 
     # 3. Sample new actions.
@@ -292,7 +294,9 @@ def rsmc_step(
         "policy_posterior",
         "trans_model",
         "obs_model",
-        "reward_fn"
+        "reward_fn",
+        "history_resample_fn",
+        "belief_resample_fn"
     )
 )
 def rsmc(
@@ -311,7 +315,8 @@ def rsmc(
     slew_rate_penalty: float,
     tempering: float,
     damping: float,
-    resample_fn: Callable = systematic_resampling
+    history_resample_fn: Callable = systematic_resampling,
+    belief_resample_fn: Callable = systematic_resampling
 ) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -347,8 +352,10 @@ def rsmc(
             The tempering parameter.
         damping: float
             The damping parameter.
-        resample_fn: Callable
-            The resampling function.
+        history_resample_fn: Callable
+            The resampling function for the history particles.
+        belief_resample_fn: Callable
+            The resampling function for the belief particles.
 
     Returns:
         tuple[HistoryState, BeliefState, Array]
@@ -373,7 +380,8 @@ def rsmc(
                 slew_rate_penalty=slew_rate_penalty,
                 tempering=tempering,
                 damping=damping,
-                resample_fn=resample_fn,
+                history_resample_fn=history_resample_fn,
+                belief_resample_fn=belief_resample_fn,
                 history_state=history_state,
                 belief_state=belief_state,
                 time_idx=time_idx

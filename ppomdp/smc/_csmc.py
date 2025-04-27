@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Callable
 
 import jax
 from jax import Array, random, numpy as jnp
@@ -17,19 +18,19 @@ from ppomdp.core import (
     Parameters,
     PRNGKey
 )
-from ppomdp.utils import (
+from ppomdp.utils import custom_split
+from ppomdp.smc.utils import (
     resample_belief,
-    resample_history,
     propagate_belief,
     reweight_belief,
     sample_marginal_obs,
     log_potential,
+    resample_history,
+    systematic_resampling,
+    multinomial_resampling,
+    effective_sample_size,
     weighted_mean,
     weighted_covar,
-    effective_sample_size,
-    multinomial_resampling,
-    systematic_resampling,
-    custom_split,
 )
 
 
@@ -140,6 +141,8 @@ def csmc_step(
     slew_rate_penalty: float,
     tempering: float,
     reference: Reference,
+    history_resample_fn: Callable,
+    belief_resample_fn: Callable,
     history_state: HistoryState,
     belief_state: BeliefState,
     time_idx: int,
@@ -166,6 +169,10 @@ def csmc_step(
             The tempering parameter, $\eta$.
         reference: Reference
             Reference trajectory of the conditional particle filter.
+        history_resample_fn: Callable
+            The resampling function for the history particles.
+        belief_resample_fn: Callable
+            The resampling function for the belief particles.
         history_state: HistoryState
             Leaves have shape (N, ...).
         belief_state: BeliefState
@@ -176,7 +183,7 @@ def csmc_step(
     # 1. Resample the history particles.
     key, sub_key = random.split(rng_key)
     history_state = resample_history(
-        sub_key, history_state, multinomial_resampling, conditional=True
+        sub_key, history_state, history_resample_fn, conditional=True
     )
     particles = history_state.particles
     resampling_idx = history_state.resampling_indices
@@ -185,7 +192,7 @@ def csmc_step(
     # 2. Resample the belief particles.
     key, sub_keys = custom_split(key, num_particles + 1)
     belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
-        sub_keys, belief_state, systematic_resampling
+        sub_keys, belief_state, belief_resample_fn
     )
 
     # 3. Sample new actions.
@@ -273,7 +280,9 @@ def csmc_step(
         "policy_prior",
         "trans_model",
         "obs_model",
-        "reward_fn"
+        "reward_fn",
+        "history_resample_fn",
+        "belief_resample_fn"
     )
 )
 def csmc(
@@ -290,6 +299,8 @@ def csmc(
     slew_rate_penalty: float,
     tempering: float,
     reference: Reference,
+    history_resample_fn: Callable = multinomial_resampling,
+    belief_resample_fn: Callable = systematic_resampling,
 ) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     """
     Perform the Conditional Sequential Monte Carlo (CSMC) algorithm.
@@ -321,6 +332,10 @@ def csmc(
             The tempering parameter.
         reference: Reference
             Reference trajectory of the conditional particle filter.
+        history_resample_fn: Callable
+            The resampling function for the history particles.
+        belief_resample_fn: Callable
+            The resampling function for the belief particles.
 
     Returns:
         tuple[HistoryState, BeliefState, Array]
@@ -343,6 +358,8 @@ def csmc(
                 slew_rate_penalty=slew_rate_penalty,
                 tempering=tempering,
                 reference=ref_state,
+                history_resample_fn=history_resample_fn,
+                belief_resample_fn=belief_resample_fn,
                 history_state=history_state,
                 belief_state=belief_state,
                 time_idx=time_idx,

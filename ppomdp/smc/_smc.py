@@ -17,20 +17,20 @@ from ppomdp.core import (
     RewardFn,
     RecurrentPolicy,
 )
-from ppomdp.utils import (
+from ppomdp.utils import custom_split
+from ppomdp.smc.utils import (
     resample_belief,
-    resample_history,
     propagate_belief,
     reweight_belief,
     sample_marginal_obs,
     log_potential,
-    weighted_mean,
-    weighted_covar,
+    resample_history,
     effective_sample_size,
     systematic_resampling,
-    policy_logpdf,
-    transition_logpdf,
-    custom_split
+    action_sequence_log_prob,
+    transition_marginal_log_prob,
+    weighted_mean,
+    weighted_covar,
 )
 
 
@@ -123,7 +123,8 @@ def smc_step(
     reward_fn: RewardFn,
     slew_rate_penalty: float,
     tempering: float,
-    resample_fn: Callable,
+    history_resample_fn: Callable,
+    belief_resample_fn: Callable,
     history_state: HistoryState,
     belief_state: BeliefState,
     time_idx: int
@@ -146,8 +147,10 @@ def smc_step(
             The slew rate penalty.
         tempering: float
             The tempering parameter, $\eta$.
-        resample_fn: Callable
-            The resampling function.
+        history_resample_fn: Callable
+            The resampling function for the history particles.
+        belief_resample_fn: Callable
+            The resampling function for the belief particles.
         history_state: HistoryState
             Leaves have shape (N, ...).
         belief_state: BeliefState
@@ -159,7 +162,7 @@ def smc_step(
 
     # 1. Resample the history particles.
     key, sub_key = random.split(rng_key)
-    history_state = resample_history(sub_key, history_state, resample_fn)
+    history_state = resample_history(sub_key, history_state, history_resample_fn)
     particles = history_state.particles
     resampling_idx = history_state.resampling_indices
     belief_state = jax.tree.map(lambda x: x[resampling_idx], belief_state)
@@ -167,7 +170,7 @@ def smc_step(
     # 2. Resample the belief particles.
     key, sub_keys = custom_split(key, num_particles + 1)
     belief_state = jax.vmap(resample_belief, in_axes=(0, 0, None))(
-        sub_keys, belief_state, resample_fn
+        sub_keys, belief_state, belief_resample_fn
     )
 
     # 3. Sample new actions.
@@ -248,7 +251,9 @@ def smc_step(
         "policy_prior",
         "trans_model",
         "obs_model",
-        "reward_fn"
+        "reward_fn",
+        "history_resample_fn",
+        "belief_resample_fn"
     )
 )
 def smc(
@@ -264,7 +269,8 @@ def smc(
     reward_fn: RewardFn,
     slew_rate_penalty: float,
     tempering: float,
-    resample_fn: Callable = systematic_resampling
+    history_resample_fn: Callable = systematic_resampling,
+    belief_resample_fn: Callable = systematic_resampling,
 ) -> tuple[HistoryState, BeliefState, BeliefInfo, Array]:
     """
     Perform the Sequential Monte Carlo (SMC) algorithm.
@@ -294,8 +300,10 @@ def smc(
             The slew rate penalty.
         tempering: float
             The tempering parameter.
-        resample_fn: Callable
-            The resampling function.
+        history_resample_fn: Callable
+            The resampling function for the history particles.
+        belief_resample_fn: Callable
+            The resampling function for the belief particles.
 
     Returns:
         tuple[HistoryState, BeliefState, Array]
@@ -317,7 +325,8 @@ def smc(
                 reward_fn=reward_fn,
                 slew_rate_penalty=slew_rate_penalty,
                 tempering=tempering,
-                resample_fn=resample_fn,
+                history_resample_fn=history_resample_fn,
+                belief_resample_fn=belief_resample_fn,
                 history_state=history_state,
                 belief_state=belief_state,
                 time_idx=time_idx,
@@ -434,19 +443,50 @@ def backward_tracing(
 
 def mcmc_backward_sampling_single(
     rng_key: PRNGKey,
-    history_states: HistoryState,
-    belief_states: BeliefState,
-    trans_model: TransitionModel,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
+    trans_model: TransitionModel,
     reward_fn: RewardFn,
     slew_rate_penalty: float,
-    tempering: float
+    tempering: float,
+    history_states: HistoryState,
+    belief_states: BeliefState,
 ) -> tuple[HistoryParticles, HistoryState]:
+    r"""Perform a single backward pass of MCMC-based backward sampling.
+
+    This function implements one iteration of the MCMC backward sampling algorithm
+    proposed by Bunch and Godsill (2013). It samples a single smoothed trajectory
+    by moving backward in time and, at each step `t`, proposing a particle index
+    from the filtered distribution at time `t` and accepting/rejecting it based
+    on a Metropolis-Hastings ratio involving the policy, transition, and potential
+    terms.
+
+    Args:
+        rng_key: PRNGKey
+            Random number generator key.
+        policy_prior: RecurrentPolicy
+            The policy model used during the forward pass.
+        policy_prior_params: Parameters
+            Parameters of the policy prior.
+        trans_model: TransitionModel
+            The state transition model.
+        reward_fn: RewardFn
+            The reward function (used within `log_potential`).
+        slew_rate_penalty: float
+            Penalty for action changes (used within `log_potential`).
+        tempering: float
+            Tempering factor (used within `log_potential`).
+        history_states: HistoryState
+            History states obtained from the forward SMC pass (shape T+1, N, ...).
+        belief_states: BeliefState
+            Belief states obtained from the forward SMC pass (shape T+1, N, M, ...).
+
+    Returns:
+        tuple[HistoryParticles, BeliefState]:
+            - HistoryParticles: The single smoothed history trajectory (shape T+1, ...).
+            - BeliefState: The corresponding smoothed belief states (shape T+1, M, ...).
     """
-    MCMC-based backward sampling from Bunch and Godsill (2013)
-    """
-    num_time_steps, num_history_particles = history_states.weights.shape
+    num_time_steps_plus_one, num_history_particles = history_states.weights.shape
 
     _, _, action_dim = history_states.particles.actions.shape
     _, _, observation_dim = history_states.particles.observations.shape
@@ -458,56 +498,63 @@ def mcmc_backward_sampling_single(
         a=jnp.arange(num_history_particles, dtype=jnp.int32),
         p=history_states.weights[-1]
     )
-    last_smoothed_history_particles = jax.tree.map(lambda x: x[-1, idx], history_states.particles)
-    last_smoothed_belief_state = jax.tree.map(lambda x: x[-1, idx], belief_states)
+    last_history_particles = jax.tree.map(lambda x: x[-1, idx], history_states.particles)
+    last_belief_state = jax.tree.map(lambda x: x[-1, idx], belief_states)
 
-    smoothed_actions = jnp.zeros((num_time_steps, action_dim))
-    smoothed_observations = jnp.zeros((num_time_steps, observation_dim))
+    action_sequence = jnp.zeros((num_time_steps_plus_one, action_dim))
+    observation_sequence = jnp.zeros((num_time_steps_plus_one, observation_dim))
 
-    smoothed_actions = smoothed_actions.at[-1, :].set(last_smoothed_history_particles.actions)
-    smoothed_observations = smoothed_observations.at[-1, :].set(last_smoothed_history_particles.observations)
+    action_sequence = action_sequence.at[-1, :].set(last_history_particles.actions)
+    observation_sequence = observation_sequence.at[-1, :].set(last_history_particles.observations)
 
     def body(carry, args):
-        idx, smoothed_actions, smoothed_observations = carry
+        idx, actions, observations = carry
         t, key = args
 
         ancestor_idx = history_states.resampling_indices[t + 1, idx]
         key, sub_key = random.split(key)
         proposed_idx = jax.random.choice(
-            sub_key,
-            jnp.arange(num_history_particles, dtype=jnp.int32),
+            key=sub_key,
+            a=jnp.arange(num_history_particles, dtype=jnp.int32),
             p=history_states.weights[t]
         )
-        ancestor_policy_logpdf = policy_logpdf(
-            t + 1,  # starting index of future time steps
-            smoothed_actions,
-            smoothed_observations,
-            jax.tree.map(lambda x: x[t, ancestor_idx], history_states.particles.carry),
-            jax.tree.map(lambda x: x[t, ancestor_idx], history_states.particles.observations),
-            policy_prior,
-            policy_prior_params
+        # Compute log π(a_{t+1:T} | h_t^{anc}, z_t^{anc}) using ancestor particle info
+        ancestor_action_logpdf = action_sequence_log_prob(
+            policy=policy_prior,
+            policy_params=policy_prior_params,
+            actions_sequence=actions,
+            observations_sequence=observations,
+            init_carry=jax.tree.map(lambda x: x[t, ancestor_idx], history_states.particles.carry),
+            init_action=jax.tree.map(lambda x: x[t, ancestor_idx], history_states.particles.actions),
+            init_observation=jax.tree.map(lambda x: x[t, ancestor_idx], history_states.particles.observations),
+            start_time_idx=t + 1,
         )
-        proposed_policy_logpdf = policy_logpdf(
-            t + 1,  # starting index of future time steps
-            smoothed_actions,
-            smoothed_observations,
-            jax.tree.map(lambda x: x[t, proposed_idx], history_states.particles.carry),
-            jax.tree.map(lambda x: x[t, proposed_idx], history_states.particles.observations),
-            policy_prior,
-            policy_prior_params
+        # Compute log π(a_{t+1:T} | h_t^{prop}, z_t^{prop}) using proposed particle info
+        proposed_action_logpdf = action_sequence_log_prob(
+            policy=policy_prior,
+            policy_params=policy_prior_params,
+            actions_sequence=actions,
+            observations_sequence=observations,
+            init_carry=jax.tree.map(lambda x: x[t, proposed_idx], history_states.particles.carry),
+            init_action=jax.tree.map(lambda x: x[t, proposed_idx], history_states.particles.actions),
+            init_observation=jax.tree.map(lambda x: x[t, proposed_idx], history_states.particles.observations),
+            start_time_idx=t + 1,
         )
-        ancestor_trans_logpdf = transition_logpdf(
-            jax.tree.map(lambda x: x[t + 1, idx], belief_states),
-            jax.tree.map(lambda x: x[t, ancestor_idx], belief_states),
-            history_states.particles.actions[t + 1, idx],
-            trans_model,
+        # Compute log p(b_{t+1} | b_t^{anc}, a_{t+1}) using ancestor belief
+        ancestor_trans_logpdf = transition_marginal_log_prob(
+            trans_model=trans_model,
+            next_belief_state=jax.tree.map(lambda x: x[t + 1, idx], belief_states),
+            belief_state=jax.tree.map(lambda x: x[t, ancestor_idx], belief_states),
+            action=history_states.particles.actions[t + 1, idx],
         )
-        proposed_trans_logpdf = transition_logpdf(
-            jax.tree.map(lambda x: x[t + 1, idx], belief_states),
-            jax.tree.map(lambda x: x[t, proposed_idx], belief_states),
-            history_states.particles.actions[t + 1, idx],
-            trans_model,
+        # Compute log p(b_{t+1} | b_t^{prop}, a_{t+1}) using proposed belief
+        proposed_trans_logpdf = transition_marginal_log_prob(
+            trans_model=trans_model,
+            next_belief_state=jax.tree.map(lambda x: x[t + 1, idx], belief_states),
+            belief_state=jax.tree.map(lambda x: x[t, proposed_idx], belief_states),
+            action=history_states.particles.actions[t + 1, idx],
         )
+        # Compute log g_{t+1}(b_{t+1}, a_{t+1}, a_t^{anc}) using ancestor previous action
         ancestor_log_potential, _ = log_potential(
             jax.tree.map(lambda x: x[t + 1, idx], belief_states),
             history_states.particles.actions[t + 1, idx],
@@ -517,6 +564,7 @@ def mcmc_backward_sampling_single(
             slew_rate_penalty,
             tempering,
         )
+        # Compute log g_{t+1}(b_{t+1}, a_{t+1}, a_t^{prop}) using proposed previous action
         proposed_log_potential, _ = log_potential(
             jax.tree.map(lambda x: x[t + 1, idx], belief_states),
             history_states.particles.actions[t + 1, idx],
@@ -527,12 +575,13 @@ def mcmc_backward_sampling_single(
             tempering,
         )
 
-        log_prob_ancestor = (
-            ancestor_policy_logpdf + ancestor_trans_logpdf + ancestor_log_potential
-        )
-        log_prob_proposed = (
-            proposed_policy_logpdf + proposed_trans_logpdf + proposed_log_potential
-        )
+        log_prob_ancestor = ancestor_action_logpdf \
+            + ancestor_trans_logpdf \
+            + ancestor_log_potential
+
+        log_prob_proposed = proposed_action_logpdf \
+            + proposed_trans_logpdf \
+            + proposed_log_potential
 
         # accept / reject
         key, sub_key = random.split(key)
@@ -540,20 +589,19 @@ def mcmc_backward_sampling_single(
         log_ratio = log_prob_proposed - log_prob_ancestor
         idx = jax.lax.select(log_ratio > log_u, proposed_idx, ancestor_idx)
 
-        smoothed_history_particles = jax.tree.map(lambda x: x[t, idx], history_states.particles)
-        smoothed_belief_state = jax.tree.map(lambda x: x[t, idx], belief_states)
+        sampled_history = jax.tree.map(lambda x: x[t, idx], history_states.particles)
+        sampled_belief = jax.tree.map(lambda x: x[t, idx], belief_states)
 
-        smoothed_actions = smoothed_actions.at[t, :].set(smoothed_history_particles.actions)
-        smoothed_observations = smoothed_observations.at[t, :].set(smoothed_history_particles.observations)
-        return (idx, smoothed_actions, smoothed_observations), \
-            (smoothed_history_particles, smoothed_belief_state)
+        actions = actions.at[t, :].set(sampled_history.actions)
+        observations = observations.at[t, :].set(sampled_history.observations)
+        return (idx, actions, observations), (sampled_history, sampled_belief)
 
-    _, (sampled_history_states, sampled_belief_states) = jax.lax.scan(
+    _, (sampled_history_particles, sampled_belief_states) = jax.lax.scan(
         f=body,
-        init=(idx, smoothed_actions, smoothed_observations),
+        init=(idx, action_sequence, observation_sequence),
         xs=(
-            jnp.arange(num_time_steps - 1),
-            random.split(key, num_time_steps - 1)
+            jnp.arange(num_time_steps_plus_one - 1),
+            random.split(key, num_time_steps_plus_one - 1)
         ),
         reverse=True,
     )
@@ -561,17 +609,17 @@ def mcmc_backward_sampling_single(
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
 
-    smoothed_history_particles = concat_trees(sampled_history_states, last_smoothed_history_particles)
-    smoothed_belief_states = concat_trees(sampled_belief_states, last_smoothed_belief_state)
-    return smoothed_history_particles, smoothed_belief_states
+    sampled_history_particles = concat_trees(sampled_history_particles, last_history_particles)
+    sampled_belief_states = concat_trees(sampled_belief_states, last_belief_state)
+    return sampled_history_particles, sampled_belief_states
 
 
 @partial(
     jax.jit,
     static_argnames=(
         "num_samples",
-        "trans_model",
         "policy_prior",
+        "trans_model",
         "reward_fn",
         "slew_rate_penalty",
         "tempering",
@@ -580,41 +628,41 @@ def mcmc_backward_sampling_single(
 def mcmc_backward_sampling(
     rng_key: PRNGKey,
     num_samples: int,
-    history_states: HistoryState,
-    belief_states: BeliefState,
-    trans_model: TransitionModel,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
+    trans_model: TransitionModel,
     reward_fn: RewardFn,
     slew_rate_penalty: float,
-    tempering: float
+    tempering: float,
+    history_states: HistoryState,
+    belief_states: BeliefState,
 ):
     keys = random.split(rng_key, num_samples)
     smoothed_history_particles, smoothed_belief_states = jax.vmap(
         lambda key: mcmc_backward_sampling_single(
             key,
-            history_states,
-            belief_states,
-            trans_model,
             policy_prior,
             policy_prior_params,
+            trans_model,
             reward_fn,
             slew_rate_penalty,
-            tempering
+            tempering,
+            history_states,
+            belief_states,
         ), out_axes=1)(keys)
     return smoothed_history_particles, smoothed_belief_states
 
 
 def backward_sampling_single(
     rng_key: PRNGKey,
-    history_states: HistoryState,
-    belief_states: BeliefState,
-    trans_model: TransitionModel,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
+    trans_model: TransitionModel,
     reward_fn: RewardFn,
     slew_rate_penalty: float,
-    tempering: float
+    tempering: float,
+    history_states: HistoryState,
+    belief_states: BeliefState,
 ) -> tuple[HistoryParticles, BeliefState]:
     """Performs backward sampling for a single trajectory using the forward filter-backward sampler algorithm.
 
@@ -625,22 +673,23 @@ def backward_sampling_single(
     Args:
         rng_key: PRNGKey
             Random number generator key for sampling operations.
-        history_states: HistoryState
-            Forward filter history states containing particles and weights.
-        belief_states: BeliefState
-            Forward filter belief states containing state particles and weights.
-        trans_model: TransitionModel
-            State transition model p(s_t | s_{t-1}, a_{t-1}).
         policy_prior: RecurrentPolicy
             Prior policy model used in the forward pass.
         policy_prior_params: Parameters
             Parameters of the prior policy.
+        trans_model: TransitionModel
+            Transition model.
         reward_fn: RewardFn
             Function computing rewards r(s_t, a_t).
         slew_rate_penalty: float
             Penalty coefficient for rapid action changes.
         tempering: float
             Temperature parameter controlling the influence of rewards.
+        history_states: HistoryState
+            Forward filter history states containing particles and weights.
+        belief_states: BeliefState
+            Forward filter belief states containing state particles and weights.
+
 
     Returns:
         tuple[HistoryParticles, BeliefState]:
@@ -652,7 +701,7 @@ def backward_sampling_single(
         w_smooth ∝ w_filter * p(x_{t+1} | x_t) * π(a_{t+1} | h_t)
         where w_filter are the filtering weights from the forward pass.
     """
-    num_time_steps, num_history_particles = history_states.weights.shape
+    num_time_steps_plus_one, num_history_particles = history_states.weights.shape
 
     _, _, action_dim = history_states.particles.actions.shape
     _, _, observation_dim = history_states.particles.observations.shape
@@ -664,40 +713,50 @@ def backward_sampling_single(
         a=jnp.arange(num_history_particles, dtype=jnp.int32),
         p=history_states.weights[-1]
     )
-    last_smoothed_history_particles = jax.tree.map(lambda x: x[-1, idx], history_states.particles)
-    last_smoothed_belief_state = jax.tree.map(lambda x: x[-1, idx], belief_states)
+    last_history_particles = jax.tree.map(lambda x: x[-1, idx], history_states.particles)
+    last_belief_state = jax.tree.map(lambda x: x[-1, idx], belief_states)
 
-    smoothed_actions = jnp.zeros((num_time_steps, action_dim))
-    smoothed_observations = jnp.zeros((num_time_steps, observation_dim))
+    action_sequence = jnp.zeros((num_time_steps_plus_one, action_dim))
+    observation_sequence = jnp.zeros((num_time_steps_plus_one, observation_dim))
 
-    smoothed_actions = smoothed_actions.at[-1, :].set(last_smoothed_history_particles.actions)
-    smoothed_observations = smoothed_observations.at[-1, :].set(last_smoothed_history_particles.observations)
+    action_sequence = action_sequence.at[-1, :].set(last_history_particles.actions)
+    observation_sequence = observation_sequence.at[-1, :].set(last_history_particles.observations)
 
-    vmap_policy_logpdf = jax.vmap(policy_logpdf, in_axes=(None, None, None, 0, 0, None, None))
-    vmap_transition_logpdf = jax.vmap(transition_logpdf, in_axes=(None, 0, None, None))
+    vmap_compute_sequence_log_prob = jax.vmap(
+        action_sequence_log_prob,
+        in_axes=(None, None, None, None, 0, 0, None)
+    )
+    vmap_transition_marginal_log_prob = jax.vmap(
+        transition_marginal_log_prob,
+        in_axes=(None, None, 0, 0)
+    )
     vmap_log_potential = jax.vmap(log_potential, in_axes=(None, None, 0, None, None, None, None))
 
     def body(carry, args):
-        idx, smoothed_actions, smoothed_observations = carry
+        idx, actions, observations = carry
         t, key = args
 
-        log_policy = vmap_policy_logpdf(
-            t + 1,  # starting index of future time steps
-            smoothed_actions,
-            smoothed_observations,
-            jax.tree.map(lambda x: x[t, :], history_states.particles.carry),
-            jax.tree.map(lambda x: x[t, :], history_states.particles.observations),
-            policy_prior,
-            policy_prior_params
+        # Compute log π(a_{t+1:T} | h_t^m, z_t^m) for all m
+        log_policy = vmap_compute_sequence_log_prob(
+            policy_prior,                                               # policy
+            policy_prior_params,                                        # params
+            actions,                                                    # actions_sequence
+            observations,                                               # observations_sequence
+            jax.tree.map(lambda x: x[t, :], history_states.particles.carry),          # carry_t_minus_1
+            jax.tree.map(lambda x: x[t, :], history_states.particles.actions),        # action_t_minus_1
+            jax.tree.map(lambda x: x[t, :], history_states.particles.observations), # observation_t_minus_1
+            t + 1,                                                      # start_time_idx
         )
 
-        log_transition = vmap_transition_logpdf(
-            jax.tree.map(lambda x: x[t + 1, idx], belief_states),
-            jax.tree.map(lambda x: x[t, :], belief_states),
-            history_states.particles.actions[t + 1, idx],
-            trans_model,
+        # Compute log p(b_{t+1}^j | b_t^m, a_{t+1}^j) for all m (where j=idx)
+        log_transition = vmap_transition_marginal_log_prob(
+            trans_model,                                                # model
+            jax.tree.map(lambda x: x[t + 1, idx], belief_states),       # next_belief_state
+            jax.tree.map(lambda x: x[t, :], belief_states),             # current_belief
+            history_states.particles.actions[t + 1, idx],               # action
         )
 
+        # Compute log g_{t+1}(b_{t+1}^j, a_{t+1}^j, a_t^m) for all m (where j=idx)
         log_potentials, _ = vmap_log_potential(
             jax.tree.map(lambda x: x[t + 1, idx], belief_states),
             history_states.particles.actions[t + 1, idx],
@@ -713,20 +772,19 @@ def backward_sampling_single(
 
         key, sub_key = random.split(key)
         idx = jax.random.choice(sub_key, jnp.arange(num_history_particles, dtype=jnp.int32), p=smoothing_weights)
-        smoothed_history_particles = jax.tree.map(lambda x: x[t, idx], history_states.particles)
-        smoothed_belief_state = jax.tree.map(lambda x: x[t, idx], belief_states)
+        sampled_history = jax.tree.map(lambda x: x[t, idx], history_states.particles)
+        sampled_belief = jax.tree.map(lambda x: x[t, idx], belief_states)
 
-        smoothed_actions = smoothed_actions.at[t, :].set(smoothed_history_particles.actions)
-        smoothed_observations = smoothed_observations.at[t, :].set(smoothed_history_particles.observations)
-        return (idx, smoothed_actions, smoothed_observations), \
-            (smoothed_history_particles, smoothed_belief_state)
+        actions = actions.at[t, :].set(sampled_history.actions)
+        observations = observations.at[t, :].set(sampled_belief.observations)
+        return (idx, actions, observations), (sampled_history, sampled_belief)
 
-    _, (sampled_history_states, sampled_belief_states) = jax.lax.scan(
+    _, (sampled_history_particles, sampled_belief_states) = jax.lax.scan(
         f=body,
-        init=(idx, smoothed_actions, smoothed_observations),
+        init=(idx, action_sequence, observation_sequence),
         xs=(
-            jnp.arange(num_time_steps - 1),
-            random.split(key, num_time_steps - 1)
+            jnp.arange(num_time_steps_plus_one - 1),
+            random.split(key, num_time_steps_plus_one - 1)
         ),
         reverse=True,
     )
@@ -734,17 +792,17 @@ def backward_sampling_single(
     def concat_trees(x, y):
         return jax.tree.map(lambda x, y: jnp.concatenate([x, y[None, ...]]), x, y)
 
-    smoothed_history_particles = concat_trees(sampled_history_states, last_smoothed_history_particles)
-    smoothed_belief_states = concat_trees(sampled_belief_states, last_smoothed_belief_state)
-    return smoothed_history_particles, smoothed_belief_states
+    sampled_history_particles = concat_trees(sampled_history_particles, last_history_particles)
+    sampled_belief_states = concat_trees(sampled_belief_states, last_belief_state)
+    return sampled_history_particles, sampled_belief_states
 
 
 @partial(
     jax.jit,
     static_argnames=(
         "num_samples",
-        "trans_model",
         "policy_prior",
+        "trans_model",
         "reward_fn",
         "slew_rate_penalty",
         "tempering"
@@ -753,14 +811,14 @@ def backward_sampling_single(
 def backward_sampling(
     rng_key: PRNGKey,
     num_samples: int,
-    history_state: HistoryState,
-    belief_state: BeliefState,
-    trans_model: TransitionModel,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
+    trans_model: TransitionModel,
     reward_fn: RewardFn,
     slew_rate_penalty: float,
-    tempering: float
+    tempering: float,
+    history_state: HistoryState,
+    belief_state: BeliefState,
 ) -> tuple[HistoryParticles, BeliefState]:
     """Generate multiple smoothed trajectories using backward sampling.
 
@@ -773,22 +831,22 @@ def backward_sampling(
             Random number generator key.
         num_samples: int
             Number of independent trajectories to generate.
-        history_state: HistoryState
-            Forward filter history states.
-        belief_state: BeliefState
-            Forward filter belief states.
-        trans_model: TransitionModel
-            State transition model.
         policy_prior: RecurrentPolicy
             Prior policy used in forward filtering.
         policy_prior_params: Parameters
             Parameters of the prior policy.
+        trans_model: TransitionModel
+            Transition model.
         reward_fn: RewardFn
             Reward function.
         slew_rate_penalty: float
             Action smoothness penalty coefficient.
         tempering: float
             Temperature parameter for reward weighting.
+        history_state: HistoryState
+            Forward filter history states.
+        belief_state: BeliefState
+            Forward filter belief states.
 
     Returns:
         tuple[HistoryParticles, BeliefState]:
@@ -799,13 +857,13 @@ def backward_sampling(
     smoothed_history_particles, smoothed_belief_states = jax.vmap(
         lambda key: backward_sampling_single(
             key,
-            history_state,
-            belief_state,
-            trans_model,
             policy_prior,
             policy_prior_params,
+            trans_model,
             reward_fn,
             slew_rate_penalty,
-            tempering
+            tempering,
+            history_state,
+            belief_state,
         ), out_axes=1)(keys)
     return smoothed_history_particles, smoothed_belief_states
