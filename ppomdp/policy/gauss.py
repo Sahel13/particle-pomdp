@@ -558,8 +558,7 @@ def train_recurrent_neural_gauss_policy_pathwise_weighted(
     """
     def loss_fn(params):
         log_probs = policy.pathwise_log_prob(actions, observations, params)
-        loss = -1.0 * jnp.average(log_probs, weights=importance_weights)
-        return loss
+        return -1.0 * jnp.average(log_probs, weights=importance_weights)
 
     loss, grads = jax.value_and_grad(loss_fn)(learner.params)
     learner = learner.apply_gradients(grads=grads)
