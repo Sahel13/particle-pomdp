@@ -7,12 +7,7 @@ from jax import Array, random, numpy as jnp
 from ppomdp.core import PRNGKey, BeliefState
 from ppomdp.envs import mdps, pomdps
 from ppomdp.envs.core import MDPEnv, POMDPEnv
-from ppomdp.utils import (
-    resample_belief,
-    propagate_belief,
-    reweight_belief,
-    systematic_resampling
-)
+from ppomdp.smc.utils import resample_belief, propagate_belief, reweight_belief, systematic_resampling
 
 
 def get_mdp(env_name: str) -> MDPEnv:

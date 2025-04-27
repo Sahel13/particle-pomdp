@@ -16,10 +16,8 @@ from ppomdp.core import BeliefState, PRNGKey
 from ppomdp.envs.core import POMDPEnv, POMDPState
 from ppomdp.utils import (
     custom_split,
-    propagate_belief,
-    resample_belief,
-    systematic_resampling,
 )
+from ppomdp.smc.utils import resample_belief, propagate_belief, systematic_resampling
 
 from baselines.dsmc.arch import CriticNetwork, PolicyNetwork
 from baselines.dsmc.utils import PlanState, policy_sample_and_log_prob
@@ -696,7 +694,7 @@ def create_train_state(
     critic_lr: float,
     num_planner_particles: int,
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
-    
+
     policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
