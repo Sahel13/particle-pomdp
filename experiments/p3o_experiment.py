@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Multi-seed experiment runner for NSMC algorithm.
-This script uses the NSMCConfig struct to run NSMC experiments over multiple seeds.
+Multi-seed experiment runner for P3O algorithm.
+This script uses the P3OConfig struct to run P3O experiments over multiple seeds.
 """
 
 import os
@@ -28,22 +28,23 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
-from ppomdp.smc import smc, backward_tracing
+from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_stepwise
+    train_recurrent_neural_gauss_policy_pathwise
 )
-from ppomdp.utils import batch_data, policy_evaluation, flatten_trajectories
-from ppomdp.config import NSMCExperiment
+from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
+from ppomdp.config import P3OExperiment
 
 from wandb_logger import WandbLogger
 from common import get_pomdp, get_unique_identifier
 
 
 
-def run_single_seed(config: NSMCExperiment, seed: int) -> None:
+def run_single_seed(config: P3OExperiment, seed: int) -> None:
     """Run a single seed experiment."""
 
     # Get environment
@@ -53,21 +54,24 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
     logger = None
     if config.use_logger:
         # Create experiment config dictionary
-        nsmc_config = {
+        p3o_config = {
             "algorithm": "nsmc",
             "environment": config.env_id,
             "num_seeds": config.num_seeds,
             "cuda_device": config.cuda_device,
+            "total_time_steps": config.total_time_steps,
             "num_history_particles": config.num_history_particles,
             "num_belief_particles": config.num_belief_particles,
-            "total_time_steps": config.total_time_steps,
-            "learning_rate": config.learning_rate,
-            "batch_size": config.batch_size,
-            "tempering": config.tempering,
             "slew_rate_penalty": config.slew_rate_penalty,
+            "tempering": config.tempering,
+            "backward_sampling": config.backward_sampling,
+            "backward_sampling_mult": config.backward_sampling_mult,
             "encoder_dense_sizes": config.encoder_dense_sizes,
             "encoder_recurr_sizes": config.encoder_recurr_sizes,
             "decoder_dense_sizes": config.decoder_dense_sizes,
+            "learning_rate": config.learning_rate,
+            "batch_size": config.batch_size,
+            "init_std": config.init_std,
         }
 
         experiment_name = f"{config.experiment_group}-seed-{seed}"
@@ -78,21 +82,30 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             experiment_name=experiment_name,
             experiment_group=config.experiment_group,
             experiment_tags=config.experiment_tags,
-            experiment_config=nsmc_config,
+            experiment_config=p3o_config,
             logger_directory=config.logger_directory
         )
 
+    total_time_steps = config.total_time_steps
     num_history_particles = config.num_history_particles
     num_belief_particles = config.num_belief_particles
-    total_time_steps = config.total_time_steps
-    learning_rate = config.learning_rate
-    batch_size = config.batch_size
-    tempering = config.tempering
     slew_rate_penalty = config.slew_rate_penalty
+    tempering = config.tempering
+    backward_sampling = config.backward_sampling
+    backward_sampling_mult = config.backward_sampling_mult
     encoder_dense_sizes = config.encoder_dense_sizes
     encoder_recurr_sizes = config.encoder_recurr_sizes
     decoder_dense_sizes = config.decoder_dense_sizes
+    learning_rate = config.learning_rate
+    batch_size = config.batch_size
     init_std = config.init_std
+
+    num_target_samples = num_history_particles * backward_sampling_mult \
+        if backward_sampling else num_history_particles
+
+    history_resample_fn = systematic_resampling
+    belief_resample_fn = multinomial_resampling \
+        if backward_sampling else systematic_resampling
 
     # Initialize JAX random key
     key = random.key(seed)
@@ -158,36 +171,45 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             obs_model=env_obj.obs_model,
             reward_fn=env_obj.reward_fn,
             slew_rate_penalty=slew_rate_penalty,
-            tempering=tempering
+            tempering=tempering,
+            history_resample_fn=history_resample_fn,
+            belief_resample_fn=belief_resample_fn,
         )
         num_steps += num_history_particles * (env_obj.num_time_steps + 1)
 
-        # Get the smoothed trajectories using genealogy tracking
-        key, sub_key = random.split(key)
-        traced_history, _, _ = backward_tracing(
-            sub_key, history_states, belief_states, belief_infos
-        )
+        if backward_sampling:
+            # backward sample history states
+            key, sub_key = random.split(key)
+            traced_history, _ = mcmc_backward_sampling(
+                rng_key=sub_key,
+                num_samples=num_target_samples,
+                policy_prior=policy,
+                policy_prior_params=learner.params,
+                trans_model=env_obj.trans_model,
+                reward_fn=env_obj.reward_fn,
+                slew_rate_penalty=slew_rate_penalty,
+                tempering=tempering,
+                history_states=history_states,
+                belief_states=belief_states,
+            )
+        else:
+            # genealogy tracking of history states
+            key, sub_key = random.split(key)
+            traced_history, _, _ = backward_tracing(
+                sub_key, history_states, belief_states, belief_infos
+            )
 
-        # Update policy parameters
-        actions, next_actions, observations, _, carry = \
-            flatten_trajectories(traced_history)
-        data_size, _ = observations.shape
-
+        # update policy parameters
         key, sub_key = random.split(key)
-        batch_indices = batch_data(sub_key, data_size, batch_size)
+        batch_indices = batch_data(sub_key, num_target_samples, batch_size)
         for batch_idx in batch_indices:
-            action_batch = jax.tree.map(lambda x: x[batch_idx, ...], actions)
-            next_action_batch = jax.tree.map(lambda x: x[batch_idx, ...], next_actions)
-            observations_batch = jax.tree.map(lambda x: x[batch_idx, ...], observations)
-            carry_batch = jax.tree.map(lambda x: x[batch_idx, ...], carry)
-
-            learner, _ = train_recurrent_neural_gauss_policy_stepwise(
+            action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
+            observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
+            learner, _ = train_recurrent_neural_gauss_policy_pathwise(
                 policy=policy,
                 learner=learner,
-                next_actions=next_action_batch,
-                carry=carry_batch,
                 actions=action_batch,
-                observations=observations_batch,
+                observations=observation_batch,
             )
 
         # Evaluate the policy
@@ -205,7 +227,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
             f"Step: {num_steps:6d} | "
             f"Log marginal: {log_marginal:8.3f} | "
             f"Average reward: {avg_reward:8.3f} | "
-            f"Entropy: {policy.entropy(learner.params):8.4f}"
+            f"Entropy: {policy.entropy(learner.params):8.3}"
         )
 
     # Finish wandb logging if enabled
@@ -215,7 +237,7 @@ def run_single_seed(config: NSMCExperiment, seed: int) -> None:
     return None
 
 
-def main(config: NSMCExperiment) -> None:
+def main(config: P3OExperiment) -> None:
     # Generate unique identifier for group
     identifier = get_unique_identifier()
 
@@ -230,5 +252,5 @@ def main(config: NSMCExperiment) -> None:
 
 
 if __name__ == "__main__":
-    config = tyro.cli(NSMCExperiment)
+    config = tyro.cli(P3OExperiment)
     main(config)

@@ -1,27 +1,29 @@
 from typing import List, Optional, NamedTuple
 
 
-class NSMC(NamedTuple):
+class P3O(NamedTuple):
     # Algorithm hyperparameters
     total_time_steps: int = 1000000
     num_history_particles: int = 128
     num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
-    learning_rate: float = 3e-4
-    batch_size: int = 256
-
-    # Network architecture
-    encoder_dense_sizes: tuple[int, ...] = (256, 256)
-    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
-    decoder_dense_sizes: tuple[int, ...] = (256, 256)
-    init_std: float = 1.0
+    backward_sampling: bool = True
+    backward_sampling_mult: int = 2
 
     # damped version
     damping: Optional[float] = 0.0
 
+    # Policy hyperparameters
+    encoder_dense_sizes: tuple[int, ...] = (256, 256)
+    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
+    decoder_dense_sizes: tuple[int, ...] = (256, 256)
+    learning_rate: float = 3e-4
+    batch_size: int = 16
+    init_std: float = 1.0
 
-class NSMCExperiment(NamedTuple):
+
+class P3OExperiment(NamedTuple):
     # Environment settings
     env_id: str = "cartpole"
     num_seeds: int = 10
@@ -33,17 +35,19 @@ class NSMCExperiment(NamedTuple):
     num_belief_particles: int = 32
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
-    learning_rate: float = 3e-4
-    batch_size: int = 256
-
-    # Network architecture
-    encoder_dense_sizes: tuple[int, ...] = (256, 256)
-    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
-    decoder_dense_sizes: tuple[int, ...] = (256, 256)
-    init_std: float = 1.0
+    backward_sampling: bool = True
+    backward_sampling_mult: int = 2
 
     # damped version
     damping: Optional[float] = 0.0
+
+    # Policy hyperparameters
+    encoder_dense_sizes: tuple[int, ...] = (256, 256)
+    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
+    decoder_dense_sizes: tuple[int, ...] = (256, 256)
+    learning_rate: float = 3e-4
+    batch_size: int = 16
+    init_std: float = 1.0
 
     # Logger settings
     use_logger: bool = True
