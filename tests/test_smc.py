@@ -3,9 +3,8 @@ import pytest
 
 import jax
 import jax.numpy as jnp
-from jax import Array, random
+from jax import random
 
-import chex
 from chex import PRNGKey
 
 from distrax import (
@@ -18,17 +17,16 @@ from ppomdp.core import (
     TransitionModel,
     ObservationModel,
 )
-from ppomdp.smc import (
+from ppomdp.smc._smc import (
     smc,
     backward_tracing
 )
-from ppomdp.utils import resample_belief, propagate_belief, reweight_belief
+from ppomdp.smc.utils import resample_belief, propagate_belief, reweight_belief
 from ppomdp.policy import (
     LSTM,
     create_policy,
     log_prob_policy_pathwise
 )
-from ppomdp.bijector import Tanh
 
 
 def get_belief_state(key: PRNGKey, shape: tuple[int, ...]) -> BeliefState:
@@ -165,20 +163,9 @@ def test_nested_smc():
     init_params = lstm.init(param_key, init_carry, init_obs)["params"]
 
     key, sub_key = random.split(key)
-    history_states, belief_states, _, _ = smc(
-        sub_key,
-        num_time_steps,
-        num_history_particles,
-        num_belief_particles,
-        prior_dist,
-        trans_model,
-        obs_model,
-        policy,
-        init_params,
-        reward_fn,
-        tempering=0.5,
-        slew_rate_penalty=0.0
-    )
+    history_states, belief_states, _, _ = smc(sub_key, num_time_steps, num_history_particles, num_belief_particles,
+                                              prior_dist, policy, init_params, trans_model, obs_model, reward_fn,
+                                              slew_rate_penalty=0.0, tempering=0.5)
 
     # Check the shapes of the leaves of `history_states`.
     assert history_states.particles[0].shape == (num_time_steps + 1, num_history_particles, dim_obs)
@@ -260,20 +247,10 @@ def test_policy_log_prob(seed):
 
     # Run SMC and plot smoothed trajectories.
     key, sub_key = random.split(rng_key)
-    history_states, belief_states, belief_infos, _ = smc(
-        sub_key,
-        num_time_steps,
-        num_history_particles,
-        num_belief_particles,
-        prior_dist,
-        trans_model,
-        obs_model,
-        policy,
-        init_params,
-        reward_fn,
-        tempering=0.1,
-        slew_rate_penalty=0.0
-    )
+    history_states, belief_states, belief_infos, _ = smc(sub_key, num_time_steps, num_history_particles,
+                                                         num_belief_particles, prior_dist, policy, init_params,
+                                                         trans_model, obs_model, reward_fn, slew_rate_penalty=0.0,
+                                                         tempering=0.1)
 
     key, sub_key = random.split(key)
     traced_history, _, _ = backward_tracing(
