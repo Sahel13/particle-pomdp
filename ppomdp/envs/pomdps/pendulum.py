@@ -50,7 +50,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-2, 0.025])
+    return jnp.array([1e-4, 1e-2])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -103,7 +103,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     g = jnp.array([jnp.pi, 0.0])
     h = jax.lax.select(
         t > 0,
-        jnp.array([1., 0.1]),
+        jnp.array([1e0, 1e-2]),
         jnp.array([0., 0.]),
     )
     r = jnp.array([1e-3])

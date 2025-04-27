@@ -82,7 +82,7 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     state_cost = jax.lax.cond(
-        t < num_time_steps - 1,
+        t < num_time_steps,
         lambda _: 0.,
         lambda _: jnp.dot(s, s),
         operand=None
