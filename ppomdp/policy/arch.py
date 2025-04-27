@@ -50,7 +50,7 @@ class LSTMEncoder(nn.Module):
         for k, size in enumerate(self.recurr_sizes):
             next_carry[k], y = nn.LSTMCell(size)(carry[k], y)
 
-        return next_carry, y
+        return next_carry, nn.relu(y)
 
     def reset(self, batch_size) -> list[LSTMCarry]:
         carry = []
@@ -108,7 +108,7 @@ class GRUEncoder(nn.Module):
         for k, size in enumerate(self.recurr_sizes):
             next_carry[k], y = nn.GRUCell(size)(carry[k], y)
 
-        return next_carry, y
+        return next_carry, nn.relu(y)
 
     def reset(self, batch_size) -> list[GRUCarry]:
         carry = []
