@@ -170,32 +170,6 @@ def sample_marginal_obs(
     return obs_model.sample(key, x)
 
 
-def log_marginal_obs(
-    obs_model: ObservationModel,
-    observation: Array,
-    state: BeliefState
-) -> Array:
-    r"""Sample an observation from the marginal observation distribution.
-
-    Samples an observation from the weighted mixture of observation models:
-    $z_t^n \sim \sum_{m=1}^M W_{s,t}^{nm} h(z_t \mid s_t^{nm})$
-
-    Args:
-        obs_model: ObservationModel
-            The observation model
-        observation:
-        state: BeliefState
-            The belief state associated with the n-th history trajectory.
-            Leaves have shape (M, ...).
-
-    Returns:
-        Array:
-            A sampled observation from the marginal distribution
-    """
-    log_probs = jax.vmap(obs_model.log_prob, in_axes=(None, 0))(observation, state.particles)
-    return jax.nn.logsumexp(log_probs + state.log_weights) - jax.nn.logsumexp(state.log_weights)
-
-
 def expected_reward(
     belief_state: BeliefState,
     action: Array,
