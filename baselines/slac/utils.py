@@ -1,17 +1,18 @@
+from functools import partial
+
 import jax
+
 from distrax import Chain, MultivariateNormalDiag, Transformed
-from jax import Array, random
+from flax.training.train_state import TrainState
+from jax import Array
 from jax import numpy as jnp
+from jax import random
+
+from ppomdp.core import Carry, Parameters, PRNGKey
+from ppomdp.utils import custom_split
+from ppomdp.envs.core import POMDPEnv
 
 from baselines.slac.arch import PolicyNetwork
-from ppomdp.core import BeliefState, Carry, Parameters, PRNGKey
-from ppomdp.envs.core import POMDPEnv
-from ppomdp.utils import (
-    propagate_belief,
-    resample_belief,
-    reweight_belief,
-    systematic_resampling,
-)
 
 
 def policy_sample_and_log_prob(
@@ -29,66 +30,52 @@ def policy_sample_and_log_prob(
     return carry, action, log_prob, bijector.forward(mean)
 
 
-def sample_random_actions(rng_key: PRNGKey, env_obj: POMDPEnv) -> Array:
-    return random.uniform(
-        key=rng_key,
-        shape=(env_obj.num_envs, env_obj.action_dim),
-        minval=-1.0,
-        maxval=1.0,
-    )
-
-
-def belief_init(
+@partial(jax.jit, static_argnames=("env_obj", "policy_network", "num_samples"))
+def policy_evaluation(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
-    observation: Array,
-    num_belief_particles: int
-) -> BeliefState:
-    """Initialize the particle filter to track the belief state."""
-    particles = env_obj.prior_dist.sample(
-        seed=rng_key, sample_shape=(num_belief_particles,)
+    policy_state: TrainState,
+    policy_network: PolicyNetwork,
+    num_samples: int = 1024,
+):
+
+    def body(carry, key):
+        states, policy_carry, observations, time_idx = carry
+
+        # Sample actions.
+        key, action_key = random.split(key)
+        policy_carry, _, _, actions = policy_state.apply_fn(
+            rng_key=action_key,
+            carry=policy_carry,
+            observation=observations,
+            params=policy_state.params
+        )
+
+        # Compute rewards.
+        rewards = jax.vmap(env_obj.reward_fn, (0, 0, None))(states, actions, time_idx)
+
+        # Sample next states.
+        key, state_keys = custom_split(key, num_samples + 1)
+        states = jax.vmap(env_obj.trans_model.sample)(state_keys, states, actions)
+
+        # Sample observations.
+        obs_keys = random.split(key, num_samples)
+        observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
+
+        return (states, policy_carry, observations, time_idx + 1), (states, actions, rewards)
+
+    # Initialize.
+    key, state_key = random.split(rng_key)
+    init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+    key, obs_keys = custom_split(key, num_samples + 1)
+    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
+    init_policy_carry = policy_network.reset(num_samples)
+
+    _, (states, actions, rewards) = jax.lax.scan(
+        body,
+        (init_states, init_policy_carry, init_observations, 0),
+        random.split(key, env_obj.num_time_steps + 1)
     )
-    log_weights = jax.vmap(env_obj.obs_model.log_prob, (None, 0))(
-        observation, particles
-    )
-    logsum_weights = jax.nn.logsumexp(log_weights)
-    weights = jnp.exp(log_weights - logsum_weights)
-    dummy_resampling_indices = jnp.zeros(num_belief_particles, dtype=jnp.int32)
-    return BeliefState(particles, log_weights, weights, dummy_resampling_indices)
-
-
-def belief_update(
-    rng_key: PRNGKey,
-    env_obj: POMDPEnv,
-    belief_state: BeliefState,
-    observation: Array,
-    action: Array,
-) -> BeliefState:
-    """Single step of the particle filter to track the belief state."""
-    resample_key, propagate_key = random.split(rng_key)
-    resampled_belief = resample_belief(
-        resample_key, belief_state, systematic_resampling
-    )
-    particles = propagate_belief(
-        propagate_key, env_obj.trans_model, resampled_belief.particles, action
-    )
-    resampled_belief = resampled_belief._replace(particles=particles)
-    return reweight_belief(env_obj.obs_model, resampled_belief, observation)
-
-
-def sample_hidden_states(
-    rng_key: PRNGKey,
-    particles: Array,
-    weights: Array
-) -> Array:
-    """Sample one hidden state for each belief state.
-    `particles` has shape (batch_size, num_particles, state_dim).
-    """
-    batch_size, num_particles, _ = particles.shape
-
-    def choice_fn(key, _particles, _weights):
-        idx = random.choice(key, a=num_particles, p=_weights)
-        return _particles[idx]
-
-    keys = random.split(rng_key, batch_size)
-    return jax.vmap(choice_fn)(keys, particles, weights)
+    states = jnp.concatenate([init_states[None], states], axis=0)
+    expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    return expected_reward, states, actions

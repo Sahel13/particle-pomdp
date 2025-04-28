@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -9,16 +9,16 @@ from flax.linen.initializers import constant
 from distrax import Block
 
 from ppomdp.core import Reference
-from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
-from ppomdp.csmc import csmc
+from ppomdp.smc._smc import smc, backward_tracing
+from ppomdp.smc._csmc import csmc
 
 from ppomdp.bijector import Tanh
-from ppomdp.utils import batch_data
-from ppomdp.arch import GRUEncoder, MLPDecoder
-from ppomdp.gauss import (
-    RecurrentNeuralGauss,
-    create_recurrent_gauss_policy,
-    train_recurrent_gauss_policy
+from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.policy.arch import GRUEncoder, MLPDecoder
+from ppomdp.policy.gauss import (
+    RecurrentNeuralGaussPolicy,
+    create_recurrent_neural_gauss_policy,
+    train_recurrent_neural_gauss_policy_pathwise
 )
 
 import time
@@ -32,38 +32,35 @@ from ppomdp.envs.pomdps.lightdark2d import stddev_obs
 
 rng_key = random.PRNGKey(1337)
 
-num_history_particles = 512
-num_belief_particles = 256
+num_history_particles = 128
+num_belief_particles = 32
 
 slew_rate_penalty = 5e-4
 tempering = 0.5
-num_moves = 5
+num_moves = 1
 
 learning_rate = 3e-4
-batch_size = 64
-num_epochs = 1000
+batch_size = 256
+num_epochs = 100
 
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
     encoder_size=(256, 256),
-    recurr_size=(64, 64),
+    recurr_size=(128, 128),
 )
-
 decoder = MLPDecoder(
     decoder_size=(256, 256),
     output_dim=env.action_dim,
 )
-
-network = RecurrentNeuralGauss(
+network = RecurrentNeuralGaussPolicy(
     encoder=encoder,
     decoder=decoder,
-    init_log_std=constant(jnp.log(1.0)),
+    init_log_std=constant(jnp.log(2.0)),
 )
-
 bijector = Block(Tanh(), ndims=1)
 
 key, sub_key = random.split(rng_key, 2)
-policy = create_recurrent_gauss_policy(network, bijector)
+policy = create_recurrent_neural_gauss_policy(network, bijector)
 train_state = policy.init(
     rng_key=sub_key,
     input_dim=env.obs_dim,
@@ -75,20 +72,8 @@ train_state = policy.init(
 # run init nested smc
 key, sub_key = random.split(key)
 history_states, belief_states, belief_infos, _ = \
-    smc(
-        sub_key,
-        env.num_time_steps,
-        num_history_particles,
-        num_belief_particles,
-        env.prior_dist,
-        env.trans_model,
-        env.obs_model,
-        policy,
-        train_state.params,
-        env.reward_fn,
-        tempering,
-        slew_rate_penalty
-    )
+    smc(sub_key, env.num_time_steps, num_history_particles, num_belief_particles, env.prior_dist, policy,
+        train_state.params, env.trans_model, env.obs_model, env.reward_fn, tempering, slew_rate_penalty)
 
 # trace ancestors of history states
 key, sub_key = random.split(key)
@@ -121,24 +106,10 @@ reference = Reference(
 for i in range(1, num_epochs + 1):
     start_time = time.time()
 
-    # evaluate current policy
+    # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    history_states, _, _, _ = \
-        smc(
-            sub_key,
-            env.num_time_steps,
-            int(4 * num_history_particles),
-            int(4 * num_belief_particles),
-            env.prior_dist,
-            env.trans_model,
-            env.obs_model,
-            policy,
-            train_state.params,
-            env.reward_fn,
-            tempering=0.0,
-            slew_rate_penalty=0.0,
-        )
-    expected_reward = jnp.mean(jnp.sum(history_states.rewards, axis=0))
+    expected_reward, *_ = \
+        policy_evaluation(sub_key, env, policy, train_state.params)
 
     for _ in range(num_moves):
         # run nested conditional smc
@@ -195,7 +166,7 @@ for i in range(1, num_epochs + 1):
     for batch_idx in batch_indices:
         history_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history)
         train_state, batch_loss = \
-            train_recurrent_gauss_policy(policy, train_state, history_batch)
+            train_recurrent_neural_gauss_policy_pathwise(policy, train_state, history_batch)
         loss += batch_loss
 
     entropy = policy.entropy(train_state.params)
@@ -214,20 +185,8 @@ eval_state.params["log_std"] = -20.0 * jnp.ones((env.action_dim,))
 
 key, sub_key = random.split(key)
 history_states, belief_states, belief_infos, _ = \
-    smc(
-        sub_key,
-        env.num_time_steps,
-        num_history_particles,
-        num_belief_particles,
-        env.prior_dist,
-        env.trans_model,
-        env.obs_model,
-        policy,
-        eval_state.params,
-        env.reward_fn,
-        tempering=0.0,
-        slew_rate_penalty=0.0,
-    )
+    smc(sub_key, env.num_time_steps, num_history_particles, num_belief_particles, env.prior_dist, policy,
+        eval_state.params, env.trans_model, env.obs_model, env.reward_fn, slew_rate_penalty=0.0, tempering=0.0)
 
 observations = history_states.particles.observations
 actions = history_states.particles.actions

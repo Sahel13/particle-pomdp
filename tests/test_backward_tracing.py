@@ -3,8 +3,7 @@ import pytest
 import chex
 from jax import random, numpy as jnp
 
-
-from ppomdp.core import BeliefState, HistoryParticles, HistoryState
+from ppomdp.core import BeliefState, HistoryParticles, HistoryState, BeliefInfo
 from ppomdp.smc import backward_tracing
 
 
@@ -16,55 +15,92 @@ def history_states():
     num_time_steps = 3
     lstm_dim = 32
     key = random.PRNGKey(0)
+
+    # Generate observations
     key, sub_key = random.split(key)
     observations = random.uniform(
         sub_key, (num_time_steps + 1, num_history_particles, obs_dim)
     )
 
+    # Generate actions
     key, sub_key = random.split(key)
     actions = random.uniform(
         sub_key, (num_time_steps + 1, num_history_particles, action_dim)
     )
 
+    # Generate carry states
     key, sub_key1, sub_key2 = random.split(key, 3)
     carry = [(
         random.uniform(sub_key1, (num_time_steps + 1, num_history_particles, lstm_dim)),
         random.uniform(sub_key2, (num_time_steps + 1, num_history_particles, lstm_dim)),
     )]
-    dummy_log_probs = jnp.zeros((num_time_steps + 1, num_history_particles))
-    history_particles = HistoryParticles(observations, actions, carry, dummy_log_probs)
 
+    # Create history particles
+    history_particles = HistoryParticles(
+        actions=actions,
+        carry=carry,
+        observations=observations
+    )
+
+    # Create resampling indices
     resampling_indices = random.randint(
         key, (num_time_steps + 1, num_history_particles), 0, num_history_particles
     )
+
+    # Create history state
     return HistoryState(
         particles=history_particles,
         log_weights=jnp.zeros((num_time_steps + 1, num_history_particles)),
         weights=jnp.ones((num_time_steps + 1, num_history_particles)) / num_history_particles,
-        rewards=jnp.zeros((num_time_steps + 1, num_history_particles)),
         resampling_indices=resampling_indices,
+        rewards=jnp.zeros((num_time_steps + 1, num_history_particles))
     )
 
 
 @pytest.fixture
 def belief_states(history_states):
-    # This is just a dummy belief state, not used in the test.
+    # Create dummy belief state
     num_time_steps, num_history_particles = history_states.weights.shape
     num_time_steps -= 1
     num_belief_particles = 2
-    dummy_array = jnp.zeros(
-        (num_time_steps + 1, num_history_particles, num_belief_particles)
+    state_dim = 4  # Example state dimension
+
+    # Create dummy arrays for belief state
+    particles = jnp.zeros((num_time_steps + 1, num_history_particles, num_belief_particles, state_dim))
+    log_weights = jnp.zeros((num_time_steps + 1, num_history_particles, num_belief_particles))
+    weights = jnp.ones((num_time_steps + 1, num_history_particles, num_belief_particles)) / num_belief_particles
+    resampling_indices = jnp.zeros((num_time_steps + 1, num_history_particles, num_belief_particles), dtype=jnp.int32)
+
+    return BeliefState(
+        particles=particles,
+        log_weights=log_weights,
+        weights=weights,
+        resampling_indices=resampling_indices
     )
-    state = BeliefState(
-        particles=dummy_array,
-        log_weights=dummy_array,
-        weights=dummy_array,
-        resampling_indices=dummy_array,
-    )
-    return state
 
 
-def test_backward_tracing(history_states, belief_states):
+@pytest.fixture
+def belief_infos(belief_states):
+    # Create dummy belief infos
+    num_time_steps, num_history_particles, num_belief_particles, state_dim = belief_states.particles.shape
+
+    # Create dummy arrays for belief infos - exactly match history_states shape
+    # history_states has shape (num_time_steps + 1, num_particles)
+    ess = jnp.ones((num_time_steps, num_history_particles))  # Remove +1 to match traced_indices
+    mean = jnp.zeros((num_time_steps, num_history_particles, state_dim))
+    covar = jnp.zeros((num_time_steps, num_history_particles, state_dim, state_dim))
+
+    # Set diagonal elements of covariance to 1
+    covar = covar.at[..., jnp.arange(state_dim), jnp.arange(state_dim)].set(1.0)
+
+    return BeliefInfo(
+        ess=ess,
+        mean=mean,
+        covar=covar
+    )
+
+
+def test_backward_tracing(history_states, belief_states, belief_infos):
     # Set random seed for reproducibility
     rng_key = random.PRNGKey(0)
 
@@ -73,7 +109,13 @@ def test_backward_tracing(history_states, belief_states):
     num_particles = 3
 
     # Run backward tracing
-    traced_history, _ = backward_tracing(rng_key, history_states, belief_states, False)
+    traced_history, traced_belief, traced_belief_info = backward_tracing(
+        rng_key,
+        history_states,
+        belief_states,
+        belief_infos,
+        resample=False
+    )
     resampling_indices = history_states.resampling_indices
 
     # Manually trace back the ancestry of each selected particle
@@ -85,30 +127,39 @@ def test_backward_tracing(history_states, belief_states):
             ancestry.append(current_idx)
         return list(reversed(ancestry))
 
-    # Verify shapes and dtypes
-    chex.assert_trees_all_equal_shapes_and_dtypes(history_states, traced_history)
-
     # Check each selected trajectory
     for particle_idx in range(num_particles):
         ancestry = trace_ancestry(particle_idx)
 
         # Verify that observations, actions, and carry match the ancestry
         for t in range(num_time_steps + 1):
+            # Check observations
             assert jnp.all(
                 jnp.equal(
                     history_states.particles.observations[t, ancestry[t]],
-                    traced_history.particles.observations[t, particle_idx],
+                    traced_history.observations[t, particle_idx],
                 )
             )
+
+            # Check actions
             assert jnp.all(
                 jnp.equal(
                     history_states.particles.actions[t, ancestry[t]],
-                    traced_history.particles.actions[t, particle_idx],
+                    traced_history.actions[t, particle_idx],
                 )
             )
-            assert jnp.all(
-                jnp.equal(
-                    history_states.particles.carry[0][0][t, ancestry[t]],
-                    traced_history.particles.carry[0][0][t, particle_idx],
+
+            # Check carry states
+            for carry_idx in range(len(history_states.particles.carry)):
+                assert jnp.all(
+                    jnp.equal(
+                        history_states.particles.carry[carry_idx][0][t, ancestry[t]],
+                        traced_history.carry[carry_idx][0][t, particle_idx],
+                    )
                 )
-            )
+                assert jnp.all(
+                    jnp.equal(
+                        history_states.particles.carry[carry_idx][1][t, ancestry[t]],
+                        traced_history.carry[carry_idx][1][t, particle_idx],
+                    )
+                )

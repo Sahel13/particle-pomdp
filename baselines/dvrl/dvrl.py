@@ -1,57 +1,37 @@
 from functools import partial
-from typing import NamedTuple, Dict
 
 import jax
 import optax
 
+from brax.training.replay_buffers import ReplayBufferState, UniformSamplingQueue
 from jax import Array, random, numpy as jnp
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from brax.training.replay_buffers import (
-    UniformSamplingQueue,
-    ReplayBufferState
-)
 from distrax import Block
 
 from ppomdp.core import PRNGKey, BeliefState
-from ppomdp.utils import custom_split
 from ppomdp.bijector import Tanh
-
+from ppomdp.utils import custom_split
 from ppomdp.envs.core import POMDPEnv, POMDPState
+
 from baselines.dvrl.arch import PolicyNetwork, CriticNetwork
-from baselines.dvrl.utils import sample_random_actions, policy_sample_and_log_prob, belief_init, belief_update
-
+from baselines.dvrl.utils import policy_sample_and_log_prob
+from baselines.common import (
+    JointTrainState,
+    belief_init,
+    belief_update,
+    sample_random_actions,
+)
 from copy import deepcopy
-
-
-class DVRLConfig(NamedTuple):
-    seed: int = 1
-    num_belief_particles: int = 64
-    total_timesteps: int = int(25e3)
-    buffer_size: int = int(1e5)
-    batch_size: int = 256
-    learning_starts: int = int(5e3)
-    policy_lr: float = 1e-4
-    critic_lr: float = 1e-3
-    alpha: float = 0.2
-    gamma: float = 0.995
-    tau: float = 0.005
-
-
-class JointTrainState(NamedTuple):
-    policy_state: TrainState
-    critic_state: TrainState
-    critic_target_params: Dict
 
 
 def _pomdp_base(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
-    alg_cfg: DVRLConfig,
+    policy_state: TrainState,
     states: Array,
     belief_states: BeliefState,
-    policy_state: TrainState,
-    random_actions: bool,
+    random_actions: bool
 ) -> tuple[Array, Array, BeliefState, Array]:
     """Sample actions and get the next states and observations."""
 
@@ -87,8 +67,8 @@ def _pomdp_base(
 def pomdp_init(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
-    alg_cfg: DVRLConfig,
     policy_state: TrainState,
+    num_belief_particles: int,
     random_actions: bool = False,
 ) -> POMDPState:
     """Initialize the history state."""
@@ -100,20 +80,13 @@ def pomdp_init(
 
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
     belief_states = jax.vmap(belief_init, (0, None, 0, None))(
-        belief_keys, env_obj, observations, alg_cfg.num_belief_particles
+        belief_keys, env_obj, observations, num_belief_particles
     )
 
     key, step_key = random.split(key, 2)
     next_states, next_observations, next_belief_states, actions = \
-        _pomdp_base(
-            rng_key=step_key,
-            env_obj=env_obj,
-            alg_cfg=alg_cfg,
-            states=states,
-            belief_states=belief_states,
-            policy_state=policy_state,
-            random_actions=random_actions
-        )
+        _pomdp_base(rng_key=step_key, env_obj=env_obj, policy_state=policy_state, states=states,
+                    belief_states=belief_states, random_actions=random_actions)
 
     time_idxs = jnp.zeros(env_obj.num_envs, dtype=jnp.int32)
     rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
@@ -136,13 +109,17 @@ def pomdp_init(
     )
 
 
-@partial(jax.jit, static_argnums=(1, 2, 5), donate_argnames="pomdp_state")
+@partial(
+    jax.jit,
+    static_argnames=("env_obj", "random_actions", "num_belief_particles"),
+    donate_argnames="pomdp_state"
+)
 def pomdp_step(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
-    alg_cfg: DVRLConfig,
     policy_state: TrainState,
     pomdp_state: POMDPState,
+    num_belief_particles: int,
     random_actions: bool = False,
 ) -> POMDPState:
 
@@ -156,12 +133,11 @@ def pomdp_step(
             _pomdp_base(
                 rng_key=rng_key,
                 env_obj=env_obj,
-                alg_cfg=alg_cfg,
+                policy_state=policy_state,
                 states=states,
                 belief_states=belief_states,
-                policy_state=policy_state,
                 random_actions=random_actions
-        )
+            )
 
         rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
         total_rewards = _pomdp_state.total_rewards + rewards
@@ -184,62 +160,20 @@ def pomdp_step(
         )
 
     def _false_fn(_pomdp_state):
-        return pomdp_init(rng_key, env_obj, alg_cfg, policy_state, random_actions)
+        return pomdp_init(
+            rng_key=rng_key,
+            env_obj=env_obj,
+            policy_state=policy_state,
+            num_belief_particles=num_belief_particles,
+            random_actions=random_actions
+        )
 
     return jax.lax.cond(
-        jnp.all(pomdp_state.done_flags == 0), _true_fn, _false_fn, pomdp_state
+        jnp.all(pomdp_state.done_flags == 0),
+        _true_fn,
+        _false_fn,
+        pomdp_state
     )
-
-
-def create_train_state(
-    rng_key: PRNGKey,
-    env_obj: POMDPEnv,
-    alg_cfg: DVRLConfig,
-) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
-    policy_log_std = jnp.ones(env_obj.action_dim)
-    policy_network = PolicyNetwork(
-        feature_fn=env_obj.feature_fn,
-        recurr_size=32,
-        hidden_sizes=(256, 256),
-        output_dim=env_obj.action_dim,
-        init_log_std=constant(policy_log_std),
-    )
-    critic_networks = CriticNetwork(
-        feature_fn=env_obj.feature_fn,
-        time_norm=env_obj.num_time_steps,
-        recurr_size=32,
-        hidden_sizes=(256, 256),
-        num_critics=1
-    )
-
-    dummy_particles = jnp.empty((1, alg_cfg.num_belief_particles, env_obj.state_dim))
-    dummy_weights = jnp.empty((1, alg_cfg.num_belief_particles))
-    dummy_actions = jnp.empty((1, env_obj.action_dim))
-    dummy_time = jnp.empty((1,), dtype=jnp.int32)
-
-    critic_key, policy_key = random.split(rng_key)
-    policy_params = policy_network.init(policy_key, dummy_particles, dummy_weights)["params"]
-    critic_params = critic_networks.init(critic_key, dummy_particles, dummy_weights, dummy_actions, dummy_time)
-    critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
-
-    policy_bijector = Block(Tanh(), ndims=1)
-    policy_apply_fn = partial(
-        policy_sample_and_log_prob,
-        network=policy_network,
-        bijector=policy_bijector
-    )
-    policy_train_state = TrainState.create(
-        apply_fn=policy_apply_fn,
-        params=policy_params,
-        tx=optax.adam(alg_cfg.policy_lr)
-    )
-    critic_train_state = TrainState.create(
-        apply_fn=critic_networks.apply,
-        params=critic_params,
-        tx=optax.adam(alg_cfg.critic_lr)
-    )
-    train_state = JointTrainState(policy_train_state, critic_train_state, critic_target_params)
-    return train_state, policy_network, critic_networks
 
 
 def critic_train_step(
@@ -252,9 +186,9 @@ def critic_train_step(
     next_actions, next_log_probs, _ = \
         train_state.policy_state.apply_fn(
             rng_key=rng_key,
-            params=train_state.policy_state.params,
             particles=pomdp_state.next_belief_states.particles,
-            weights=pomdp_state.next_belief_states.weights
+            weights=pomdp_state.next_belief_states.weights,
+            params = train_state.policy_state.params,
         )
     _next_values = \
         train_state.critic_state.apply_fn(
@@ -292,13 +226,14 @@ def policy_train_step(
     pomdp_state: POMDPState,
     alpha: float
 ) -> tuple[JointTrainState, Array]:
+
     def actor_loss(params):
         actions, log_probs, _ = \
             train_state.policy_state.apply_fn(
                 rng_key=rng_key,
-                params=params,
                 particles=pomdp_state.next_belief_states.particles,
-                weights=pomdp_state.next_belief_states.weights
+                weights=pomdp_state.next_belief_states.weights,
+                params=params,
             )
         values = \
             train_state.critic_state.apply_fn(
@@ -330,34 +265,58 @@ def critic_target_update(
     return train_state._replace(critic_target_params=updated_params)
 
 
-@jax.jit
 def gradient_step(
     rng_key: PRNGKey,
     train_state: JointTrainState,
     pomdp_state: POMDPState,
-    alg_cfg: DVRLConfig,
+    alpha: float,
+    gamma: float,
+    tau: float,
 ) -> tuple[JointTrainState, Array, Array]:
     critic_key, policy_key = random.split(rng_key, 2)
-    train_state, critic_loss = critic_train_step(critic_key, train_state, pomdp_state, alg_cfg.alpha, alg_cfg.gamma)
-    train_state, policy_loss = policy_train_step(policy_key, train_state, pomdp_state, alg_cfg.alpha)
-    train_state = critic_target_update(train_state, alg_cfg.tau)
+
+    # Update policy
+    train_state, policy_loss = policy_train_step(
+        rng_key=policy_key,
+        train_state=train_state,
+        pomdp_state=pomdp_state,
+        alpha=alpha,
+    )
+
+    # Update critic
+    train_state, critic_loss = critic_train_step(
+        rng_key=critic_key,
+        train_state=train_state,
+        pomdp_state=pomdp_state,
+        alpha=alpha,
+        gamma=gamma,
+    )
+
+    # Update target critic
+    train_state = critic_target_update(train_state, tau)
     return train_state, policy_loss, critic_loss
 
 
 @partial(
     jax.jit,
-    static_argnames=("env_obj", "alg_cfg", "buffer_obj", "num_steps"),
+    static_argnames=(
+        "env_obj", "buffer_obj", "num_steps",
+        "num_belief_particles", "alpha", "gamma", "tau"
+    ),
     donate_argnames=("buffer_state", "pomdp_state", "train_state"),
 )
 def step_and_train(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
-    alg_cfg: DVRLConfig,
+    train_state: JointTrainState,
     pomdp_state: POMDPState,
     buffer_obj: UniformSamplingQueue,
     buffer_state: ReplayBufferState,
-    train_state: JointTrainState,
+    num_belief_particles: int,
     num_steps: int,
+    alpha: float,
+    gamma: float,
+    tau: float
 ):
     def body(carry, key):
         _pomdp_state, _buffer_state, _train_state = carry
@@ -366,9 +325,9 @@ def step_and_train(
         _pomdp_state = pomdp_step(
             rng_key=_step_key,
             env_obj=env_obj,
-            alg_cfg=alg_cfg,
-            pomdp_state=_pomdp_state,
             policy_state=_train_state.policy_state,
+            pomdp_state=_pomdp_state,
+            num_belief_particles=num_belief_particles,
         )
         _buffer_state = buffer_obj.insert(_buffer_state, _pomdp_state)
         _buffer_state, _pomdp_state_sample = buffer_obj.sample(_buffer_state)
@@ -378,7 +337,9 @@ def step_and_train(
                 rng_key=_train_key,
                 train_state=_train_state,
                 pomdp_state=_pomdp_state_sample,
-                alg_cfg=alg_cfg,
+                alpha=alpha,
+                gamma=gamma,
+                tau=tau,
             )
         return (_pomdp_state, _buffer_state, _train_state), None
 
@@ -387,3 +348,61 @@ def step_and_train(
         body, (pomdp_state, buffer_state, train_state), keys
     )
     return pomdp_state, buffer_state, train_state
+
+
+def create_train_state(
+    rng_key: PRNGKey,
+    env_obj: POMDPEnv,
+    policy_lr: float,
+    critic_lr: float,
+    num_belief_particles: int
+) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
+
+    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
+    policy_network = PolicyNetwork(
+        feature_fn=env_obj.feature_fn,
+        recurr_size=32,
+        hidden_sizes=(256, 256),
+        output_dim=env_obj.action_dim,
+        init_log_std=constant(policy_log_std),
+    )
+    critic_networks = CriticNetwork(
+        feature_fn=env_obj.feature_fn,
+        time_norm=env_obj.num_time_steps,
+        recurr_size=32,
+        hidden_sizes=(256, 256),
+        num_critics=2
+    )
+
+    dummy_particles = jnp.empty((1, num_belief_particles, env_obj.state_dim))
+    dummy_weights = jnp.empty((1, num_belief_particles))
+    dummy_actions = jnp.empty((1, env_obj.action_dim))
+    dummy_time = jnp.empty((1,), dtype=jnp.int32)
+
+    critic_key, policy_key = random.split(rng_key)
+    policy_params = policy_network.init(policy_key, dummy_particles, dummy_weights)["params"]
+    critic_params = critic_networks.init(critic_key, dummy_particles, dummy_weights, dummy_actions, dummy_time)
+    critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
+
+    policy_bijector = Block(Tanh(), ndims=1)
+    policy_apply_fn = partial(
+        policy_sample_and_log_prob,
+        network=policy_network,
+        bijector=policy_bijector
+    )
+    policy_train_state = TrainState.create(
+        apply_fn=policy_apply_fn,
+        params=policy_params,
+        tx=optax.adam(policy_lr)
+    )
+    critic_train_state = TrainState.create(
+        apply_fn=critic_networks.apply,
+        params=critic_params,
+        tx=optax.adam(critic_lr)
+    )
+    train_state = JointTrainState(
+        policy_train_state,
+        critic_train_state,
+        critic_target_params
+    )
+    return train_state, policy_network, critic_networks

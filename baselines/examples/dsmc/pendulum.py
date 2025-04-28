@@ -5,41 +5,70 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.dsmc.dsmc import (
-    DSMCConfig,
+from baselines.common import get_pomdp, belief_init, belief_update
+from baselines.dsmc import (
+    DSMC,
     pomdp_init,
     pomdp_step,
     create_train_state,
     step_and_train,
 )
-from baselines.dvrl.utils import belief_init, belief_update
-from ppomdp.envs.pomdps import PendulumEnv as env_obj
 
 import matplotlib.pyplot as plt
 
 
 if __name__ == "__main__":
-    config = DSMCConfig()
+    config = DSMC(
+        num_belief_particles=32,
+        total_time_steps=25000,
+        buffer_size=25000,
+        learning_starts=5000,
+    )
 
-    key = random.key(1)
+    env_obj = get_pomdp("pendulum")
+
+    num_planner_steps = config.num_planner_steps
+    num_planner_particles = config.num_planner_particles
+    num_belief_particles = config.num_belief_particles
+    total_time_steps = config.total_time_steps
+    buffer_size = config.buffer_size
+    learning_starts = config.learning_starts
+    policy_lr = config.policy_lr
+    critic_lr = config.critic_lr
+    batch_size = config.batch_size
+    alpha = config.alpha
+    gamma = config.gamma
+    tau = config.tau
+
+    key = random.key(0)
     key, sub_key = random.split(key)
-    train_state, _, _ = create_train_state(sub_key, env_obj, config)
+    train_state, _, _ = create_train_state(
+        rng_key=sub_key,
+        env_obj=env_obj,
+        policy_lr=policy_lr,
+        critic_lr=critic_lr,
+        num_planner_particles=num_planner_particles,
+    )
 
     key, init_key = random.split(key)
     pomdp_state = pomdp_init(
         rng_key=init_key,
         env_obj=env_obj,
-        alg_cfg=config,
         train_state=train_state,
+        num_belief_particles=num_belief_particles,
+        num_planner_particles=num_planner_particles,
+        num_planner_steps=num_planner_steps,
+        alpha=alpha,
+        gamma=gamma,
         random_actions=True,
     )
 
     # Set up the replay buffer from Brax.
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
     buffer_obj = UniformSamplingQueue(
-        config.buffer_size,
-        buffer_entry_prototype,
-        sample_batch_size=config.batch_size
+        max_replay_size=buffer_size,
+        dummy_data_sample=buffer_entry_prototype,
+        sample_batch_size=batch_size
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -50,21 +79,24 @@ if __name__ == "__main__":
     buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
 
     # Pre-fill the buffer with random actions.
-    for global_step in range(1, config.learning_starts):
+    for global_step in range(1, learning_starts):
         key, sub_key = random.split(key)
         pomdp_state = pomdp_step(
             rng_key=sub_key,
             env_obj=env_obj,
-            alg_cfg=config,
-            pomdp_state=pomdp_state,
             train_state=train_state,
+            pomdp_state=pomdp_state,
+            num_belief_particles=num_belief_particles,
+            num_planner_particles=num_planner_particles,
+            num_planner_steps=num_planner_steps,
+            alpha=alpha,
+            gamma=gamma,
             random_actions=True,
         )
-
         buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
         if jnp.all(pomdp_state.done_flags == 1):
             print(
-                f"Step: {global_step:6d} | "
+                f"Step: {global_step:7d} | "
                 + f"Episodic reward: {pomdp_state.total_rewards.mean():6.2f}"
             )
 
@@ -76,23 +108,28 @@ if __name__ == "__main__":
 
     # Training loop - slightly faster training with `jax.lax.scan`.
     for global_step in range(
-        config.learning_starts, config.total_timesteps, steps_per_epoch
+        learning_starts, total_time_steps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
         pomdp_state, buffer_state, train_state = \
             step_and_train(
-                sub_key,
-                env_obj,
-                config,
-                pomdp_state,
-                buffer_obj,
-                buffer_state,
-                train_state,
-                steps_per_epoch,
+                rng_key=sub_key,
+                env_obj=env_obj,
+                train_state=train_state,
+                pomdp_state=pomdp_state,
+                buffer_obj=buffer_obj,
+                buffer_state=buffer_state,
+                num_belief_particles=num_belief_particles,
+                num_planner_particles=num_planner_particles,
+                num_planner_steps=num_planner_steps,
+                num_steps=steps_per_epoch,
+                alpha=alpha,
+                gamma=gamma,
+                tau=tau,
             )
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "
-            + f"Episodic reward: {pomdp_state.total_rewards.mean():10.2f} | "
+            + f"Episodic reward: {pomdp_state.total_rewards.mean():6.2f} | "
             + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
         )
 
@@ -100,7 +137,7 @@ if __name__ == "__main__":
     key, obs_key, belief_key = random.split(key, 3)
     state = env_obj.prior_dist.mean()
     observation = env_obj.obs_model.sample(obs_key, state)
-    belief_state = belief_init(belief_key, env_obj, observation, config.num_belief_particles)
+    belief_state = belief_init(belief_key, env_obj, observation, num_belief_particles)
 
     def body(carry, rng_key):
         _state, _belief_state = carry
@@ -108,10 +145,10 @@ if __name__ == "__main__":
         _, _, _action = \
             train_state.policy_state.apply_fn(
                 rng_key=_action_key,
-                params=train_state.policy_state.params,
                 particles=_belief_state.particles,
                 weights=_belief_state.weights,
-        )
+                params=train_state.policy_state.params,
+            )
         _state = env_obj.trans_model.sample(_state_key, _state, _action)
         _observation = env_obj.obs_model.sample(_obs_key, _state)
         _belief_state = belief_update(_pf_key, env_obj, _belief_state, _observation, _action)

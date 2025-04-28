@@ -4,7 +4,7 @@ from flax import linen as nn
 from jax import Array
 from jax import numpy as jnp
 
-from ppomdp.arch import GRUEncoder, LSTMEncoder, MLPDecoder
+from ppomdp.policy.arch import GRUEncoder, LSTMEncoder, MLPDecoder
 from ppomdp.core import Carry
 
 

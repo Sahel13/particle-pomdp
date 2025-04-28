@@ -1,48 +1,32 @@
-import argparse
-from datetime import datetime
+import time
+import uuid
 
-import matplotlib.pyplot as plt
 from jax import Array
+import matplotlib.pyplot as plt
 
 from ppomdp.envs import pomdps
 from ppomdp.envs.core import POMDPEnv
 
 
-def get_cmd_args():
-    """Command line arguments common to all algorithms."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, help="Seed for PRNGs", default=0)
-    parser.add_argument(
-        "--env",
-        type=str,
-        help="Environment name",
-        choices=[
-            "pendulum",
-            "cartpole",
-            "target-interception",
-            "light-dark-1d",
-            "light-dark-2d",
-        ],
-    )
-    parser.add_argument(
-        "--log_dir", type=str, help="Logging directory", default=f"logs/{timestamp}"
-    )
-    return parser.parse_args()
+def get_unique_identifier() -> str:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    unique_id = str(uuid.uuid4())[:8]
+    return f"-{timestamp}-{unique_id}"
 
 
-def get_env(env_name: str) -> POMDPEnv:
+def get_pomdp(env_name: str) -> POMDPEnv:
     if env_name == "pendulum":
         return pomdps.PendulumEnv
     elif env_name == "cartpole":
         return pomdps.CartPoleEnv
-    elif env_name == "target-interception":
+    elif env_name == "target-sensing":
         return pomdps.TargetEnv
     elif env_name == "light-dark-1d":
         return pomdps.LightDark1DEnv
-    else:
+    elif env_name == "light-dark-2d":
         return pomdps.LightDark2DEnv
+    else:
+        raise NotImplementedError
 
 
 def plot_trajectory(env_name: str, states: Array, actions: Array):
@@ -87,9 +71,7 @@ def plot_trajectory(env_name: str, states: Array, actions: Array):
     elif env_name == "target-interception":
         plt.figure()
         plt.plot(states[:, 0], states[:, 2], label="Trajectory")
-        plt.plot(
-            [-200], [100], "o", color="black", markersize=10, label="Starting point"
-        )
+        plt.plot([-200], [100], "o", color="black", markersize=10, label="Starting point")
         plt.plot([0], [0], "o", color="orange", markersize=10, label="Target")
         plt.plot([-200, 0], [100, 0], "r--")
         plt.title("Simulated trajectory")

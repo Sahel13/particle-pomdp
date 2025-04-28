@@ -5,43 +5,64 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.slac.slac import (
-    SLACConfig,
+from baselines.common import get_pomdp
+from baselines.slac import (
+    SLAC,
     pomdp_init,
     pomdp_step,
     create_train_state,
     step_and_train,
 )
-from ppomdp.envs.pomdps import PendulumEnv as env_obj
 
 import matplotlib.pyplot as plt
 
-# jax.config.update("jax_disable_jit", True)
-
 
 if __name__ == "__main__":
-    config = SLACConfig()
+    config = SLAC(
+        num_belief_particles=32,
+        total_time_steps=100000,
+        buffer_size=100000,
+        learning_starts=5000,
+    )
 
-    key = random.key(1)
+    env_obj = get_pomdp("pendulum")
+
+    num_belief_particles = config.num_belief_particles
+    total_time_steps = config.total_time_steps
+    buffer_size = config.buffer_size
+    learning_starts = config.learning_starts
+    policy_lr = config.policy_lr
+    critic_lr = config.critic_lr
+    batch_size = config.batch_size
+    alpha = config.alpha
+    gamma = config.gamma
+    tau = config.tau
+
+    key = random.key(0)
     key, sub_key = random.split(key)
-    train_state, policy_network, _ = create_train_state(sub_key, env_obj, config)
+    train_state, policy_network, _ = create_train_state(
+        rng_key=sub_key,
+        env_obj=env_obj,
+        policy_lr=policy_lr,
+        critic_lr=critic_lr
+    )
 
     key, init_key = random.split(key)
     pomdp_state = pomdp_init(
         rng_key=init_key,
         env_obj=env_obj,
-        alg_cfg=config,
         policy_state=train_state.policy_state,
         policy_network=policy_network,
+        num_belief_particles=num_belief_particles,
         random_actions=True,
     )
 
     # Set up the replay buffer from Brax.
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
     buffer_obj = UniformSamplingQueue(
-        config.buffer_size,
-        buffer_entry_prototype,
-        sample_batch_size=config.batch_size
+        max_replay_size=buffer_size,
+        dummy_data_sample=buffer_entry_prototype,
+        sample_batch_size=batch_size
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -52,16 +73,16 @@ if __name__ == "__main__":
     buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
 
     # Pre-fill the buffer with random actions.
-    for global_step in range(1, config.learning_starts):
+    for global_step in range(1, learning_starts):
         key, sub_key = random.split(key)
         pomdp_state = pomdp_step(
             rng_key=sub_key,
             env_obj=env_obj,
-            alg_cfg=config,
-            pomdp_state=pomdp_state,
             policy_state=train_state.policy_state,
             policy_network=policy_network,
-            random_actions=True,
+            pomdp_state=pomdp_state,
+            num_belief_particles=num_belief_particles,
+            random_actions=True
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
         if jnp.all(pomdp_state.done_flags == 1):
@@ -78,20 +99,23 @@ if __name__ == "__main__":
 
     # Training loop - slightly faster training with `jax.lax.scan`.
     for global_step in range(
-        config.learning_starts, config.total_timesteps, steps_per_epoch
+        learning_starts, total_time_steps, steps_per_epoch
     ):
         key, sub_key = random.split(key)
         pomdp_state, buffer_state, train_state = \
             step_and_train(
-                sub_key,
-                env_obj,
-                config,
-                pomdp_state,
-                buffer_obj,
-                buffer_state,
-                train_state,
-                policy_network,
-                steps_per_epoch,
+                rng_key=sub_key,
+                env_obj=env_obj,
+                train_state=train_state,
+                policy_network=policy_network,
+                pomdp_state=pomdp_state,
+                buffer_obj=buffer_obj,
+                buffer_state=buffer_state,
+                num_belief_particles=num_belief_particles,
+                num_steps=steps_per_epoch,
+                alpha=alpha,
+                gamma=gamma,
+                tau=tau
             )
         print(
             f"Step: {global_step + steps_per_epoch:7d} | "

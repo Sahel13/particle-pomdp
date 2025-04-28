@@ -3,7 +3,7 @@ from typing import Callable
 from jax import Array, numpy as jnp
 from flax import linen as nn
 
-from ppomdp.arch import MLPDecoder
+from ppomdp.policy.arch import MLPDecoder
 
 
 class PolicyNetwork(nn.Module):

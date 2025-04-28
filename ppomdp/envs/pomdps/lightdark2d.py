@@ -99,10 +99,10 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
     h = jax.lax.select(
         t < num_time_steps,
-        jnp.array([0., 0., 0., 0.]),
-        jnp.array([1., 1., 0., 0.]),
+        jnp.array([0., 0., 1e-3, 1e-3]),
+        jnp.array([1., 1., 1e-3, 1e-3]),
     )
-    r = jnp.array([1e-5, 1e-5])
+    r = jnp.array([1e-3, 1e-3])
     state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(h), s)
     action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
     return -0.5 * state_cost - 0.5 * action_cost
@@ -110,7 +110,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
 
 prior_dist = MultivariateNormalDiag(
     loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
-    scale_diag=jnp.array([2.5, 2.5, 1e-4, 1e-4])
+    scale_diag=jnp.array([1.25, 1.25, 1e-4, 1e-4])
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)

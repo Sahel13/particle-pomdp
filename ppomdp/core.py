@@ -4,7 +4,6 @@ import chex
 from jax import Array
 
 from flax.core import FrozenDict
-from flax.training.train_state import TrainState
 
 LSTMCarry = tuple[Array, Array]
 GRUCarry = Array
@@ -15,21 +14,41 @@ Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
 
 
 class HistoryParticles(NamedTuple):
-    observations: Array
+    """Represents a collection of particles, each containing history information.
+
+    This class is intended to encapsulate the history of actions, observations,
+    and carry information for a system over time. It utilizes a NamedTuple to
+    ensure immutability and easy access to the stored data. It is primarily used
+    in systems that require tracking and tracing a timeline of events and states.
+
+    Attributes:
+        actions (Array): A collection of actions corresponding to the history of
+            particles.
+        carry (list[Carry]): A list containing additional carry information for
+            each particle.
+        observations (Array): A collection of observations associated with the
+            history of particles.
+    """
     actions: Array
     carry: list[Carry]
-    log_probs: Array
+    observations: Array
 
 
 class HistoryState(NamedTuple):
-    r"""State of the history particle filter.
+    """
+    Represents the state of a history in a particle filter.
+
+    This class encapsulates key components of the particle filter's history state, including
+    particles, weights, resampling indices, and rewards. It is often used to track and manage
+    the evolution of particles and their associated characteristics over time as the particle
+    filter operates.
 
     Attributes:
-        particles: NamedTuple of the observations, actions and carry $(z_t^{1:N}, a_t^{1:N}, c_t^{1:N})$.
-        log_weights: Log weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
-        weights: Weights of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
-        resampling_indices: Resampling indicies of obervations and actions $(z_t^{1:N}, a_t^{1:N})$.
-        rewards: Expected rewards of states and actions $(s_{t}^{1:N}, a_{t-1}^{1:N})$.
+        particles (HistoryParticles): Particles representing the state of the system being filtered.
+        log_weights (Array): Logarithmic weights associated with the particles.
+        weights (Array): Normalized weights of the particles, derived from the log_weights.
+        resampling_indices (Array): Indices used for resampling particles during the filtering process.
+        rewards (Array): Rewards assigned or accumulated for the particles during the evolution step.
     """
 
     particles: HistoryParticles
@@ -40,13 +59,22 @@ class HistoryState(NamedTuple):
 
 
 class BeliefState(NamedTuple):
-    """State of the belief particle filter.
+    """
+    Represents the state of a belief in probabilistic inference.
+
+    This class is utilized to structure the belief state in applications such as
+    particle filters. It encapsulates arrays representing particles, their weights,
+    logarithmic weights, and resampling indices. Each attribute plays a distinct
+    role in defining the state and evolution of the belief system over time.
 
     Attributes:
-        particles: The state particles $s_t^{nm}$.
-        log_weights: Log weights of paticles $s_t^{nm}$.
-        weights: Weights of particles $s_t^{nm}$.
-        resampling_indices: Resampling indices of particles $s_t^{nm}$.
+        particles (Array): The array of particles representing possible states of
+            the system.
+        log_weights (Array): The natural logarithm of particle weights, useful for
+            numerical stability in probabilistic computations.
+        weights (Array): The normalized weights of particles, summing up to one.
+        resampling_indices (Array): Indices representing the result of a resampling
+            operation on the particles.
     """
 
     particles: Array
@@ -56,14 +84,46 @@ class BeliefState(NamedTuple):
 
 
 class BeliefInfo(NamedTuple):
+    """
+    Holds information about a belief system's essential statistics, mean, and covariance.
+
+    This class is a NamedTuple that encapsulates data related to beliefs in the context
+    of probabilistic models or statistical computations. It organizes and stores
+    essential statistics, mean values, and covariance matrices, which are commonly
+    used in tasks like Bayesian inference, state estimation, or uncertainty quantification.
+
+    Attributes:
+        ess (Array): Essential statistics representing fundamental statistical data.
+        mean (Array): Central tendencies or expected values of the belief distribution.
+        covar (Array): Covariance matrix associated with the belief statistics, reflecting
+            measures of variability and relationships between variables.
+    """
     ess: Array
     mean: Array
     covar: Array
 
 
 class Reference(NamedTuple):
+    """
+    Encapsulates a reference that contains historical particle data and belief state.
+
+    This class serves as a structured container for pairing historical particle
+    observations with associated belief state information, useful in probabilistic
+    and statistical models.
+
+    Attributes:
+        history_particles (HistoryParticles): Historical particle data representing
+            past observations or states.
+        belief_state (BeliefState): The current belief state based on the historical
+            particle data.
+    """
     history_particles: HistoryParticles
     belief_state: BeliefState
+
+
+class RewardFn(Protocol):
+    def __call__(self, s: Array, a: Array, t: Array) -> Array:
+        r"""The  reward function $r(s_t, a_t)$."""
 
 
 class SampleTransition(Protocol):
@@ -100,23 +160,6 @@ class ObservationModel(NamedTuple):
     log_prob: LogProbObservation
 
 
-class SamplePolicy(Protocol):
-    def __call__(self, rng_key: PRNGKey, s: Array, params: Parameters) -> Array:
-        r"""Sample from $\pi_\phi(a_t \mid s_t)$."""
-
-
-class LogProbPolicy(Protocol):
-    def __call__(self, a: Array, s: Array, params: Parameters) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t)$."""
-
-
-class Policy(NamedTuple):
-    r"""The stochastic recurrent policy $\pi_\phi$."""
-
-    sample: SamplePolicy
-    log_prob: LogProbPolicy
-
-
 class ResetRecurrentPolicy(Protocol):
     def __call__(self, batch_size: int) -> list[Carry]:
         r"""Reset the recurrent state of the policy."""
@@ -127,40 +170,43 @@ class SampleRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         carry: list[Carry],
+        actions: Array,
         observations: Array,
         params: Parameters,
-    ) -> tuple[list[Carry], Array]:
-        r"""Sample from $\pi_\phi(a_t, carry, \mid s_t)$."""
+    ) -> tuple[list[Carry], Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid z_t, a_{t-1}, carry)$."""
 
 
 class LogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        actions: Array,
+        next_actions: Array,
         carry: list[Carry],
+        actions: Array,
         observations: Array,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t, carry, \mid s_t,)$."""
+        r"""Compute the log density of $\pi_\phi(a_t, \mid z_t, a_{t-1}, carry)$."""
 
 
 class PathwiseCarryRecurrentPolicy(Protocol):
     def __call__(
         self,
-        init_carry: list[Carry],
+        actions: Array,
         observations: Array,
         params: Parameters
     ) -> list[Carry]:
-        r"""Compute the carry of $\pi_\phi(a_t \mid s_t, carry)$."""
+        r"""Compute the carry of $\pi_\phi(a_t \mid z_t, a_{t-1}, carry)$."""
 
 
 class PathwiseLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        particles: HistoryParticles,
+        actions: Array,
+        observations: Array,
         params: Parameters
     ) -> Array:
-        r"""Compute the log density of $\pi_\phi(a_t \mid s_t, carry)$."""
+        r"""Compute the pathwise log density of $\pi_\phi$."""
 
 
 class SampleAndLogProbRecurrentPolicy(Protocol):
@@ -168,17 +214,19 @@ class SampleAndLogProbRecurrentPolicy(Protocol):
         self,
         rng_key: PRNGKey,
         carry: list[Carry],
+        actions: Array,
         observations: Array,
         params: Parameters,
-    ) -> tuple[list[Carry], Array, Array]:
-        r"""Sample from $\pi_\phi(a_t, carry, \mid s_t)$ and compute its log density."""
+    ) -> tuple[list[Carry], Array, Array, Array]:
+        r"""Sample from $\pi_\phi(a_t, \mid z_t, a_{t-1}, carry)$ and compute its log density."""
 
 
 class CarryAndLogProbRecurrentPolicy(Protocol):
     def __call__(
         self,
-        action: Array,
+        next_actions: Array,
         carry: list[Carry],
+        actions: Array,
         observations: Array,
         params: Parameters,
     ) -> tuple[list[Carry], Array]:
@@ -197,11 +245,10 @@ class InitializeRecurrentPolicy(Protocol):
     def __call__(
         self,
         rng_key: PRNGKey,
-        input_dim: int,
-        output_dim: int,
+        obs_dim: int,
+        action_dim: int,
         batch_dim: int,
-        learning_rate: float,
-    ) -> TrainState:
+    ) -> Parameters:
         r"""Initialize the recurrent state of the policy."""
 
 
@@ -209,6 +256,7 @@ class RecurrentPolicy(NamedTuple):
     r"""The stochastic recurrent policy $\pi_\phi$."""
 
     dim: int
+    init: InitializeRecurrentPolicy
     reset: ResetRecurrentPolicy
     sample: SampleRecurrentPolicy
     log_prob: LogProbRecurrentPolicy
@@ -217,9 +265,83 @@ class RecurrentPolicy(NamedTuple):
     sample_and_log_prob: SampleAndLogProbRecurrentPolicy
     carry_and_log_prob: CarryAndLogProbRecurrentPolicy
     entropy: EntropyRecurrentPolicy
-    init: InitializeRecurrentPolicy
 
 
-class RewardFn(Protocol):
-    def __call__(self, s: Array, a: Array, t: Array) -> Array:
-        r"""The  reward function $r(s_t, a_t)$."""
+class SampleRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        carry: list[Carry],
+        actions: Array,
+        observations: Array,
+        next_actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        r"""Sample from $q(z_{t+1} \mid a_t, carry)$."""
+
+
+class LogProbRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        next_observations: Array,
+        carry: list[Carry],
+        actions: Array,
+        observations: Array,
+        next_actions: Array,
+        params: Parameters
+    ) -> Array:
+        r"""Compute the log density of $q(z_{t+1} \mid a_t, carry)$."""
+
+
+class SampleAndLogProbRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        carry: list[Carry],
+        actions: Array,
+        observations: Array,
+        next_actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array, Array]:
+        r"""Sample from $q(z_{t+1} \mid a_t, carry)$ and compute its log density."""
+
+
+class CarryAndLogProbRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        next_observations: Array,
+        carry: list[Carry],
+        actions: Array,
+        observations: Array,
+        next_actions: Array,
+        params: Parameters,
+    ) -> tuple[list[Carry], Array]:
+        r"""Compute log density of observation and update carry."""
+
+
+class InitializeRecurrentObservation(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        obs_dim: int,
+        action_dim: int,
+        batch_dim: int,
+    ) -> Parameters:
+        r"""Initialize the recurrent state of the posterior over observations."""
+
+
+class ResetRecurrentObservation(Protocol):
+    def __call__(self, batch_size: int) -> list[Carry]:
+        r"""Reset the recurrent state of the policy."""
+
+
+class RecurrentObservation(NamedTuple):
+    r"""The posterior distribution $q(z_{t+1} \mid a_t, carry)$."""
+
+    dim: int
+    init: InitializeRecurrentObservation
+    reset: ResetRecurrentObservation
+    sample: SampleRecurrentObservation
+    log_prob: LogProbRecurrentObservation
+    sample_and_log_prob: SampleAndLogProbRecurrentObservation
+    carry_and_log_prob: CarryAndLogProbRecurrentObservation
