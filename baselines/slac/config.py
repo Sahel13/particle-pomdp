@@ -27,7 +27,7 @@ class SLACExperiment(NamedTuple):
     learning_starts: int = 5000
     policy_lr: float = 3e-4
     critic_lr: float = 1e-3
-    batch_size: int = 256
+    batch_size: int = 16
     alpha: float = 0.2
     gamma: float = 0.95
     tau: float = 5e-3
@@ -36,5 +36,5 @@ class SLACExperiment(NamedTuple):
     use_logger: bool = True
     project_name: str = "particle-pomdp"
     experiment_group: str = "slac"
-    experiment_tags: Optional[List[str]] = ["slac", "test"]
+    experiment_tags: Optional[List[str]] = ["slac"]
     logger_directory: str = "logs"
