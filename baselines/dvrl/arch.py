@@ -17,12 +17,15 @@ class PolicyNetwork(nn.Module):
     def __call__(self, particles: Array, weights: Array) -> tuple[Array, Array]:
         log_std = self.param("log_std", self.init_log_std, self.output_dim)
 
-        # Encode the belief state into a fixed-size vector.
+        # Use the weighted particle set to predict actions.
+        # The original DVRL implementation uses an RNN to encode the belief state into a fixed size vector,
+        # but this is an arbitrary choice, since the weighted particles do not have a temporal structure.
         features = self.feature_fn(particles)
-        inputs = jnp.concatenate([features, weights[..., None]], -1)
-        encoding = nn.RNN(nn.GRUCell(self.recurr_size))(inputs)
-        encoding = jnp.take(encoding, -1, axis=-2)
-        return MLPDecoder(self.hidden_sizes, self.output_dim)(encoding), log_std
+        x = jnp.concatenate([features, weights[..., None]], -1)
+
+        x = nn.DenseGeneral(features=self.hidden_sizes[0], axis=(-2, -1))(x)
+        x = nn.relu(x)
+        return MLPDecoder(self.hidden_sizes[1:], self.output_dim)(x), log_std
 
 
 class CriticNetwork(nn.Module):
