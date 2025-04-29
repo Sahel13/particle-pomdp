@@ -15,14 +15,18 @@ class PolicyNetwork(nn.Module):
     init_log_std: Callable = nn.initializers.ones
 
     @nn.compact
-    def __call__(self, particles: Array, weights: Array) -> [Array, Array]:
+    def __call__(self, particles: Array) -> [Array, Array]:
         log_std = self.param("log_std", self.init_log_std, self.output_dim)
 
-        features = self.feature_fn(particles)
-        inputs = jnp.concatenate([features, weights[..., None]], -1)
-        encoding = nn.RNN(nn.GRUCell(self.recurr_size))(inputs)
-        encoding = jnp.take(encoding, -1, axis=-2)
-        return MLPDecoder(self.hidden_sizes, self.output_dim)(encoding), log_std
+        # Prepare the input.
+        mean_particles = jnp.mean(particles, axis=-2, keepdims=True)
+        x = jnp.concatenate([particles, mean_particles], -2)
+        x = self.feature_fn(x)
+
+        # Get the action.
+        x = nn.DenseGeneral(features=self.hidden_sizes[0], axis=(-2, -1))(x)
+        x = nn.relu(x)
+        return MLPDecoder(self.hidden_sizes[1:], self.output_dim)(x), log_std
 
 
 class CriticNetwork(nn.Module):

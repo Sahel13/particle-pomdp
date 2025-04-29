@@ -30,12 +30,11 @@ class PlanState(NamedTuple):
 def policy_sample_and_log_prob(
     rng_key: PRNGKey,
     particles: Array,
-    weights: Array,
-    network: PolicyNetwork,
     params: Parameters,
+    network: PolicyNetwork,
     bijector: Chain,
 ) -> tuple[Array, Array, Array]:
-    mean, log_std = network.apply({"params": params}, particles, weights)
+    mean, log_std = network.apply({"params": params}, particles)
     base = MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
     dist = Transformed(distribution=base, bijector=bijector)
     action, log_prob = dist.sample_and_log_prob(seed=rng_key)
@@ -59,7 +58,6 @@ def policy_evaluation(
         _, _, actions = policy_state.apply_fn(
             rng_key=action_key,
             particles=beliefs.particles,
-            weights=beliefs.weights,
             params=policy_state.params
         )
 

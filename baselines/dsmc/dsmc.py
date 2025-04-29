@@ -104,10 +104,7 @@ def planner_init(
 
     key, sub_key = random.split(key)
     actions, _, _ = train_state.policy_state.apply_fn(
-        rng_key=sub_key,
-        params=train_state.policy_state.params,
-        particles=states,
-        weights=jnp.ones((num_planner_particles, num_belief_particles)) / num_belief_particles,
+        rng_key=sub_key, particles=states, params=train_state.policy_state.params
     )
 
     time_idxs = init_time_idx * jnp.ones((num_planner_particles,), dtype=jnp.int32)
@@ -176,10 +173,7 @@ def planner_step(
 
     # sample next actions
     next_actions, next_log_probs, _ = train_state.policy_state.apply_fn(
-        rng_key=action_key,
-        particles=next_states,
-        weights=jnp.ones((num_planner_particles, num_belief_particles)) / num_belief_particles,
-        params=train_state.policy_state.params,
+        rng_key=action_key, particles=next_states, params=train_state.policy_state.params
     )
 
     # reweight with advantage
@@ -507,7 +501,6 @@ def critic_train_step(
     next_actions, next_log_probs, _ = train_state.policy_state.apply_fn(
         rng_key=sub_key,
         particles=pomdp_state.next_belief_states.particles,
-        weights=pomdp_state.next_belief_states.weights,
         params=train_state.policy_state.params,
     )
 
@@ -558,10 +551,7 @@ def policy_train_step(
     def actor_loss(params):
         key, sub_key = random.split(rng_key)
         actions, log_probs, _ = train_state.policy_state.apply_fn(
-            rng_key=sub_key,
-            particles=pomdp_state.belief_states.particles,
-            weights=pomdp_state.belief_states.weights,
-            params=params,
+            rng_key=sub_key, particles=pomdp_state.belief_states.particles, params=params
         )
 
         key, sub_key = random.split(key)
@@ -711,13 +701,12 @@ def create_train_state(
     )
 
     dummy_particles = jnp.empty((1, num_planner_particles, env_obj.state_dim))
-    dummy_weights = jnp.empty((1, num_planner_particles))
     dummy_states = jnp.empty((1, env_obj.state_dim))
     dummy_actions = jnp.empty((1, env_obj.action_dim))
     dummy_time = jnp.empty((1,), dtype=jnp.int32)
 
     critic_key, policy_key = random.split(rng_key)
-    policy_params = policy_network.init(policy_key, dummy_particles, dummy_weights)["params"]
+    policy_params = policy_network.init(policy_key, dummy_particles)["params"]
     critic_params = critic_network.init(critic_key, dummy_states, dummy_actions, dummy_time)
     critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
 
