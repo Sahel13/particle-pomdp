@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -33,7 +33,7 @@ from ppomdp.envs.pomdps.lightdark2d import stddev_obs
 rng_key = random.PRNGKey(1337)
 
 num_history_particles = 256
-num_belief_particles = 128
+num_belief_particles = 64
 num_target_samples = 512
 
 slew_rate_penalty = 0.01
@@ -41,7 +41,7 @@ tempering = 0.5
 
 learning_rate = 3e-4
 batch_size = 128
-num_epochs = 150
+num_epochs = 500
 
 bijector = Block(Tanh(), ndims=1)
 encoder = GRUEncoder(
@@ -87,6 +87,7 @@ for i in range(1, num_epochs + 1):
         policy=policy,
         params=learner.params,
         num_samples=1024,
+        stochastic=True
     )
 
     # run nested smc
