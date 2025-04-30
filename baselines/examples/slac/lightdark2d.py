@@ -23,9 +23,10 @@ if __name__ == "__main__":
         total_time_steps=1_000_000,
         buffer_size=1_000_000,
         learning_starts=50_000,
+        batch_size=128
     )
 
-    env_obj = get_pomdp("pendulum")
+    env_obj = get_pomdp("light-dark-2d")
 
     key = random.key(0)
     key, sub_key = random.split(key)
@@ -75,7 +76,7 @@ if __name__ == "__main__":
             policy_state=train_state.policy_state,
             policy_network=policy_network,
             num_belief_particles=config.num_belief_particles,
-            random_actions=random_actions,
+            random_actions=random_actions
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
@@ -109,20 +110,20 @@ if __name__ == "__main__":
         action_key, state_key, obs_key = random.split(rng_key, 3)
         carry, _, _, action = train_state.policy_state.apply_fn(
             rng_key=action_key,
-            carry=carry,
-            observation=observation,
             params=train_state.policy_state.params,
+            carry=carry,
+            observation=observation
         )
         state = env_obj.trans_model.sample(state_key, state, action[0])
         observation = env_obj.obs_model.sample(obs_key, state)
         return (state, carry, observation), (state, observation, action[0])
-
 
     key, state_key, obs_key = random.split(key, 3)
     init_state = env_obj.prior_dist.sample(seed=state_key)
     init_observation = env_obj.obs_model.sample(obs_key, init_state)
     init_carry = policy_network.reset(1)
 
+    keys = random.split(key, env_obj.num_time_steps)
     _, (states, _, actions) = jax.lax.scan(
         f=body, 
         init=(init_state, init_carry, init_observation), 
