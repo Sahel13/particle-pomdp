@@ -52,6 +52,6 @@ class P3OExperiment(NamedTuple):
     # Logger settings
     use_logger: bool = True
     project_name: str = "particle-pomdp"
-    experiment_group: str = "nsmc"
-    experiment_tags: Optional[List[str]] = ["nsmc", "test"]
+    experiment_group: str = "p3o"
+    experiment_tags: Optional[List[str]] = ["p3o", "test"]
     logger_directory: str = "logs"
