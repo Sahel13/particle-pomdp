@@ -90,7 +90,7 @@ class GRUEncoder(nn.Module):
     ) -> tuple[list[GRUCarry], Array]:
 
         # concat inputs and pass through features layer
-        # z = jnp.concatenate([z, a], axis=-1) if a is not None else z
+        # z = jnp.concatenate([z, a], axis=-1)
         y = self.feature_fn(z)
 
         # pass features through dense layers
@@ -139,9 +139,22 @@ class MLPDecoder(nn.Module):
     def __call__(self, x: Array) -> Array:
         # pass result through decoder layers
         for size in self.decoder_sizes:
-            x = nn.Dense(size)(x)
-            x = nn.relu(x)
+            x = nn.relu(nn.Dense(size)(x))
         return nn.Dense(self.output_dim)(x)
+
+
+class DualHeadMLPDecoder(nn.Module):
+    decoder_sizes: tuple[int, ...]
+    output_dim: int
+
+    @nn.compact
+    def __call__(self, x: Array):
+        # pass result through decoder layers
+        for size in self.decoder_sizes:
+            x = nn.relu(nn.Dense(size)(x))
+        y = nn.Dense(self.output_dim)(x)
+        z = nn.Dense(self.output_dim)(x)
+        return y, z
 
 
 class MLPConditioner(nn.Module):
