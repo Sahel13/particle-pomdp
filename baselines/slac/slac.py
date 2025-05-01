@@ -469,6 +469,7 @@ def pomdp_rollout(
             policy_network,
             pomdp_state,
             num_belief_particles,
+            random_actions,
         )
         return pomdp_state, pomdp_state
 
