@@ -176,8 +176,8 @@ def policy_evaluation(
             - A tensor of sampled actions for all time steps and trajectories.
     """
 
-    def body(args, key):
-        states, actions, carry, observations, time_idx = args
+    def body(val, key):
+        states, actions, carry, observations, time_idx = val
 
         # Sample actions.
         key, action_key = random.split(key)
@@ -203,9 +203,9 @@ def policy_evaluation(
     init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
 
     key, obs_keys = custom_split(key, num_samples + 1)
+    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
     init_carry = policy.reset(num_samples)
     init_actions = jnp.zeros((num_samples, policy.dim))
-    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
 
     _, (states, actions, rewards) = jax.lax.scan(
         f=body,
@@ -213,8 +213,8 @@ def policy_evaluation(
         xs=random.split(key, env_obj.num_time_steps),
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
-    average_reward = jnp.mean(jnp.sum(rewards, axis=0))
-    return average_reward, states, actions
+    average_return = jnp.mean(jnp.sum(rewards, axis=0))
+    return average_return, states, actions
 
 
 def damping_schedule(
@@ -263,16 +263,16 @@ def damping_schedule(
 
 
 def weighted_huber_loss(y_pred: jnp.ndarray, y_true: jnp.ndarray, weights: jnp.ndarray, delta: float = 1.0) -> jnp.ndarray:
-  """Computes the weighted Huber loss element-wise and sums the result.
+    """Computes the weighted Huber loss element-wise and sums the result.
 
-  The Huber loss is defined as:
-  L_delta(a) = { 0.5 * a^2                   if |a| <= delta
+    The Huber loss is defined as:
+    L_delta(a) = { 0.5 * a^2                   if |a| <= delta
                { delta * (|a| - 0.5 * delta)  if |a| > delta
-  where a = y_pred - y_true.
+    where a = y_pred - y_true.
 
-  The weighted Huber loss is then sum(weights * L_delta(y_pred - y_true)).
+    The weighted Huber loss is then sum(weights * L_delta(y_pred - y_true)).
 
-  Args:
+    Args:
     y_pred: Predicted values (JAX array).
     y_true: True values (JAX array, must have the same shape as y_pred).
     weights: Weighting matrix/array (JAX array, must have the same shape as y_pred).
@@ -280,36 +280,36 @@ def weighted_huber_loss(y_pred: jnp.ndarray, y_true: jnp.ndarray, weights: jnp.n
     delta: The threshold parameter for the Huber loss. Determines the point where
            the loss transitions from quadratic to linear. Defaults to 1.0.
 
-  Returns:
+    Returns:
     A scalar JAX array representing the total weighted Huber loss.
 
-  Raises:
+    Raises:
       ValueError: If input arrays do not have compatible shapes for element-wise operations.
                   (JAX will typically raise its own errors during computation).
-  """
-  # Ensure inputs have compatible shapes (JAX handles broadcasting, but explicit checks can be added)
-  # Note: JAX usually raises errors if shapes are incompatible during operations.
-  # Example explicit check (optional):
-  # if y_pred.shape != y_true.shape or y_pred.shape != weights.shape:
-  #   raise ValueError(f"Shapes must match: y_pred={y_pred.shape}, "
-  #                    f"y_true={y_true.shape}, weights={weights.shape}")
+    """
+    # Ensure inputs have compatible shapes (JAX handles broadcasting, but explicit checks can be added)
+    # Note: JAX usually raises errors if shapes are incompatible during operations.
+    # Example explicit check (optional):
+    # if y_pred.shape != y_true.shape or y_pred.shape != weights.shape:
+    #   raise ValueError(f"Shapes must match: y_pred={y_pred.shape}, "
+    #                    f"y_true={y_true.shape}, weights={weights.shape}")
 
-  error = y_pred - y_true
-  abs_error = jnp.abs(error)
+    error = y_pred - y_true
+    abs_error = jnp.abs(error)
 
-  # Quadratic loss part (for |error| <= delta)
-  quadratic_loss = 0.5 * jnp.square(error)
+    # Quadratic loss part (for |error| <= delta)
+    quadratic_loss = 0.5 * jnp.square(error)
 
-  # Linear loss part (for |error| > delta)
-  linear_loss = delta * (abs_error - 0.5 * delta)
+    # Linear loss part (for |error| > delta)
+    linear_loss = delta * (abs_error - 0.5 * delta)
 
-  # Combine using jnp.where based on the condition |error| <= delta
-  elementwise_huber = jnp.where(abs_error <= delta, quadratic_loss, linear_loss)
+    # Combine using jnp.where based on the condition |error| <= delta
+    elementwise_huber = jnp.where(abs_error <= delta, quadratic_loss, linear_loss)
 
-  # Apply weights element-wise
-  weighted_elementwise_loss = weights * elementwise_huber
+    # Apply weights element-wise
+    weighted_elementwise_loss = weights * elementwise_huber
 
-  # Sum the weighted losses
-  total_loss = jnp.sum(weighted_elementwise_loss)
+    # Sum the weighted losses
+    total_loss = jnp.sum(weighted_elementwise_loss)
 
-  return total_loss
+    return total_loss

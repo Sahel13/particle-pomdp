@@ -44,7 +44,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-4, 1e-4, 1e-2, 1e-2])
+    return jnp.array([1e-4, 1e-4, 1e-1, 1e-1])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -73,7 +73,7 @@ def mean_obs(s: Array) -> Array:
 
 def stddev_obs(s: Array) -> Array:
     # light region along y-axis around x=5
-    dist = (s[0] - 5.0)**2 / 2.0
+    dist = 5.0 * (s[0] - 5.0)**2
     return jnp.sqrt(
         dist * jnp.ones(obs_dim)
         + 1e-4 * jnp.ones(obs_dim)
@@ -100,7 +100,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     h = jax.lax.select(
         t < num_time_steps,
         jnp.array([0., 0., 1e-3, 1e-3]),
-        jnp.array([1., 1., 1e-3, 1e-3]),
+        jnp.array([10., 10., 1e-3, 1e-3]),
     )
     r = jnp.array([1e-3, 1e-3])
     state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(h), s)

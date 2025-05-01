@@ -30,7 +30,14 @@ def policy_sample_and_log_prob(
     return carry, action, log_prob, bijector.forward(mean)
 
 
-@partial(jax.jit, static_argnames=("env_obj", "policy_network", "num_samples"))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "env_obj",
+        "policy_network",
+        "num_samples"
+    )
+)
 def policy_evaluation(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
@@ -39,14 +46,14 @@ def policy_evaluation(
     num_samples: int = 1024,
 ):
 
-    def body(carry, key):
-        states, policy_carry, observations, time_idx = carry
+    def body(val, key):
+        states, carry, observations, time_idx = val
 
         # Sample actions.
         key, action_key = random.split(key)
-        policy_carry, _, _, actions = policy_state.apply_fn(
+        carry, _, _, actions = policy_state.apply_fn(
             rng_key=action_key,
-            carry=policy_carry,
+            carry=carry,
             observation=observations,
             params=policy_state.params
         )
@@ -62,19 +69,20 @@ def policy_evaluation(
         obs_keys = random.split(key, num_samples)
         observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
-        return (states, policy_carry, observations, time_idx + 1), (states, actions, rewards)
+        return (states, carry, observations, time_idx + 1), (states, actions, rewards)
 
     # Initialize.
     key, state_key = random.split(rng_key)
     init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+
     key, obs_keys = custom_split(key, num_samples + 1)
     init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
-    init_policy_carry = policy_network.reset(num_samples)
+    init_carry = policy_network.reset(num_samples)
 
     _, (states, actions, rewards) = jax.lax.scan(
-        body,
-        (init_states, init_policy_carry, init_observations, 0),
-        random.split(key, env_obj.num_time_steps + 1)
+        f=body,
+        init=(init_states, init_carry, init_observations, 0),
+        xs=random.split(key, env_obj.num_time_steps + 1)
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
     expected_reward = jnp.mean(jnp.sum(rewards, axis=0))

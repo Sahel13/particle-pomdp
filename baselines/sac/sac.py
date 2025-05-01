@@ -16,7 +16,6 @@ from ppomdp.bijector import Tanh
 from ppomdp.envs.core import MDPEnv, MDPState
 from baselines.sac.arch import PolicyNetwork, CriticNetwork
 from baselines.sac.utils import policy_sample_and_log_prob
-from baselines.sac.config import SAC
 
 from baselines.common import (
     JointTrainState,
@@ -283,13 +282,11 @@ def create_train_state(
     critic_lr: float,
 ) -> JointTrainState:
 
-    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,
         hidden_sizes=(256, 256),
         output_dim=env_obj.action_dim,
-        init_log_std=constant(policy_log_std),
     )
     critic_networks = CriticNetwork(
         feature_fn=env_obj.feature_fn,

@@ -29,7 +29,7 @@ from baselines.slac import (
     create_train_state,
     gradient_step,
     policy_evaluation,
-    sim_trajectories,
+    pomdp_rollout,
 )
 
 
@@ -74,17 +74,20 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
     key = random.key(seed)
     key, sub_key = random.split(key)
     train_state, policy_network, _ = create_train_state(
-        sub_key, env_obj, config.policy_lr, config.critic_lr
+        rng_key=sub_key,
+        env_obj=env_obj,
+        policy_lr=config.policy_lr,
+        critic_lr=config.critic_lr
     )
 
     # Set up the replay buffer
     key, init_key = random.split(key)
-    pomdp_states = sim_trajectories(
-        init_key,
-        env_obj,
-        train_state.policy_state,
-        policy_network,
-        config.num_belief_particles,
+    pomdp_states = pomdp_rollout(
+        rng_key=init_key,
+        env_obj=env_obj,
+        policy_state=train_state.policy_state,
+        policy_network=policy_network,
+        num_belief_particles=config.num_belief_particles,
         random_actions=True,
     )
 
@@ -105,60 +108,54 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
 
     # Pre-fill the buffer with random actions
     for global_step in range(
-        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
+        env_obj.num_time_steps,
+        config.total_time_steps,
+        env_obj.num_time_steps
     ):
         key, sub_key = random.split(key)
-        if global_step <= config.learning_starts:
-            pomdp_states = sim_trajectories(
-                sub_key,
-                env_obj,
-                train_state.policy_state,
-                policy_network,
-                config.num_belief_particles,
-                random_actions=True,
-            )
-        else:
-            pomdp_states = sim_trajectories(
-                sub_key,
-                env_obj,
-                train_state.policy_state,
-                policy_network,
-                config.num_belief_particles,
-                random_actions=False,
-            )
-
+        random_actions = global_step <= config.learning_starts
+        pomdp_states = pomdp_rollout(
+            rng_key=sub_key,
+            env_obj=env_obj,
+            policy_state=train_state.policy_state,
+            policy_network=policy_network,
+            num_belief_particles=config.num_belief_particles,
+            random_actions=random_actions,
+        )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
         if global_step > config.learning_starts:
             buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
             key, train_key = random.split(key)
             train_state, *_ = gradient_step(
-                train_key,
-                train_state,
-                pomdp_states_batch,
-                policy_network,
-                config.alpha,
-                config.gamma,
-                config.tau,
+                rng_key=train_key,
+                train_state=train_state,
+                policy_network=policy_network,
+                pomdp_states_batch=pomdp_states_batch,
+                alpha=config.alpha,
+                gamma=config.gamma,
+                tau=config.tau,
             )
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
-            # Evaluate the policy and log metrics
             key, sub_key = random.split(key)
-            expected_reward, _, _ = policy_evaluation(
-                sub_key, env_obj, train_state.policy_state, policy_network
+            avg_return, _, _ = policy_evaluation(
+                rng_key=sub_key,
+                env_obj=env_obj,
+                policy_state=train_state.policy_state,
+                policy_network=policy_network
             )
 
             if logger:
                 logger.log_metrics(
                     {
-                        "expected_reward": expected_reward,
+                        "average_return": avg_return,
                         "policy_log_std": train_state.policy_state.params["log_std"][0],
                     },
                     step=global_step,
                 )
 
-            print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
+            print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 
     # Finish wandb logging if enabled
     if logger:
