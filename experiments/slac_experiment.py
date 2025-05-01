@@ -144,10 +144,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
 
             if logger:
                 logger.log_metrics(
-                    {
-                        "average_return": avg_return,
-                        "policy_log_std": train_state.policy_state.params["log_std"][0],
-                    },
+                    {"average_return": avg_return},
                     step=global_step,
                 )
 
