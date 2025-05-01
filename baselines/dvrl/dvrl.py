@@ -361,7 +361,7 @@ def create_train_state(
     policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
-        recurr_size=32,
+        encoding_dim=32,
         hidden_sizes=(256, 256),
         output_dim=env_obj.action_dim,
         init_log_std=constant(policy_log_std),
@@ -369,7 +369,7 @@ def create_train_state(
     critic_networks = CriticNetwork(
         feature_fn=env_obj.feature_fn,
         time_norm=env_obj.num_time_steps,
-        recurr_size=32,
+        encoding_dim=32,
         hidden_sizes=(256, 256),
         num_critics=2
     )
