@@ -77,7 +77,7 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
         rng_key=sub_key,
         env_obj=env_obj,
         policy_lr=config.policy_lr,
-        critic_lr=config.critic_lr
+        critic_lr=config.critic_lr,
     )
 
     # Set up the replay buffer
@@ -106,44 +106,40 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
     buffer_state = buffer_obj.init(buffer_key)
     buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
-    # Pre-fill the buffer with random actions
+    # Training loop
     for global_step in range(
-        env_obj.num_time_steps,
-        config.total_time_steps,
-        env_obj.num_time_steps
+        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
     ):
+        train = global_step > config.learning_starts
+
         key, sub_key = random.split(key)
-        random_actions = global_step <= config.learning_starts
         pomdp_states = pomdp_rollout(
-            rng_key=sub_key,
-            env_obj=env_obj,
-            policy_state=train_state.policy_state,
-            policy_network=policy_network,
-            num_belief_particles=config.num_belief_particles,
-            random_actions=random_actions,
+            sub_key,
+            env_obj,
+            train_state.policy_state,
+            policy_network,
+            config.num_belief_particles,
+            not train,
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
-        if global_step > config.learning_starts:
+        if train:
             buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
             key, train_key = random.split(key)
             train_state, *_ = gradient_step(
-                rng_key=train_key,
-                train_state=train_state,
-                policy_network=policy_network,
-                pomdp_states_batch=pomdp_states_batch,
-                alpha=config.alpha,
-                gamma=config.gamma,
-                tau=config.tau,
+                train_key,
+                train_state,
+                policy_network,
+                pomdp_states_batch,
+                config.alpha,
+                config.gamma,
+                config.tau,
             )
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
-            key, sub_key = random.split(key)
-            avg_return, _, _ = policy_evaluation(
-                rng_key=sub_key,
-                env_obj=env_obj,
-                policy_state=train_state.policy_state,
-                policy_network=policy_network
+            key, eval_key = random.split(key)
+            avg_return, *_ = policy_evaluation(
+                eval_key, env_obj, train_state.policy_state, policy_network
             )
 
             if logger:
