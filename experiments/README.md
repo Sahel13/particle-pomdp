@@ -81,6 +81,12 @@ python dvrl_experiment.py \
     --alpha 0.2 \
     --gamma 0.95 \
     --tau 0.005
+
+# light-dark-2d
+python dvrl_experiment.py \
+    --env_id light-dark-2d \
+    --learning_starts 10000 \
+    --gamma 0.995
 ```
 
 ### DSMC

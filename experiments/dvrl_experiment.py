@@ -27,10 +27,9 @@ from wandb_logger import WandbLogger
 from baselines.dvrl import (
     DVRLExperiment,
     create_train_state,
+    gradient_step,
     policy_evaluation,
-    pomdp_init,
-    pomdp_step,
-    step_and_train,
+    pomdp_rollout,
 )
 
 
@@ -71,44 +70,27 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
             logger_directory=config.logger_directory,
         )
 
-    num_belief_particles = config.num_belief_particles
-    total_time_steps = config.total_time_steps
-    buffer_size = config.buffer_size
-    learning_starts = config.learning_starts
-    policy_lr = config.policy_lr
-    critic_lr = config.critic_lr
-    batch_size = config.batch_size
-    alpha = config.alpha
-    gamma = config.gamma
-    tau = config.tau
-
-    # Initialize JAX random key
     key = random.key(seed)
     key, sub_key = random.split(key)
-    train_state, _, _ = create_train_state(
-        rng_key=sub_key,
-        env_obj=env_obj,
-        policy_lr=policy_lr,
-        critic_lr=critic_lr,
-        num_belief_particles=num_belief_particles,
-    )
-
-    # Initialize POMDP state
-    key, init_key = random.split(key)
-    pomdp_state = pomdp_init(
-        rng_key=init_key,
-        env_obj=env_obj,
-        policy_state=train_state.policy_state,
-        num_belief_particles=num_belief_particles,
-        random_actions=True,
+    train_state, *_ = create_train_state(
+        sub_key,
+        env_obj,
+        config.policy_lr,
+        config.critic_lr,
+        config.num_belief_particles,
     )
 
     # Set up the replay buffer
-    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
+    key, init_key = random.split(key)
+    pomdp_states = pomdp_rollout(
+        init_key, env_obj, train_state.policy_state, config.num_belief_particles, True
+    )
+
+    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_states)
     buffer_obj = UniformSamplingQueue(
-        max_replay_size=buffer_size,
+        max_replay_size=config.buffer_size,
         dummy_data_sample=buffer_entry_prototype,
-        sample_batch_size=batch_size,
+        sample_batch_size=config.batch_size,
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -116,83 +98,52 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
 
     key, buffer_key = random.split(key)
     buffer_state = buffer_obj.init(buffer_key)
-    buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
+    buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
-    # Pre-fill the buffer with random actions
-    for global_step in range(1, learning_starts):
+    # Training loop
+    for global_step in range(
+        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
+    ):
+        train = global_step > config.learning_starts
+
         key, sub_key = random.split(key)
-        pomdp_state = pomdp_step(
-            rng_key=sub_key,
-            env_obj=env_obj,
-            policy_state=train_state.policy_state,
-            pomdp_state=pomdp_state,
-            num_belief_particles=num_belief_particles,
-            random_actions=True,
+        pomdp_states = pomdp_rollout(
+            sub_key,
+            env_obj,
+            train_state.policy_state,
+            config.num_belief_particles,
+            not train,
         )
-        buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
+        buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
-        if global_step % 2000 == 0:
-            key, sub_key = random.split(key)
-            expected_reward, *_ = policy_evaluation(
-                rng_key=sub_key,
-                env_obj=env_obj,
-                policy_state=train_state.policy_state,
-                num_belief_particles=num_belief_particles,
+        if train:
+            buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
+            key, train_key = random.split(key)
+            train_state, *_ = gradient_step(
+                train_key,
+                train_state,
+                pomdp_states,
+                config.alpha,
+                config.gamma,
+                config.tau,
+            )
+
+        if global_step % (20 * env_obj.num_time_steps) == 0:
+            key, eval_key = random.split(key)
+            avg_return, *_ = policy_evaluation(
+                eval_key, env_obj, train_state.policy_state, config.num_belief_particles
             )
 
             if logger:
                 logger.log_metrics(
                     {
-                        "expected_reward": expected_reward,
+                        "average_return": avg_return,
                         "policy_log_std": train_state.policy_state.params["log_std"][0],
                     },
                     step=global_step,
                 )
 
-            print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
-
-    # Number of steps to take using the `lax.scan` loop
-    steps_per_epoch = 2000
-
-    # Training loop
-    for global_step in range(learning_starts, total_time_steps, steps_per_epoch):
-        key, sub_key = random.split(key)
-        pomdp_state, buffer_state, train_state = step_and_train(
-            rng_key=sub_key,
-            env_obj=env_obj,
-            train_state=train_state,
-            pomdp_state=pomdp_state,
-            buffer_obj=buffer_obj,
-            buffer_state=buffer_state,
-            num_belief_particles=num_belief_particles,
-            num_steps=steps_per_epoch,
-            alpha=alpha,
-            gamma=gamma,
-            tau=tau,
-        )
-
-        key, sub_key = random.split(key)
-        expected_reward, *_ = policy_evaluation(
-            rng_key=sub_key,
-            env_obj=env_obj,
-            policy_state=train_state.policy_state,
-            num_belief_particles=num_belief_particles,
-        )
-
-        if logger:
-            logger.log_metrics(
-                {
-                    "expected_reward": expected_reward,
-                    "policy_log_std": train_state.policy_state.params["log_std"][0],
-                },
-                step=global_step + steps_per_epoch,
-            )
-
-        print(
-            f"Step: {global_step + steps_per_epoch:6d} | "
-            + f"Expected reward: {expected_reward:6.2f} | "
-            + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
-        )
+            print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 
     # Finish wandb logging if enabled
     if logger:
