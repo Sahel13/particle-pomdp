@@ -122,7 +122,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
             train_state, *_ = gradient_step(
                 train_key,
                 train_state,
-                pomdp_states,
+                pomdp_states_batch,
                 config.alpha,
                 config.gamma,
                 config.tau,
