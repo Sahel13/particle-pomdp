@@ -20,6 +20,7 @@ class DSMCExperiment(NamedTuple):
     # Experiment settings
     env_id: str
     num_seeds: int = 10
+    starting_seed: int = 0
     cuda_device: str = "0"
 
     # Algorithm settings
@@ -41,4 +42,5 @@ class DSMCExperiment(NamedTuple):
     project_name: str = "particle-pomdp"
     experiment_group: Optional[str] = "dsmc"
     experiment_tags: Optional[List[str]] = ["dsmc"]
+    experiment_id: Optional[str] = None
     logger_directory: str = "logs"

@@ -146,7 +146,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
         if train:
-            for _ in range(5):
+            for _ in range(env_obj.num_time_steps):
                 buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
                 key, train_key = random.split(key)
                 train_state, *_ = gradient_step(
@@ -184,13 +184,19 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
 def main(config: DSMCExperiment) -> None:
     # Generate unique identifier for group
-    identifier = get_unique_identifier()
+    if config.experiment_id:
+        identifier = config.experiment_id
+    else:
+        identifier = get_unique_identifier()
 
     experiment_group = config.experiment_group + identifier
     config = config._replace(experiment_group=experiment_group)
 
     # Run experiments for each seed
-    for seed in tqdm(range(config.num_seeds), desc="Running seeds"):
+    for seed in tqdm(
+        range(config.starting_seed, config.starting_seed + config.num_seeds),
+        desc="Running seeds",
+    ):
         run_single_seed(config, seed)
 
     print("Experiment completed.")

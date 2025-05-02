@@ -18,6 +18,7 @@ class DVRLExperiment(NamedTuple):
     # Experiment settings
     env_id: str
     num_seeds: int = 10
+    starting_seed: int = 0
     cuda_device: str = "0"
 
     # Algorithm hyperparameters
@@ -37,4 +38,5 @@ class DVRLExperiment(NamedTuple):
     project_name: str = "particle-pomdp"
     experiment_group: Optional[str] = "dvrl"
     experiment_tags: Optional[List[str]] = ["dvrl"]
+    experiment_id: Optional[str] = None
     logger_directory: str = "logs"
