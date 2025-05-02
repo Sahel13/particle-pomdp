@@ -18,7 +18,7 @@ class PolicyNetwork(nn.Module):
     output_dim: int = 1
 
     @nn.compact
-    def __call__(self, particles: Array) -> [Array, Array]:
+    def __call__(self, particles: Array) -> tuple[Array, Array]:
         # Prepare the input.
         mean_particles = jnp.mean(particles, axis=-2, keepdims=True)
         x = jnp.concatenate([particles, mean_particles], -2)

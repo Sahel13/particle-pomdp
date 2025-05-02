@@ -160,7 +160,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
             key, eval_key = random.split(key)
-            expected_reward, _, _ = policy_evaluation(
+            avg_return, *_ = policy_evaluation(
                 rng_key=eval_key,
                 env_obj=env_obj,
                 policy_state=train_state.policy_state,
@@ -169,11 +169,11 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
             if logger:
                 logger.log_metrics(
-                    {"expected_reward": expected_reward},
+                    {"average_return": avg_return},
                     step=global_step,
                 )
 
-            print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
+            print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 
     # Finish wandb logging if enabled
     if logger:
