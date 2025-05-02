@@ -4,7 +4,6 @@ from functools import partial
 import jax
 import optax
 from distrax import Block
-from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from jax import Array
 from jax import numpy as jnp
@@ -289,14 +288,11 @@ def create_train_state(
     critic_lr: float,
     num_belief_particles: int,
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
-
-    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         encoding_dim=32,
         hidden_sizes=(256, 256),
         output_dim=env_obj.action_dim,
-        init_log_std=constant(policy_log_std),
     )
     critic_networks = CriticNetwork(
         feature_fn=env_obj.feature_fn,

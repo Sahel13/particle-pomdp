@@ -3,7 +3,10 @@ from typing import Callable
 from jax import Array, numpy as jnp
 from flax import linen as nn
 
-from ppomdp.policy.arch import MLPDecoder
+from ppomdp.policy.arch import MLPDecoder, DualHeadMLPDecoder
+
+LOG_STD_MAX = 2
+LOG_STD_MIN = -5
 
 
 class PolicyNetwork(nn.Module):
@@ -11,11 +14,9 @@ class PolicyNetwork(nn.Module):
     encoding_dim: int
     hidden_sizes: tuple[int, ...] = (256, 256)
     output_dim: int = 1
-    init_log_std: Callable = nn.initializers.ones
 
     @nn.compact
     def __call__(self, particles: Array, weights: Array) -> tuple[Array, Array]:
-        log_std = self.param("log_std", self.init_log_std, self.output_dim)
 
         # Encode the belief state into a fixed-size vector.
         # The original DVRL implementation uses an RNN to do this, but this is
@@ -24,7 +25,12 @@ class PolicyNetwork(nn.Module):
         inputs = jnp.concatenate([features, weights[..., None]], -1)
         encoding = nn.DenseGeneral(features=self.encoding_dim, axis=(-2, -1))(inputs)
 
-        return MLPDecoder(self.hidden_sizes, self.output_dim)(encoding), log_std
+        mean, log_std = DualHeadMLPDecoder(self.hidden_sizes, self.output_dim)(encoding)
+        log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
+            nn.tanh(log_std) + 1
+        )
+
+        return mean, log_std
 
 
 class CriticNetwork(nn.Module):
@@ -35,7 +41,9 @@ class CriticNetwork(nn.Module):
     num_critics: int = 2
 
     @nn.compact
-    def __call__(self, particles: Array, weights: Array, action: Array, time_idx: Array):
+    def __call__(
+        self, particles: Array, weights: Array, action: Array, time_idx: Array
+    ):
         # Encode the belief state into a fixed-size vector.
         features = self.feature_fn(particles)
         inputs = jnp.concatenate([features, weights[..., None]], -1)
