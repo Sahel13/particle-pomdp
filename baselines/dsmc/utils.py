@@ -2,19 +2,17 @@ from functools import partial
 from typing import NamedTuple
 
 import jax
-
 from distrax import Chain, MultivariateNormalDiag, Transformed
 from flax.training.train_state import TrainState
 from jax import Array
 from jax import numpy as jnp
 from jax import random
 
-from ppomdp.core import PRNGKey, Parameters
-from ppomdp.utils import custom_split
-from ppomdp.envs.core import POMDPEnv
-
-from baselines.dsmc.arch import PolicyNetwork
 from baselines.common import belief_init, belief_update
+from baselines.dsmc.arch import PolicyNetwork
+from ppomdp.core import Parameters, PRNGKey
+from ppomdp.envs.core import POMDPEnv
+from ppomdp.utils import custom_split
 
 
 class PlanState(NamedTuple):
@@ -56,9 +54,7 @@ def policy_evaluation(
         # Sample actions using the policy
         key, action_key = random.split(key)
         _, _, actions = policy_state.apply_fn(
-            rng_key=action_key,
-            particles=beliefs.particles,
-            params=policy_state.params
+            rng_key=action_key, particles=beliefs.particles, params=policy_state.params
         )
 
         # Compute rewards

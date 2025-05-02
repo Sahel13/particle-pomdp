@@ -1,4 +1,4 @@
-from typing import List, Optional, NamedTuple
+from typing import List, NamedTuple, Optional
 
 
 class DSMC(NamedTuple):
