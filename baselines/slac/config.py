@@ -18,6 +18,7 @@ class SLACExperiment(NamedTuple):
     # Experiment settings
     env_id: str
     num_seeds: int = 10
+    starting_seed: int = 0
     cuda_device: str = "0"
 
     # Algorithm settings
@@ -37,4 +38,5 @@ class SLACExperiment(NamedTuple):
     project_name: str = "particle-pomdp"
     experiment_group: str = "slac"
     experiment_tags: Optional[List[str]] = ["slac"]
+    experiment_id: Optional[str] = None
     logger_directory: str = "logs"
