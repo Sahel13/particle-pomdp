@@ -74,26 +74,15 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             logger_directory=config.logger_directory,
         )
 
-    num_planner_steps = config.num_planner_steps
-    num_planner_particles = config.num_planner_particles
-    num_belief_particles = config.num_belief_particles
-    buffer_size = config.buffer_size
-    learning_starts = config.learning_starts
-    policy_lr = config.policy_lr
-    critic_lr = config.critic_lr
-    batch_size = config.batch_size
-    alpha = config.alpha
-    gamma = config.gamma
-
     # Initialize JAX random key
     key = random.key(seed)
     key, sub_key = random.split(key)
     train_state, _, _ = create_train_state(
         rng_key=sub_key,
         env_obj=env_obj,
-        policy_lr=policy_lr,
-        critic_lr=critic_lr,
-        num_planner_particles=num_planner_particles,
+        policy_lr=config.policy_lr,
+        critic_lr=config.critic_lr,
+        num_planner_particles=config.num_planner_particles,
     )
 
     # Initialize POMDP state
@@ -102,20 +91,20 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
         rng_key=init_key,
         env_obj=env_obj,
         train_state=train_state,
-        num_belief_particles=num_belief_particles,
-        num_planner_particles=num_planner_particles,
-        num_planner_steps=num_planner_steps,
-        alpha=alpha,
-        gamma=gamma,
+        num_belief_particles=config.num_belief_particles,
+        num_planner_particles=config.num_planner_particles,
+        num_planner_steps=config.num_planner_steps,
+        alpha=config.alpha,
+        gamma=config.gamma,
         random_actions=True,
     )
 
     # Set up the replay buffer
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_states)
     buffer_obj = UniformSamplingQueue(
-        max_replay_size=buffer_size,
+        max_replay_size=config.buffer_size,
         dummy_data_sample=buffer_entry_prototype,
-        sample_batch_size=batch_size,
+        sample_batch_size=config.batch_size,
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -127,53 +116,55 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
     # Training loop
     for global_step in range(
-        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
+        env_obj.num_time_steps,
+        config.total_time_steps,
+        env_obj.num_time_steps
     ):
-        train = global_step > learning_starts
+        train = global_step > config.learning_starts
 
         key, sub_key = random.split(key)
         pomdp_states = pomdp_rollout(
             rng_key=sub_key,
             env_obj=env_obj,
             train_state=train_state,
-            num_belief_particles=num_belief_particles,
-            num_planner_particles=num_planner_particles,
-            num_planner_steps=num_planner_steps,
-            alpha=alpha,
-            gamma=gamma,
+            num_belief_particles=config.num_belief_particles,
+            num_planner_particles=config.num_planner_particles,
+            num_planner_steps=config.num_planner_steps,
+            alpha=config.alpha,
+            gamma=config.gamma,
             random_actions=not train,
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
         if train:
-            for _ in range(5):
+            for _ in range(env_obj.num_time_steps):
                 buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
                 key, train_key = random.split(key)
                 train_state, *_ = gradient_step(
-                    train_key,
-                    train_state,
-                    pomdp_states_batch,
-                    config.alpha,
-                    config.gamma,
-                    config.tau,
+                    rng_key=train_key,
+                    train_state=train_state,
+                    pomdp_state=pomdp_states_batch,
+                    alpha=config.alpha,
+                    gamma=config.gamma,
+                    tau=config.tau,
                 )
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
             key, eval_key = random.split(key)
-            expected_reward, _, _ = policy_evaluation(
+            avg_return, _, _ = policy_evaluation(
                 rng_key=eval_key,
                 env_obj=env_obj,
                 policy_state=train_state.policy_state,
-                num_belief_particles=num_belief_particles,
+                num_belief_particles=config.num_belief_particles,
             )
 
             if logger:
                 logger.log_metrics(
-                    {"expected_reward": expected_reward},
+                    {"average_return": avg_return},
                     step=global_step,
                 )
 
-            print(f"Step: {global_step:6d} | Expected reward: {expected_reward:6.2f}")
+            print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 
     # Finish wandb logging if enabled
     if logger:

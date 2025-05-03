@@ -73,17 +73,21 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
     key = random.key(seed)
     key, sub_key = random.split(key)
     train_state, *_ = create_train_state(
-        sub_key,
-        env_obj,
-        config.policy_lr,
-        config.critic_lr,
-        config.num_belief_particles,
+        rng_key=sub_key,
+        env_obj=env_obj,
+        policy_lr=config.policy_lr,
+        critic_lr=config.critic_lr,
+        num_belief_particles=config.num_belief_particles,
     )
 
     # Set up the replay buffer
     key, init_key = random.split(key)
     pomdp_states = pomdp_rollout(
-        init_key, env_obj, train_state.policy_state, config.num_belief_particles, True
+        rng_key=init_key,
+        env_obj=env_obj,
+        policy_state=train_state.policy_state,
+        num_belief_particles=config.num_belief_particles,
+        random_actions=True
     )
 
     buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_states)
@@ -102,36 +106,42 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
 
     # Training loop
     for global_step in range(
-        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
+        env_obj.num_time_steps,
+        config.total_time_steps,
+        env_obj.num_time_steps
     ):
         train = global_step > config.learning_starts
 
         key, sub_key = random.split(key)
         pomdp_states = pomdp_rollout(
-            sub_key,
-            env_obj,
-            train_state.policy_state,
-            config.num_belief_particles,
-            not train,
+            rng_key=sub_key,
+            env_obj=env_obj,
+            policy_state=train_state.policy_state,
+            num_belief_particles=config.num_belief_particles,
+            random_actions=not train,
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
         if train:
-            buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
-            key, train_key = random.split(key)
-            train_state, *_ = gradient_step(
-                train_key,
-                train_state,
-                pomdp_states_batch,
-                config.alpha,
-                config.gamma,
-                config.tau,
-            )
+            for _ in range(env_obj.num_time_steps):
+                buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
+                key, train_key = random.split(key)
+                train_state, *_ = gradient_step(
+                    rng_key=train_key,
+                    train_state=train_state,
+                    pomdp_state=pomdp_states_batch,
+                    alpha=config.alpha,
+                    gamma=config.gamma,
+                    tau=config.tau,
+                )
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
             key, eval_key = random.split(key)
             avg_return, *_ = policy_evaluation(
-                eval_key, env_obj, train_state.policy_state, config.num_belief_particles
+                rng_key=eval_key,
+                env_obj=env_obj,
+                policy_state=train_state.policy_state,
+                num_belief_particles=config.num_belief_particles
             )
 
             if logger:
