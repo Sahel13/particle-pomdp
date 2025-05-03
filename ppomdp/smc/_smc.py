@@ -38,7 +38,7 @@ def smc_init(
     rng_key: PRNGKey,
     num_history_particles: int,
     num_belief_particles: int,
-    init_prior: Distribution,
+    belief_prior: Distribution,
     policy_prior: RecurrentPolicy,
     obs_model: ObservationModel
 ) -> tuple[HistoryState, BeliefState, BeliefInfo]:
@@ -58,7 +58,7 @@ def smc_init(
             The number of history particles $N$.
         num_belief_particles: int
             The number of belief particles $M$.
-        init_prior: distrax.Distribution
+        belief_prior: distrax.Distribution
             The prior distribution for the initial state particles.
         policy_prior: RecurrentPolicy
             The recurrent policy.
@@ -66,7 +66,7 @@ def smc_init(
             The observation model.
     """
     key, sub_key = random.split(rng_key)
-    belief_particles = init_prior.sample(
+    belief_particles = belief_prior.sample(
         seed=sub_key,
         sample_shape=(num_history_particles, num_belief_particles),
     )
@@ -247,7 +247,7 @@ def smc_step(
         "num_time_steps",
         "num_history_particles",
         "num_belief_particles",
-        "init_prior",
+        "belief_prior",
         "policy_prior",
         "trans_model",
         "obs_model",
@@ -261,7 +261,7 @@ def smc(
     num_time_steps: int,
     num_history_particles: int,
     num_belief_particles: int,
-    init_prior: Distribution,
+    belief_prior: Distribution,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
     trans_model: TransitionModel,
@@ -284,7 +284,7 @@ def smc(
             The number of belief particles.
         num_time_steps: int
             The number of time steps for the SMC algorithm.
-        init_prior: Distribution
+        belief_prior: Distribution
             The prior distribution for the initial state particles.
         trans_model: TransitionModel
             The transition model for the state.
@@ -341,7 +341,7 @@ def smc(
             rng_key=init_key,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
-            init_prior=init_prior,
+            belief_prior=belief_prior,
             policy_prior=policy_prior,
             obs_model=obs_model
         )

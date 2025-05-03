@@ -24,7 +24,8 @@ class POMDPEnv(NamedTuple):
     action_dim: int
     obs_dim: int
     num_time_steps: int
-    prior_dist: Distribution
+    init_dist: Distribution
+    belief_prior: Distribution
     trans_model: TransitionModel
     obs_model: ObservationModel
     reward_fn: RewardFn

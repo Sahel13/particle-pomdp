@@ -1,17 +1,21 @@
+from typing import Callable
+
 import math
 from functools import partial
 
 import jax
 from jax import Array, random
 from jax import numpy as jnp
+from distrax import Distribution
 
 from ppomdp.core import (
     PRNGKey,
     Parameters,
     HistoryParticles,
-    RecurrentPolicy,
+    RecurrentPolicy, TransitionModel, ObservationModel,
 )
 from ppomdp.envs.core import POMDPEnv
+from ppomdp.smc.utils import belief_init, belief_update
 
 
 @partial(jax.jit, static_argnames=("data_size", "batch_size", "skip_last"))
@@ -138,13 +142,28 @@ def flatten_trajectories(particles: HistoryParticles):
     return actions, next_actions, observations, next_observations, carry
 
 
-@partial(jax.jit, static_argnames=("env_obj", "policy", "num_samples"))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "num_time_steps",
+        "num_trajectory_samples",
+        "init_dist",
+        "policy",
+        "trans_model",
+        "obs_model",
+        "reward_fn",
+    )
+)
 def policy_evaluation(
     rng_key: PRNGKey,
-    env_obj: POMDPEnv,
+    num_time_steps: int,
+    num_trajectory_samples: int,
+    init_dist: Distribution,
     policy: RecurrentPolicy,
-    params: Parameters,
-    num_samples: int = 1024,
+    policy_params: Parameters,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    reward_fn: Callable,
     stochastic: bool = True,
 ):
     """Evaluates a policy in a partially observable Markov decision process (POMDP)
@@ -159,13 +178,15 @@ def policy_evaluation(
     Args:
         rng_key (PRNGKey): Random number generator key, used to ensure reproducibility
             in sampling actions, states, and observations.
-        env_obj (POMDPEnv): The POMDP environment instance, which provides methods
-            for state transitions, reward computation, and observation sampling.
+        num_time_steps (int): Number of time steps to evaluate the policy.
+        num_trajectory_samples (int): Number of sampled trajectories to evaluate the policy.
+        init_dist (Distribution): Initial distribution of the states.
         policy (RecurrentPolicy): The recurrent policy to evaluate. It provides
             methods for sampling actions and resetting its internal state.
-        params (Parameters): Policy parameters used during action sampling.
-        num_samples (int): Number of sampled trajectories to evaluate the policy.
-            Defaults to 1024.
+        policy_params (Parameters): Policy parameters used during action sampling.
+        trans_model (TransitionModel): Transition model of the POMDP environment.
+        obs_model (ObservationModel): Observation model of the POMDP environment.
+        reward_fn (Callable): Reward function of the POMDP environment.
         stochastic (bool): Specifies whether the sampled actions or deterministic
             mean actions are used during evaluation. Defaults to True.
 
@@ -182,39 +203,157 @@ def policy_evaluation(
         # Sample actions.
         key, action_key = random.split(key)
         carry, samples, means = \
-            policy.sample(action_key, carry, actions, observations, params)
+            policy.sample(action_key, carry, actions, observations, policy_params)
         actions = jax.lax.select(stochastic, samples, means)
 
         # Sample next states.
-        key, state_keys = custom_split(key, num_samples + 1)
-        states = jax.vmap(env_obj.trans_model.sample)(state_keys, states, actions)
+        key, state_keys = custom_split(key, num_trajectory_samples + 1)
+        states = jax.vmap(trans_model.sample)(state_keys, states, actions)
 
         # Compute rewards.
-        rewards = jax.vmap(env_obj.reward_fn, (0, 0, None))(states, actions, time_idx)
+        rewards = jax.vmap(reward_fn, (0, 0, None))(states, actions, time_idx)
 
         # Sample observations.
-        obs_keys = random.split(key, num_samples)
-        observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
+        obs_keys = random.split(key, num_trajectory_samples)
+        observations = jax.vmap(obs_model.sample)(obs_keys, states)
 
         return (states,  actions, carry, observations, time_idx + 1), \
             (states, actions, rewards)
 
     key, state_key = random.split(rng_key)
-    init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+    init_states = init_dist.sample(seed=state_key, sample_shape=num_trajectory_samples)
 
-    key, obs_keys = custom_split(key, num_samples + 1)
-    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
-    init_carry = policy.reset(num_samples)
-    init_actions = jnp.zeros((num_samples, policy.dim))
+    key, obs_keys = custom_split(key, num_trajectory_samples + 1)
+    init_observations = jax.vmap(obs_model.sample)(obs_keys, init_states)
+    init_carry = policy.reset(num_trajectory_samples)
+    init_actions = jnp.zeros((num_trajectory_samples, policy.dim))
 
     _, (states, actions, rewards) = jax.lax.scan(
         f=body,
         init=(init_states, init_actions, init_carry, init_observations, 1),
-        xs=random.split(key, env_obj.num_time_steps),
+        xs=random.split(key, num_time_steps),
     )
     states = jnp.concatenate([init_states[None], states], axis=0)
-    average_return = jnp.mean(jnp.sum(rewards, axis=0))
-    return average_return, states, actions
+    return rewards, states, actions
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "num_time_steps",
+        "num_trajectory_samples",
+        "num_belief_particles",
+        "policy",
+        "init_dist",
+        "belief_prior",
+        "trans_model",
+        "obs_model",
+        "reward_fn",
+    )
+)
+def policy_evaluation_with_beliefs(
+    rng_key: PRNGKey,
+    num_time_steps: int,
+    num_trajectory_samples: int,
+    num_belief_particles: int,
+    init_dist: Distribution,
+    belief_prior: Distribution,
+    policy: RecurrentPolicy,
+    policy_params: Parameters,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    reward_fn: Callable,
+    stochastic: bool = True,
+):
+    """Evaluates a policy in a partially observable Markov decision process (POMDP)
+    environment over a specified number of samples and time steps.
+
+    This function computes the average cumulative reward achieved by a policy in a
+    given POMDP environment. It uses JAX to enable high-performance automatic
+    differentiation and parallel computation. Actions, states, and observations are
+    sampled sequentially in a scan loop, and the rewards are accumulated to evaluate
+    the policy's performance.
+
+    Args:
+        rng_key (PRNGKey): Random number generator key, used to ensure reproducibility
+            in sampling actions, states, and observations.
+        num_time_steps (int): Number of time steps to evaluate the policy.
+        num_trajectory_samples (int): Number of sampled trajectories to evaluate the policy.
+        num_belief_particles (int): Number of belief particles to use for the SMC algorithm.
+        init_dist (Distribution): Initial distribution of the states.
+        belief_prior (Distribution): Prior distribution of the beliefs.
+        policy (RecurrentPolicy): The recurrent policy to evaluate. It provides
+            methods for sampling actions and resetting its internal state.
+        policy_params (Parameters): Policy parameters used during action sampling.
+        trans_model (TransitionModel): Transition model of the POMDP environment.
+        obs_model (ObservationModel): Observation model of the POMDP environment.
+        reward_fn (Callable): Reward function of the POMDP environment.
+        stochastic (bool): Specifies whether the sampled actions or deterministic
+            mean actions are used during evaluation. Defaults to True.
+
+    Returns:
+        Tuple[float, jnp.ndarray, jnp.ndarray, jnp.ndarray]: A tuple containing:
+            - The average cumulative reward computed over the sampled trajectories.
+            - A tensor of sampled states for all time steps and trajectories.
+            - A tensor of sampled actions for all time steps and trajectories.
+            - A tensor of sampled beliefs for all time steps and trajectories.
+    """
+
+    def body(val, key):
+        states, actions, carry, observations, beliefs, time_idx = val
+
+        # Sample actions.
+        key, action_key = random.split(key)
+        carry, samples, means = \
+            policy.sample(action_key, carry, actions, observations, policy_params)
+        actions = jax.lax.select(stochastic, samples, means)
+
+        # Sample next states.
+        key, state_keys = custom_split(key, num_trajectory_samples + 1)
+        states = jax.vmap(trans_model.sample)(state_keys, states, actions)
+
+        # Compute rewards.
+        rewards = jax.vmap(reward_fn, (0, 0, None))(states, actions, time_idx)
+
+        # Sample observations.
+        obs_keys = random.split(key, num_trajectory_samples)
+        observations = jax.vmap(obs_model.sample)(obs_keys, states)
+
+        # Update beliefs
+        belief_keys = random.split(key, num_trajectory_samples)
+        beliefs = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+            belief_keys, trans_model, obs_model, beliefs, observations, actions
+        )
+
+        return (states,  actions, carry, observations, beliefs, time_idx + 1), \
+            (states, actions, beliefs, rewards)
+
+    key, state_key = random.split(rng_key)
+    init_states = init_dist.sample(seed=state_key, sample_shape=num_trajectory_samples)
+
+    key, obs_keys = custom_split(key, num_trajectory_samples + 1)
+    init_observations = jax.vmap(obs_model.sample)(obs_keys, init_states)
+
+    init_carry = policy.reset(num_trajectory_samples)
+    init_actions = jnp.zeros((num_trajectory_samples, policy.dim))
+
+    key, belief_keys = custom_split(key, num_trajectory_samples + 1)
+    init_beliefs = jax.vmap(belief_init, in_axes=(0, None, None, 0, None))(
+        belief_keys, belief_prior, obs_model, init_observations, num_belief_particles
+    )
+
+    _, (states, actions, beliefs, rewards) = jax.lax.scan(
+        f=body,
+        init=(init_states, init_actions, init_carry, init_observations, init_beliefs, 1),
+        xs=random.split(key, num_time_steps),
+    )
+
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
+
+    states = concat_trees(init_states,  states)
+    beliefs = concat_trees(init_beliefs, beliefs)
+    return rewards, states, actions, beliefs
 
 
 def damping_schedule(

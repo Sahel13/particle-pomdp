@@ -38,7 +38,7 @@ def csmc_init(
     rng_key: PRNGKey,
     num_history_particles: int,
     num_belief_particles: int,
-    init_prior: Distribution,
+    belief_prior: Distribution,
     policy_prior: RecurrentPolicy,
     obs_model: ObservationModel,
     reference: Reference,
@@ -60,7 +60,7 @@ def csmc_init(
         rng_key: Random number generator key for stochastic operations.
         num_history_particles: Number of particles in the history state.
         num_belief_particles: Number of particles in the belief state.
-        init_prior: Initial prior distribution for belief particles.
+        belief_prior: Initial prior distribution for belief particles.
         policy_prior: Recurrent policy model defining priors over policies.
         obs_model: Observation model for sampling and updating observations.
         reference: Reference state containing pre-defined belief state and
@@ -72,7 +72,7 @@ def csmc_init(
         such as effective sample size, mean, and covariance of belief particles.
     """
     key, sub_key = random.split(rng_key)
-    belief_particles = init_prior.sample(
+    belief_particles = belief_prior.sample(
         seed=sub_key,
         sample_shape=(num_history_particles, num_belief_particles),
     )
@@ -276,7 +276,7 @@ def csmc_step(
         "num_time_steps",
         "num_history_particles",
         "num_belief_particles",
-        "init_prior",
+        "belief_prior",
         "policy_prior",
         "trans_model",
         "obs_model",
@@ -290,7 +290,7 @@ def csmc(
     num_time_steps: int,
     num_history_particles: int,
     num_belief_particles: int,
-    init_prior: Distribution,
+    belief_prior: Distribution,
     policy_prior: RecurrentPolicy,
     policy_prior_params: Parameters,
     trans_model: TransitionModel,
@@ -314,7 +314,7 @@ def csmc(
             The number of belief particles.
         num_time_steps: int
             The number of time steps for the SMC algorithm.
-        init_prior: Distribution
+        belief_prior: Distribution
             The prior distribution for the initial state particles.
         trans_model: TransitionModel
             The transition model for the state.
@@ -374,7 +374,7 @@ def csmc(
         rng_key=init_key,
         num_history_particles=num_history_particles,
         num_belief_particles=num_belief_particles,
-        init_prior=init_prior,
+        belief_prior=belief_prior,
         policy_prior=policy_prior,
         obs_model=obs_model,
         reference=jax.tree.map(lambda x: x[0], reference),

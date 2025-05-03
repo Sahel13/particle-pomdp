@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -20,7 +20,7 @@ from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
     train_recurrent_neural_gauss_policy_pathwise,
 )
-from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_beliefs
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
@@ -33,21 +33,21 @@ rng_key = random.PRNGKey(1)
 
 num_history_particles = 128
 num_belief_particles = 32
-num_target_samples = 512
+num_target_samples = 256
 
-slew_rate_penalty = 0.0
-tempering = 0.5
+slew_rate_penalty = 0.05
+tempering = 0.35
 num_moves = 1
 
 learning_rate = 3e-4
-batch_size = 32
-num_epochs = 1
+batch_size = 16
+num_epochs = 50
 
 bijector = Block(Tanh(), ndims=1)
 encoder = GRUEncoder(
     feature_fn=lambda x: x,
     dense_sizes=(256, 256),
-    recurr_sizes=(64, 64),
+    recurr_sizes=(128, 128),
     use_layer_norm=True,
 )
 decoder = NeuralGaussDecoder(
@@ -82,7 +82,7 @@ history_states, belief_states, belief_infos, _ = \
         num_time_steps=env.num_time_steps,
         num_history_particles=int(num_history_particles),
         num_belief_particles=num_belief_particles,
-        init_prior=env.prior_dist,
+        belief_prior=env.belief_prior,
         policy_prior=policy,
         policy_prior_params=learner.params,
         trans_model=env.trans_model,
@@ -129,13 +129,19 @@ for i in range(1, num_epochs + 1):
 
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(
+    rewards, *_ = policy_evaluation(
         rng_key=sub_key,
-        env_obj=env,
+        num_time_steps=env.num_time_steps,
+        num_trajectory_samples=1024,
+        init_dist=env.init_dist,
         policy=policy,
-        params=learner.params,
-        num_samples=1024
+        policy_params=learner.params,
+        trans_model=env.trans_model,
+        obs_model=env.obs_model,
+        reward_fn=env.reward_fn,
+        stochastic=True
     )
+    avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
 
     for _ in range(num_moves):
         # run nested conditional smc
@@ -146,7 +152,7 @@ for i in range(1, num_epochs + 1):
                 num_time_steps=env.num_time_steps,
                 num_history_particles=num_history_particles,
                 num_belief_particles=num_belief_particles,
-                init_prior=env.prior_dist,
+                belief_prior=env.belief_prior,
                 policy_prior=policy,
                 policy_prior_params=learner.params,
                 trans_model=env.trans_model,
@@ -241,12 +247,19 @@ plt.tight_layout()
 plt.show()
 
 key, sub_key = random.split(key)
-_, states, actions = policy_evaluation(
+_, states, actions, beliefs = policy_evaluation_with_beliefs(
     rng_key=sub_key,
-    env_obj=env,
+    num_time_steps=env.num_time_steps,
+    num_trajectory_samples=1024,
+    num_belief_particles=num_belief_particles,
+    init_dist=env.init_dist,
+    belief_prior=env.belief_prior,
     policy=policy,
-    params=learner.params,
-    num_samples=16
+    policy_params=learner.params,
+    trans_model=env.trans_model,
+    obs_model=env.obs_model,
+    reward_fn=env.reward_fn,
+    stochastic=False
 )
 
 fig, axs = plt.subplots(3, 1, figsize=(10, 8))

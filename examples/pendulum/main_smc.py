@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -19,7 +19,7 @@ from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
     train_recurrent_neural_gauss_policy_pathwise,
 )
-from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_beliefs
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
@@ -80,13 +80,19 @@ for i in range(1, num_epochs + 1):
 
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(
+    rewards, *_ = policy_evaluation(
         rng_key=sub_key,
-        env_obj=env,
+        num_time_steps=env.num_time_steps,
+        num_trajectory_samples=1024,
+        init_dist=env.init_dist,
         policy=policy,
-        params=learner.params,
-        num_samples=1024,
+        policy_params=learner.params,
+        trans_model=env.trans_model,
+        obs_model=env.obs_model,
+        reward_fn=env.reward_fn,
+        stochastic=True
     )
+    avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
 
     # run nested smc
     key, sub_key = random.split(key)
@@ -96,7 +102,7 @@ for i in range(1, num_epochs + 1):
             num_time_steps=env.num_time_steps,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
-            init_prior=env.prior_dist,
+            belief_prior=env.belief_prior,
             policy_prior=policy,
             policy_prior_params=learner.params,
             trans_model=env.trans_model,
@@ -182,13 +188,19 @@ plt.tight_layout()
 plt.show()
 
 key, sub_key = random.split(key)
-_, states, actions = policy_evaluation(
+_, states, actions, beliefs = policy_evaluation_with_beliefs(
     rng_key=sub_key,
-    env_obj=env,
+    num_time_steps=env.num_time_steps,
+    num_trajectory_samples=1024,
+    num_belief_particles=num_belief_particles,
+    init_dist=env.init_dist,
+    belief_prior=env.belief_prior,
     policy=policy,
-    params=learner.params,
-    num_samples=1024,
-    stochastic=False,
+    policy_params=learner.params,
+    trans_model=env.trans_model,
+    obs_model=env.obs_model,
+    reward_fn=env.reward_fn,
+    stochastic=False
 )
 
 fig, axs = plt.subplots(3, 1, figsize=(10, 8))

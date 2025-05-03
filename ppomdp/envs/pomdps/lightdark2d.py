@@ -108,9 +108,13 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return -0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = MultivariateNormalDiag(
+init_dist = MultivariateNormalDiag(
     loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
-    scale_diag=jnp.array([1.25, 1.25, 1e-4, 1e-4])
+    scale_diag=jnp.array([1e-4, 1e-4, 1e-4, 1e-4])
+)
+belief_prior = MultivariateNormalDiag(
+    loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
+    scale_diag=jnp.array([1.0, 1.0, 1e-4, 1e-4])
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
@@ -122,7 +126,8 @@ LightDark2DEnv = POMDPEnv(
     action_dim,
     obs_dim,
     num_time_steps,
-    prior_dist,
+    init_dist,
+    belief_prior,
     trans_model,
     obs_model,
     reward_fn,

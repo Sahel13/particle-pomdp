@@ -164,7 +164,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
             num_time_steps=env_obj.num_time_steps,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
-            init_prior=env_obj.prior_dist,
+            belief_prior=env_obj.prior_dist,
             policy_prior=policy,
             policy_prior_params=learner.params,
             trans_model=env_obj.trans_model,

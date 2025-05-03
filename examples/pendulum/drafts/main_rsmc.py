@@ -143,7 +143,7 @@ for i in range(1, num_epochs + 1):
             num_time_steps=env.num_time_steps,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
-            init_prior=env.prior_dist,
+            belief_prior=env.prior_dist,
             policy_prior=policy_prior,
             policy_prior_params=policy_prior_params,
             policy_posterior=policy_posterior,

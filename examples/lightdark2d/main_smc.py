@@ -18,13 +18,12 @@ from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
     train_recurrent_neural_gauss_policy_pathwise
 )
-from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_beliefs
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from copy import deepcopy
 
 from ppomdp.envs.pomdps import LightDark2DEnv as env
 from ppomdp.envs.pomdps.lightdark2d import stddev_obs
@@ -81,14 +80,19 @@ for i in range(1, num_epochs + 1):
 
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(
+    rewards, *_ = policy_evaluation(
         rng_key=sub_key,
-        env_obj=env,
+        num_time_steps=env.num_time_steps,
+        num_trajectory_samples=1024,
+        init_dist=env.init_dist,
         policy=policy,
-        params=learner.params,
-        num_samples=1024,
-        stochastic=True
+        policy_params=learner.params,
+        trans_model=env.trans_model,
+        obs_model=env.obs_model,
+        reward_fn=env.reward_fn,
+        stochastic=False
     )
+    avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
 
     # run nested smc
     key, sub_key = random.split(key)
@@ -98,7 +102,7 @@ for i in range(1, num_epochs + 1):
             num_time_steps=env.num_time_steps,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
-            init_prior=env.prior_dist,
+            belief_prior=env.belief_prior,
             policy_prior=policy,
             policy_prior_params=learner.params,
             trans_model=env.trans_model,
@@ -162,91 +166,91 @@ for i in range(1, num_epochs + 1):
     )
 
 
-eval_params = deepcopy(learner.params)
-eval_params["decoder"]["log_std"] = -20.0 * jnp.ones((env.action_dim,))
-
 key, sub_key = random.split(key)
-history_states, belief_states, belief_infos, _ = \
-    smc(
-        rng_key=sub_key,
-        num_time_steps=env.num_time_steps,
-        num_history_particles=num_history_particles,
-        num_belief_particles=num_belief_particles,
-        init_prior=env.prior_dist,
-        policy_prior=policy,
-        policy_prior_params=eval_params,
-        trans_model=env.trans_model,
-        obs_model=env.obs_model,
-        reward_fn=env.reward_fn,
-        slew_rate_penalty=0.0,
-        tempering=0.0,
-        history_resample_fn=systematic_resampling,
-        belief_resample_fn=multinomial_resampling,
-    )
+rewards, states, actions, beliefs = policy_evaluation_with_beliefs(
+    rng_key=sub_key,
+    num_time_steps=env.num_time_steps,
+    num_trajectory_samples=1024,
+    num_belief_particles=num_belief_particles,
+    init_dist=env.init_dist,
+    belief_prior=env.belief_prior,
+    policy=policy,
+    policy_params=learner.params,
+    trans_model=env.trans_model,
+    obs_model=env.obs_model,
+    reward_fn=env.reward_fn,
+    stochastic=False
+)
+average_return = jnp.mean(jnp.sum(rewards, axis=0))
 
-observations = history_states.particles.observations
-actions = history_states.particles.actions
-state_means = belief_infos.mean
-state_covars = belief_infos.covar
+# --- Plot 1: State and Action Trajectories ---
+fig, axs = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
+num_trajectories_to_plot = min(10, states.shape[1]) # Plot up to 10 trajectories
+plot_indices = random.choice(key, states.shape[1], shape=(num_trajectories_to_plot,), replace=False)
 
-fig, axs = plt.subplots(4, 1, figsize=(8, 8))
-for n in range(num_history_particles):
-    axs[0].plot(state_means[:, n, 0])
-    axs[0].set_ylabel('State-1')
+axs[0].plot(states[:, plot_indices, 0])
+axs[0].set_ylabel('State-1')
 
-    axs[1].plot(state_means[:, n, 1])
-    axs[1].set_ylabel('State-2')
+axs[1].plot(states[:, plot_indices, 1])
+axs[1].set_ylabel('State-2')
 
-    axs[2].plot(actions[:, n, 0])
-    axs[2].set_ylabel('Act-1')
+axs[2].plot(actions[:, plot_indices, 0])
+axs[2].set_ylabel('Act-1')
 
-    axs[3].plot(actions[:, n, 1])
-    axs[3].set_ylabel('Act-2')
-
-    # axs[4].plot(state_covars[:, n, 0, 0])
-    # axs[4].set_ylabel('Var-1')
-    #
-    # axs[5].plot(state_covars[:, n, 1, 1])
-    # axs[5].set_xlabel('Time Step')
-    # axs[5].set_ylabel('Var-2')
+axs[3].plot(actions[:, plot_indices, 1])
+axs[3].set_ylabel('Act-2')
+axs[3].set_xlabel('Time Step')
 
 plt.tight_layout()
 plt.show()
 
-# plot environment
+# --- Plot 2: Environment, Mean Trajectories, and Covariance Ellipses ---
+
+# Helper function to plot covariance ellipse
+def plot_covariance_ellipse(ax, data, mean, color):
+    """Calculates and plots a covariance ellipse for 2D data."""
+    covar = jnp.cov(data, rowvar=False)
+    eigvals, eigvecs = jnp.linalg.eigh(covar)
+    angle = jnp.degrees(jnp.arctan2(eigvecs[1, 0], eigvecs[0, 0])) 
+    width, height = jnp.sqrt(jnp.maximum(eigvals, 1e-9)) # Use std dev for ellipse size
+    ell = patches.Ellipse(mean, width, height, angle=angle, edgecolor=color, facecolor='none')
+    ax.add_patch(ell)
+
+fig_env, ax_env = plt.subplots(1, 1, figsize=(8, 6))
+
+# Plot environment background (observation noise level)
 xgrid = jnp.linspace(-1.0, 6.0, 100)
 ygrid = jnp.linspace(-2.0, 2.5, 100)
 X, Y = jnp.meshgrid(xgrid, ygrid)
 
 Z = jnp.zeros_like(X)
-for i in range(X.shape[0]):
-    for j in range(X.shape[1]):
-        xy = jnp.array([X[i, j], Y[i, j], 0.0, 0.0])
-        Z = Z.at[i, j].set(
-            jnp.linalg.norm(stddev_obs(xy))
-        )
+for r in range(X.shape[0]):
+    for c in range(X.shape[1]):
+        # Assuming state includes position (x, y) and potentially velocity (vx, vy)
+        # Construct a state vector at the grid point with zero velocity if needed
+        state_at_grid = jnp.array([X[r, c], Y[r, c]] + [0.0] * (env.state_dim - 2))
+        if env.state_dim >= 2:
+            light_level = jnp.linalg.norm(stddev_obs(state_at_grid[:env.state_dim]))
+            Z = Z.at[r, c].set(light_level)
 
-plt.imshow(-Z, extent=(-1.0, 6.0, -2.0, 2.5), origin='lower', cmap='gray')
-plt.title('Light-Dark Environment')
-plt.xlabel('X')
-plt.ylabel('Y')
 
-# plot means and covars
-plt.plot(
-    jnp.mean(state_means, axis=1)[:, 0],
-    jnp.mean(state_means, axis=1)[:, 1], 'r-'
-)
+im = ax_env.imshow(-Z, extent=(xgrid.min(), xgrid.max(), ygrid.min(), ygrid.max()), origin='lower', cmap='gray', aspect='auto')
+plt.colorbar(im, ax=ax_env, label='Observation Noise Magnitude (Negative)')
+ax_env.set_title('Light-Dark Environment with State and Belief Evolution')
+ax_env.set_xlabel('X Position')
+ax_env.set_ylabel('Y Position')
 
-for t in range(0, env.num_time_steps + 1, 2):
-    mean = jnp.mean(state_means, axis=1)[t, :2]
-    covar = jnp.mean(state_covars, axis=1)[t, :2, :2]
+# Plot mean state and belief trajectories
+mean_states_2d = jnp.mean(states[:, :, :2], axis=1)
+mean_beliefs_2d = jnp.mean(beliefs.particles[:, :, :, :2], axis=(1, 2))
 
-    eigvals, eigvecs = jnp.linalg.eigh(covar)
-    angle = jnp.degrees(jnp.arctan2(eigvecs[0, 1], eigvecs[0, 0]))
-    width, height = jnp.sqrt(eigvals)
-    ell = patches.Ellipse(
-        mean, width, height, angle=angle, edgecolor='b', facecolor='none'
-    )
-    plt.gca().add_patch(ell)
+ax_env.plot(mean_states_2d[:, 0], mean_states_2d[:, 1], 'r-')
+ax_env.plot(mean_beliefs_2d[:, 0], mean_beliefs_2d[:, 1], 'g-')
+
+# Plot covariance ellipses at intervals
+plot_ellipse_interval = max(1, env.num_time_steps // 10) # Adjust interval as needed
+for t in range(0, env.num_time_steps + 1, plot_ellipse_interval):
+    plot_covariance_ellipse(ax_env, states[t, :, :2], mean_states_2d[t], 'b')
+    plot_covariance_ellipse(ax_env, jnp.mean(beliefs.particles[t, :, :, :2], axis=1), mean_beliefs_2d[t], 'm')
 
 plt.show()

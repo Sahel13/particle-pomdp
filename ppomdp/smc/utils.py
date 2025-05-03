@@ -3,6 +3,7 @@ from typing import Callable
 
 import jax
 from jax import numpy as jnp, Array, random
+from distrax import Distribution
 
 from ppomdp.core import (
     PRNGKey,
@@ -567,3 +568,43 @@ def effective_sample_size(log_weights: Array) -> Array:
             The effective sample size
     """
     return jnp.exp(log_ess(log_weights))
+
+
+def belief_init(
+    rng_key: PRNGKey,
+    prior_belief: Distribution,
+    obs_model: ObservationModel,
+    observation: Array,
+    num_belief_particles: int
+) -> BeliefState:
+    particles = prior_belief.sample(seed=rng_key, sample_shape=(num_belief_particles,))
+    log_weights = jax.vmap(obs_model.log_prob, (None, 0))(observation, particles)
+    weights = jnp.exp(log_weights - jax.nn.logsumexp(log_weights))
+    resampling_indices = jnp.zeros(num_belief_particles, dtype=jnp.int32)
+    return BeliefState(
+        particles=particles,
+        log_weights=log_weights,
+        weights=weights,
+        resampling_indices=resampling_indices
+    )
+
+
+def belief_update(
+    rng_key: PRNGKey,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    belief_state: BeliefState,
+    observation: Array,
+    action: Array,
+) -> BeliefState:
+    key, sub_key = random.split(rng_key, 2)
+    resampled_belief = resample_belief(sub_key, belief_state, systematic_resampling)
+    key, sub_key = random.split(key, 2)
+    particles = propagate_belief(
+        rng_key=sub_key,
+        model=trans_model,
+        particles=resampled_belief.particles,
+        action=action
+    )
+    resampled_belief = resampled_belief._replace(particles=particles)
+    return reweight_belief(obs_model, resampled_belief, observation)
