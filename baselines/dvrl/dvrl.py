@@ -5,7 +5,6 @@ import jax
 import optax
 
 from jax import Array, random, numpy as jnp
-from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
@@ -292,14 +291,11 @@ def create_train_state(
     critic_lr: float,
     num_belief_particles: int,
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
-
-    policy_log_std = jnp.log(1.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         encoding_dim=32,
         hidden_sizes=(256, 256),
         output_dim=env_obj.action_dim,
-        init_log_std=constant(policy_log_std),
     )
     critic_networks = CriticNetwork(
         feature_fn=env_obj.feature_fn,
@@ -315,9 +311,7 @@ def create_train_state(
     dummy_time = jnp.empty((1,), dtype=jnp.int32)
 
     critic_key, policy_key = random.split(rng_key)
-    policy_params = policy_network.init(policy_key, dummy_particles, dummy_weights)[
-        "params"
-    ]
+    policy_params = policy_network.init(policy_key, dummy_particles, dummy_weights)["params"]
     critic_params = critic_networks.init(
         critic_key, dummy_particles, dummy_weights, dummy_actions, dummy_time
     )
@@ -355,7 +349,6 @@ def pomdp_rollout(
     random_actions: bool,
 ):
     """Simulate trajectories with the DVRL policy."""
-
     def body(pomdp_state, key):
         pomdp_state = pomdp_step(
             rng_key=key,

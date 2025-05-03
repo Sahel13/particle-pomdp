@@ -90,7 +90,7 @@ history_states, belief_states, belief_infos, _ = \
         reward_fn=env.reward_fn,
         slew_rate_penalty=slew_rate_penalty,
         tempering=tempering,
-        history_resample_fn=systematic_resampling,
+        history_resample_fn=multinomial_resampling,
         belief_resample_fn=multinomial_resampling,
     )
 

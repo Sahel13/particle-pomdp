@@ -146,10 +146,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
 
             if logger:
                 logger.log_metrics(
-                    {
-                        "average_return": avg_return,
-                        "policy_log_std": train_state.policy_state.params["log_std"][0],
-                    },
+                    {"average_return": avg_return},
                     step=global_step,
                 )
 
@@ -164,13 +161,19 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
 
 def main(config: DVRLExperiment) -> None:
     # Generate unique identifier for group
-    identifier = get_unique_identifier()
+    if config.experiment_id:
+        identifier = config.experiment_id
+    else:
+        identifier = get_unique_identifier()
 
     experiment_group = config.experiment_group + identifier
     config = config._replace(experiment_group=experiment_group)
 
     # Run experiments for each seed
-    for seed in tqdm(range(config.num_seeds), desc="Running seeds"):
+    for seed in tqdm(
+        range(config.starting_seed, config.starting_seed + config.num_seeds),
+        desc="Running seeds",
+    ):
         run_single_seed(config, seed)
 
     print("Experiment completed.")
