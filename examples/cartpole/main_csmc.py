@@ -21,6 +21,7 @@ from ppomdp.policy.gauss import (
     train_recurrent_neural_gauss_policy_pathwise
 )
 from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
@@ -78,14 +79,16 @@ history_states, belief_states, belief_infos, _ = \
         num_time_steps=env.num_time_steps,
         num_history_particles=int(10 * num_history_particles),
         num_belief_particles=num_belief_particles,
-        init_prior=env.prior_dist,
+        belief_prior=env.belief_prior,
         policy_prior=policy,
         policy_prior_params=learner.params,
         trans_model=env.trans_model,
         obs_model=env.obs_model,
         reward_fn=env.reward_fn,
         slew_rate_penalty=slew_rate_penalty,
-        tempering=tempering
+        tempering=tempering,
+        history_resample_fn=systematic_resampling,
+        belief_resample_fn=multinomial_resampling,
     )
 
 # trace ancestors of history states
@@ -109,13 +112,19 @@ for i in range(1, num_epochs + 1):
 
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(
+    rewards, *_ = policy_evaluation(
         rng_key=sub_key,
-        env_obj=env,
+        num_time_steps=env.num_time_steps,
+        num_trajectory_samples=1024,
+        init_dist=env.init_dist,
         policy=policy,
-        params=learner.params,
-        num_samples=1024
+        policy_params=learner.params,
+        trans_model=env.trans_model,
+        obs_model=env.obs_model,
+        reward_fn=env.reward_fn,
+        stochastic=True
     )
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
     for _ in range(num_moves):
         # run nested conditional smc
@@ -126,7 +135,7 @@ for i in range(1, num_epochs + 1):
                 num_time_steps=env.num_time_steps,
                 num_history_particles=num_history_particles,
                 num_belief_particles=num_belief_particles,
-                init_prior=env.prior_dist,
+                belief_prior=env.belief_prior,
                 policy_prior=policy,
                 policy_prior_params=learner.params,
                 trans_model=env.trans_model,
@@ -134,7 +143,9 @@ for i in range(1, num_epochs + 1):
                 reward_fn=env.reward_fn,
                 slew_rate_penalty=slew_rate_penalty,
                 tempering=tempering,
-                reference=reference
+                reference=reference,
+                history_resample_fn=multinomial_resampling,
+                belief_resample_fn=multinomial_resampling,
             )
 
         num_steps += (env.num_time_steps + 1) * num_history_particles
@@ -176,7 +187,7 @@ for i in range(1, num_epochs + 1):
         f"Epoch: {i:3d}, "
         f"Num steps: {num_steps:6d}, "
         f"Log marginal: {log_marginal:.3f}, "
-        f"Reward: {avg_reward:.3f}, "
+        f"Reward: {avg_return:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )
@@ -185,10 +196,17 @@ for i in range(1, num_epochs + 1):
 key, sub_key = random.split(key)
 _, states, actions = policy_evaluation(
     rng_key=sub_key,
-    env_obj=env,
+    num_time_steps=env.num_time_steps,
+    num_trajectory_samples=1024,
+    num_belief_particles=num_belief_particles,
+    init_dist=env.init_dist,
+    belief_prior=env.belief_prior,
     policy=policy,
-    params=learner.params,
-    num_samples=16
+    policy_params=learner.params,
+    trans_model=env.trans_model,
+    obs_model=env.obs_model,
+    reward_fn=env.reward_fn,
+    stochastic=False
 )
 
 # Plot the results

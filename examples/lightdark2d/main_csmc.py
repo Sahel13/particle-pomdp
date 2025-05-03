@@ -12,8 +12,7 @@ from flax.training.train_state import TrainState
 from distrax import Block
 
 from ppomdp.core import Reference
-from ppomdp.smc._smc import smc, backward_tracing
-from ppomdp.smc._csmc import csmc
+from ppomdp.smc import smc, csmc, backward_tracing
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
@@ -24,7 +23,6 @@ from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_b
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
-from copy import deepcopy
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -93,7 +91,7 @@ history_states, belief_states, belief_infos, _ = \
         reward_fn=env.reward_fn,
         slew_rate_penalty=slew_rate_penalty,
         tempering=tempering,
-        history_resample_fn=systematic_resampling,
+        history_resample_fn=multinomial_resampling,
         belief_resample_fn=multinomial_resampling,
     )
 
@@ -139,7 +137,7 @@ for i in range(1, num_epochs + 1):
         trans_model=env.trans_model,
         obs_model=env.obs_model,
         reward_fn=env.reward_fn,
-        stochastic=False
+        stochastic=True
     )
     avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
 
@@ -161,7 +159,9 @@ for i in range(1, num_epochs + 1):
                 reward_fn=env.reward_fn,
                 tempering=tempering,
                 slew_rate_penalty=slew_rate_penalty,
-                reference=reference
+                reference=reference,
+                history_resample_fn=multinomial_resampling,
+                belief_resample_fn=multinomial_resampling,
             )
 
         # trace ancestors of history states
@@ -236,7 +236,7 @@ rewards, states, actions, beliefs = policy_evaluation_with_beliefs(
     reward_fn=env.reward_fn,
     stochastic=False
 )
-average_return = jnp.mean(jnp.sum(rewards, axis=0))
+avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
 # --- Plot 1: State and Action Trajectories ---
 fig, axs = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
@@ -266,7 +266,7 @@ def plot_covariance_ellipse(ax, data, mean, color):
     """Calculates and plots a covariance ellipse for 2D data."""
     covar = jnp.cov(data, rowvar=False)
     eigvals, eigvecs = jnp.linalg.eigh(covar)
-    angle = jnp.degrees(jnp.arctan2(eigvecs[1, 0], eigvecs[0, 0])) 
+    angle = jnp.degrees(jnp.arctan2(eigvecs[1, 0], eigvecs[0, 0]))
     width, height = jnp.sqrt(jnp.maximum(eigvals, 1e-9)) # Use std dev for ellipse size
     ell = patches.Ellipse(mean, width, height, angle=angle, edgecolor=color, facecolor='none')
     ax.add_patch(ell)

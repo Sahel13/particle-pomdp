@@ -92,7 +92,7 @@ for i in range(1, num_epochs + 1):
         reward_fn=env.reward_fn,
         stochastic=False
     )
-    avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
     # run nested smc
     key, sub_key = random.split(key)
@@ -160,7 +160,7 @@ for i in range(1, num_epochs + 1):
         f"Epoch: {i:3d}, "
         f"Num steps: {num_steps:6d}, "
         f"Log marginal: {log_marginal / tempering:.3f}, "
-        f"Reward: {avg_reward:.3f}, "
+        f"Reward: {avg_return:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )
@@ -181,7 +181,7 @@ rewards, states, actions, beliefs = policy_evaluation_with_beliefs(
     reward_fn=env.reward_fn,
     stochastic=False
 )
-average_return = jnp.mean(jnp.sum(rewards, axis=0))
+avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
 # --- Plot 1: State and Action Trajectories ---
 fig, axs = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
@@ -211,7 +211,7 @@ def plot_covariance_ellipse(ax, data, mean, color):
     """Calculates and plots a covariance ellipse for 2D data."""
     covar = jnp.cov(data, rowvar=False)
     eigvals, eigvecs = jnp.linalg.eigh(covar)
-    angle = jnp.degrees(jnp.arctan2(eigvecs[1, 0], eigvecs[0, 0])) 
+    angle = jnp.degrees(jnp.arctan2(eigvecs[1, 0], eigvecs[0, 0]))
     width, height = jnp.sqrt(jnp.maximum(eigvals, 1e-9)) # Use std dev for ellipse size
     ell = patches.Ellipse(mean, width, height, angle=angle, edgecolor=color, facecolor='none')
     ax.add_patch(ell)

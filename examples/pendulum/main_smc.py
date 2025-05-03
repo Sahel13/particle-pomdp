@@ -92,7 +92,7 @@ for i in range(1, num_epochs + 1):
         reward_fn=env.reward_fn,
         stochastic=True
     )
-    avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
     # run nested smc
     key, sub_key = random.split(key)
@@ -160,7 +160,7 @@ for i in range(1, num_epochs + 1):
         f"Epoch: {i:3d}, "
         f"Num steps: {num_steps:6d}, "
         f"Log marginal: {log_marginal / tempering:.3f}, "
-        f"Reward: {avg_reward:.3f}, "
+        f"Reward: {avg_return:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )
