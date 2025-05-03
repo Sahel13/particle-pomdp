@@ -12,7 +12,7 @@ class MDPEnv(NamedTuple):
     state_dim: int
     action_dim: int
     num_time_steps: int
-    prior_dist: Distribution
+    init_dist: Distribution
     trans_model: TransitionModel
     reward_fn: RewardFn
     feature_fn: Callable

@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 from jax import random, numpy as jnp
@@ -118,7 +118,7 @@ if __name__ == "__main__":
         return (next_state, time_idx + 1), (next_state, action)
 
     key, state_key = random.split(key)
-    init_state = env_obj.prior_dist.sample(seed=state_key)
+    init_state = env_obj.init_dist.sample(seed=state_key)
 
     _, (states, actions) = jax.lax.scan(
         f=body_fn,

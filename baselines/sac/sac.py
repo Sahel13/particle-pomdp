@@ -17,10 +17,7 @@ from ppomdp.envs.core import MDPEnv, MDPState
 from baselines.sac.arch import PolicyNetwork, CriticNetwork
 from baselines.sac.utils import policy_sample_and_log_prob
 
-from baselines.common import (
-    JointTrainState,
-    sample_random_actions
-)
+from baselines.common import JointTrainState, sample_random_actions
 
 from copy import deepcopy
 
@@ -33,7 +30,7 @@ def mdp_init(
 ) -> MDPState:
 
     key, state_key, action_key = random.split(rng_key, 3)
-    states = env_obj.prior_dist.sample(seed=state_key, sample_shape=(env_obj.num_envs,))
+    states = env_obj.init_dist.sample(seed=state_key, sample_shape=(env_obj.num_envs,))
     time_idxs = jnp.zeros(env_obj.num_envs, dtype=jnp.int32)
 
     actions = sample_random_actions(action_key, env_obj) if random_actions \

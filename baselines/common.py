@@ -2,17 +2,11 @@ from typing import NamedTuple, Dict, Union
 
 import jax
 from flax.training.train_state import TrainState
-from jax import Array, random, numpy as jnp
+from jax import Array, random
 
-from ppomdp.core import PRNGKey, BeliefState
+from ppomdp.core import PRNGKey
 from ppomdp.envs import mdps, pomdps
 from ppomdp.envs.core import MDPEnv, POMDPEnv
-from ppomdp.smc.utils import (
-    resample_belief,
-    propagate_belief,
-    reweight_belief,
-    systematic_resampling
-)
 
 
 def get_mdp(env_name: str) -> MDPEnv:
@@ -57,40 +51,6 @@ def sample_random_actions(
         minval=-1.0,
         maxval=1.0
     )
-
-
-def belief_init(
-    rng_key: PRNGKey,
-    env_obj: POMDPEnv,
-    observation: Array,
-    num_belief_particles: int
-) -> BeliefState:
-    particles = env_obj.prior_dist.sample(seed=rng_key, sample_shape=(num_belief_particles,))
-    log_weights = jax.vmap(env_obj.obs_model.log_prob, (None, 0))(observation, particles)
-    logsum_weights = jax.nn.logsumexp(log_weights)
-    weights = jnp.exp(log_weights - logsum_weights)
-    dummy_resampling_indices = jnp.zeros(num_belief_particles, dtype=jnp.int32)
-    return BeliefState(particles, log_weights, weights, dummy_resampling_indices)
-
-
-def belief_update(
-    rng_key: PRNGKey,
-    env_obj: POMDPEnv,
-    belief_state: BeliefState,
-    observation: Array,
-    action: Array,
-) -> BeliefState:
-    key, sub_key = random.split(rng_key, 2)
-    resampled_belief = resample_belief(sub_key, belief_state, systematic_resampling)
-    key, sub_key = random.split(key, 2)
-    particles = propagate_belief(
-        rng_key=sub_key,
-        model=env_obj.trans_model,
-        particles=resampled_belief.particles,
-        action=action
-    )
-    resampled_belief = resampled_belief._replace(particles=particles)
-    return reweight_belief(env_obj.obs_model, resampled_belief, observation)
 
 
 def sample_hidden_states(

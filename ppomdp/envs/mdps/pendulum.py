@@ -88,8 +88,8 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-# prior_dist = Deterministic(jnp.zeros(state_dim))
-prior_dist = MultivariateNormalDiag(
+# init_dist = Deterministic(jnp.zeros(state_dim))
+init_dist = MultivariateNormalDiag(
     loc=jnp.zeros(state_dim),
     scale_diag=jnp.array([1e-2, 1e-1])
 )
@@ -108,7 +108,7 @@ PendulumEnv = MDPEnv(
     state_dim,
     action_dim,
     num_time_steps,
-    prior_dist,
+    init_dist,
     trans_model,
     reward_fn,
     feature_fn,

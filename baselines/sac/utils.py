@@ -1,21 +1,8 @@
-from jax import Array, random, numpy as jnp
+from jax import Array, numpy as jnp
 from distrax import Chain, MultivariateNormalDiag, Transformed
 
 from ppomdp.core import PRNGKey, Parameters
-from ppomdp.envs.core import MDPEnv
 from baselines.sac.arch import PolicyNetwork
-
-
-def sample_random_actions(
-    rng_key: PRNGKey,
-    env_obj: MDPEnv,
-) -> Array:
-    return random.uniform(
-        key=rng_key,
-        shape=(env_obj.num_envs, env_obj.action_dim),
-        minval=-1.0,
-        maxval=1.0
-    )
 
 
 def policy_sample(
