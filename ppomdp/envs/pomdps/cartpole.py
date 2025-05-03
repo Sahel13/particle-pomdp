@@ -1,9 +1,14 @@
 from functools import partial
 
 import jax
-from distrax import Block, Deterministic, MultivariateNormalDiag, ScalarAffine
-from jax import Array
-from jax import numpy as jnp
+from jax import Array, numpy as jnp
+
+from distrax import (
+    Block,
+    ScalarAffine,
+    Deterministic,
+    MultivariateNormalDiag,
+)
 
 from ppomdp.core import ObservationModel, PRNGKey, TransitionModel
 from ppomdp.envs.core import POMDPEnv
@@ -96,8 +101,8 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return -0.5 * state_cost - 0.5 * action_cost
 
 
-# prior_dist = Deterministic(jnp.zeros(state_dim))
-prior_dist = MultivariateNormalDiag(
+init_dist = Deterministic(jnp.zeros(state_dim))
+belief_prior = MultivariateNormalDiag(
     loc=jnp.zeros(state_dim),
     scale_diag=jnp.array([1e-4, 1e-2, 1e-4, 1e-2])
 )
@@ -113,14 +118,15 @@ def feature_fn(state: Array) -> Array:
 
 
 CartPoleEnv = POMDPEnv(
-    num_envs,
-    state_dim,
-    action_dim,
-    obs_dim,
-    num_time_steps,
-    prior_dist,
-    trans_model,
-    obs_model,
-    reward_fn,
-    feature_fn,
+    num_envs=num_envs,
+    state_dim=state_dim,
+    action_dim=action_dim,
+    obs_dim=obs_dim,
+    num_time_steps=num_time_steps,
+    init_dist=init_dist,
+    belief_prior=belief_prior,
+    trans_model=trans_model,
+    obs_model=obs_model,
+    reward_fn=reward_fn,
+    feature_fn=feature_fn,
 )

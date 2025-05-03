@@ -114,10 +114,6 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-# init_dist = MultivariateNormalDiag(
-#     loc=jnp.zeros(state_dim),
-#     scale_diag=jnp.array([1e-2, 1e-2])
-# )
 init_dist = Deterministic(jnp.zeros(state_dim))
 belief_prior = MultivariateNormalDiag(
     loc=jnp.zeros(state_dim),
@@ -135,15 +131,15 @@ def feature_fn(state: Array) -> Array:
 
 
 PendulumEnv = POMDPEnv(
-    num_envs,
-    state_dim,
-    action_dim,
-    obs_dim,
-    num_time_steps,
-    init_dist,
-    belief_prior,
-    trans_model,
-    obs_model,
-    reward_fn,
-    feature_fn,
+    num_envs=num_envs,
+    state_dim=state_dim,
+    action_dim=action_dim,
+    obs_dim=obs_dim,
+    num_time_steps=num_time_steps,
+    init_dist=init_dist,
+    belief_prior=belief_prior,
+    trans_model=trans_model,
+    obs_model=obs_model,
+    reward_fn=reward_fn,
+    feature_fn=feature_fn,
 )

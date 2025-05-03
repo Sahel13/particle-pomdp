@@ -99,7 +99,6 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
 init_dist = Deterministic(jnp.zeros(state_dim))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 
-
 @partial(jnp.vectorize, signature="(m)->(n)")
 def feature_fn(state: Array) -> Array:
     x, q, xd, qd = state
@@ -108,12 +107,12 @@ def feature_fn(state: Array) -> Array:
 
 
 CartPoleEnv = MDPEnv(
-    num_envs,
-    state_dim,
-    action_dim,
-    num_time_steps,
-    init_dist,
-    trans_model,
-    reward_fn,
-    feature_fn,
+    num_envs=num_envs,
+    state_dim=state_dim,
+    action_dim=action_dim,
+    num_time_steps=num_time_steps,
+    init_dist=init_dist,
+    trans_model=trans_model,
+    reward_fn=reward_fn,
+    feature_fn=feature_fn,
 )

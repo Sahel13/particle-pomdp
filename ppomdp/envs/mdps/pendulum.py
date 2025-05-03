@@ -88,13 +88,8 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-# init_dist = Deterministic(jnp.zeros(state_dim))
-init_dist = MultivariateNormalDiag(
-    loc=jnp.zeros(state_dim),
-    scale_diag=jnp.array([1e-2, 1e-1])
-)
+init_dist = Deterministic(jnp.zeros(state_dim))
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
-
 
 @partial(jnp.vectorize, signature="(n)->(m)")
 def feature_fn(state: Array) -> Array:
@@ -104,12 +99,12 @@ def feature_fn(state: Array) -> Array:
 
 
 PendulumEnv = MDPEnv(
-    num_envs,
-    state_dim,
-    action_dim,
-    num_time_steps,
-    init_dist,
-    trans_model,
-    reward_fn,
-    feature_fn,
+    num_envs=num_envs,
+    state_dim=state_dim,
+    action_dim=action_dim,
+    num_time_steps=num_time_steps,
+    init_dist=init_dist,
+    trans_model=trans_model,
+    reward_fn=reward_fn,
+    feature_fn=feature_fn,
 )

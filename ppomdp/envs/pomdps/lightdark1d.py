@@ -1,9 +1,11 @@
 import jax
+
 from jax import Array, numpy as jnp
 from distrax import (
     Block,
     ScalarAffine,
-    MultivariateNormalDiag
+    MultivariateNormalDiag,
+    Deterministic
 )
 
 from ppomdp.core import (
@@ -91,7 +93,8 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - 0.5 * state_cost - 0.5 * action_cost
 
 
-prior_dist = MultivariateNormalDiag(
+init_dist = Deterministic(jnp.array([2.0]))
+belief_prior = MultivariateNormalDiag(
     loc=2.0 * jnp.ones((state_dim,)),
     scale_diag=1.0 * jnp.ones((state_dim,))
 )
@@ -105,7 +108,8 @@ LightDark1DEnv = POMDPEnv(
     action_dim=action_dim,
     obs_dim=obs_dim,
     num_time_steps=num_time_steps,
-    prior_dist=prior_dist,
+    init_dist=init_dist,
+    belief_prior=belief_prior,
     trans_model=trans_model,
     obs_model=obs_model,
     reward_fn=reward_fn,

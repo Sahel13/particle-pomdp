@@ -80,12 +80,12 @@ trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 feature_fn = lambda x: x
 
 LightDark2DEnv = MDPEnv(
-    num_envs,
-    state_dim,
-    action_dim,
-    num_time_steps,
-    init_dist,
-    trans_model,
-    reward_fn,
-    feature_fn,
+    num_envs=num_envs,
+    state_dim=state_dim,
+    action_dim=action_dim,
+    num_time_steps=num_time_steps,
+    init_dist=init_dist,
+    trans_model=trans_model,
+    reward_fn=reward_fn,
+    feature_fn=feature_fn,
 )

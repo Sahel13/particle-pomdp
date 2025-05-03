@@ -126,14 +126,14 @@ def feature_fn(z: Array) -> Array:
 
 
 TargetEnv = POMDPEnv(
-    num_envs,
-    state_dim,
-    action_dim,
-    obs_dim,
-    num_time_steps,
-    prior_dist,
-    trans_model,
-    obs_model,
-    reward_fn,
-    feature_fn,
+    num_envs=num_envs,
+    state_dim=state_dim,
+    action_dim=action_dim,
+    obs_dim=obs_dim,
+    num_time_steps=num_time_steps,
+    init_dist=prior_dist,
+    trans_model=trans_model,
+    obs_model=obs_model,
+    reward_fn=reward_fn,
+    feature_fn=feature_fn,
 )
