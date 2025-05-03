@@ -146,12 +146,23 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
 
     # Check policy performance before training
     key, sub_key = random.split(key)
-    avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
-    print(f"Step: {num_steps:6d} | Average reward: {avg_reward:8.3f}")
+    rewards, *_ = policy_evaluation(
+        rng_key=sub_key,
+        num_time_steps=env_obj.num_time_steps,
+        num_trajectory_samples=1024,
+        init_dist=env_obj.init_dist,
+        policy=policy,
+        policy_params=learner.params,
+        trans_model=env_obj.trans_model,
+        obs_model=env_obj.obs_model,
+        reward_fn=env_obj.reward_fn,
+    )
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
+    print(f"Step: {num_steps:6d} | Average return: {avg_return:8.3f}")
 
     if logger:
         logger.log_metrics({
-            "average_reward": avg_reward,
+            "average_return": avg_return,
             "policy_entropy": policy.entropy(learner.params),
         }, step=num_steps)
 
@@ -164,7 +175,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
             num_time_steps=env_obj.num_time_steps,
             num_history_particles=num_history_particles,
             num_belief_particles=num_belief_particles,
-            belief_prior=env_obj.prior_dist,
+            belief_prior=env_obj.belief_prior,
             policy_prior=policy,
             policy_prior_params=learner.params,
             trans_model=env_obj.trans_model,
@@ -214,11 +225,22 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
 
         # Evaluate the policy
         key, sub_key = random.split(key)
-        avg_reward, *_ = policy_evaluation(sub_key, env_obj, policy, learner.params)
+        rewards, *_ = policy_evaluation(
+            rng_key=sub_key,
+            num_time_steps=env_obj.num_time_steps,
+            num_trajectory_samples=1024,
+            init_dist=env_obj.init_dist,
+            policy=policy,
+            policy_params=learner.params,
+            trans_model=env_obj.trans_model,
+            obs_model=env_obj.obs_model,
+            reward_fn=env_obj.reward_fn,
+        )
+        avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
         if logger:
             logger.log_metrics({
-                "average_reward": avg_reward,
+                "average_return": avg_return,
                 "log_marginal": log_marginal,
                 "policy_entropy": policy.entropy(learner.params),
             }, step=num_steps)
@@ -226,7 +248,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
         print(
             f"Step: {num_steps:6d} | "
             f"Log marginal: {log_marginal:8.3f} | "
-            f"Average reward: {avg_reward:8.3f} | "
+            f"Average return: {avg_return:8.3f} | "
             f"Entropy: {policy.entropy(learner.params):8.3}"
         )
 

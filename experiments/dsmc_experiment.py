@@ -85,6 +85,18 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
         num_planner_particles=config.num_planner_particles,
     )
 
+    # Check policy performance before training
+    key, eval_key = random.split(key)
+    avg_return, *_ = policy_evaluation(
+        rng_key=eval_key,
+        env_obj=env_obj,
+        policy_state=train_state.policy_state,
+        num_belief_particles=config.num_belief_particles
+    )
+
+    if logger:
+        logger.log_metrics({"average_return": avg_return}, step=0)
+
     # Initialize POMDP state
     key, init_key = random.split(key)
     pomdp_states = pomdp_rollout(
@@ -159,10 +171,7 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
             )
 
             if logger:
-                logger.log_metrics(
-                    {"average_return": avg_return},
-                    step=global_step,
-                )
+                logger.log_metrics({"average_return": avg_return}, step=global_step)
 
             print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 
