@@ -27,6 +27,7 @@ class P3OExperiment(NamedTuple):
     # Environment settings
     env_id: str
     num_seeds: int = 10
+    starting_seed: int = 0
     cuda_device: str = "0"
 
     # Algorithm hyperparameters
@@ -54,4 +55,5 @@ class P3OExperiment(NamedTuple):
     project_name: str = "particle-pomdp"
     experiment_group: str = "p3o"
     experiment_tags: Optional[List[str]] = ["p3o", "test"]
+    experiment_id: Optional[str] = None
     logger_directory: str = "logs"
