@@ -2,17 +2,17 @@ from functools import partial
 from typing import NamedTuple
 
 import jax
-from distrax import Chain, MultivariateNormalDiag, Transformed
-from flax.training.train_state import TrainState
-from jax import Array
-from jax import numpy as jnp
-from jax import random
 
-from baselines.common import belief_init, belief_update
-from baselines.dsmc.arch import PolicyNetwork
+from jax import Array, random, numpy as jnp
+from flax.training.train_state import TrainState
+from distrax import Chain, MultivariateNormalDiag, Transformed
+
 from ppomdp.core import Parameters, PRNGKey
 from ppomdp.envs.core import POMDPEnv
 from ppomdp.utils import custom_split
+from ppomdp.smc.utils import belief_init, belief_update
+
+from baselines.dsmc.arch import PolicyNetwork
 
 
 class PlanState(NamedTuple):
@@ -39,7 +39,14 @@ def policy_sample_and_log_prob(
     return action, log_prob, bijector.forward(mean)
 
 
-@partial(jax.jit, static_argnames=("env_obj", "num_belief_particles", "num_samples"))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "env_obj",
+        "num_belief_particles",
+        "num_samples",
+    ),
+)
 def policy_evaluation(
     rng_key: PRNGKey,
     env_obj: POMDPEnv,
@@ -70,28 +77,28 @@ def policy_evaluation(
 
         # Update beliefs
         key, belief_keys = custom_split(key, num_samples + 1)
-        next_beliefs = jax.vmap(belief_update, (0, None, 0, 0, 0))(
-            belief_keys, env_obj, beliefs, next_observations, actions
+        next_beliefs = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+            belief_keys, env_obj.trans_model, env_obj.obs_model, beliefs, next_observations, actions
         )
 
         return (next_states, next_beliefs, time_idx + 1), (states, actions, rewards)
 
     # Initialize
     key, state_key = random.split(rng_key)
-    init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+    init_states = env_obj.init_dist.sample(seed=state_key, sample_shape=num_samples)
     key, obs_keys = custom_split(key, num_samples + 1)
     init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
 
     # Initialize beliefs
     key, belief_keys = custom_split(key, num_samples + 1)
-    init_beliefs = jax.vmap(belief_init, in_axes=(0, None, 0, None))(
-        belief_keys, env_obj, init_observations, num_belief_particles
+    init_beliefs = jax.vmap(belief_init, in_axes=(0, None, None, 0, None))(
+        belief_keys, env_obj.belief_prior, env_obj.obs_model, init_observations, num_belief_particles
     )
 
     _, (states, actions, rewards) = jax.lax.scan(
-        body,
-        (init_states, init_beliefs, 0),
-        random.split(key, env_obj.num_time_steps + 1),
+        f=body,
+        init=(init_states, init_beliefs, 0),
+        xs=random.split(key, env_obj.num_time_steps + 1),
     )
 
     states = jnp.concatenate([init_states[None, :, :], states], axis=0)

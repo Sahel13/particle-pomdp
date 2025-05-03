@@ -2,15 +2,13 @@ from functools import partial
 
 import jax
 
-from distrax import Chain, MultivariateNormalDiag, Transformed
+from jax import Array, random, numpy as jnp
 from flax.training.train_state import TrainState
-from jax import Array
-from jax import numpy as jnp
-from jax import random
+from distrax import Chain, MultivariateNormalDiag, Transformed
 
 from ppomdp.core import Carry, Parameters, PRNGKey
-from ppomdp.utils import custom_split
 from ppomdp.envs.core import POMDPEnv
+from ppomdp.utils import custom_split
 
 from baselines.slac.arch import PolicyNetwork
 
@@ -73,7 +71,7 @@ def policy_evaluation(
 
     # Initialize.
     key, state_key = random.split(rng_key)
-    init_states = env_obj.prior_dist.sample(seed=state_key, sample_shape=num_samples)
+    init_states = env_obj.init_dist.sample(seed=state_key, sample_shape=num_samples)
 
     key, obs_keys = custom_split(key, num_samples + 1)
     init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)

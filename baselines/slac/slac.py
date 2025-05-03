@@ -7,20 +7,20 @@ from distrax import Block
 from flax.training.train_state import TrainState
 from jax import Array, random, numpy as jnp
 
+from ppomdp.core import BeliefState, Carry, PRNGKey
+from ppomdp.envs.core import POMDPEnv, POMDPState
+from ppomdp.bijector import Tanh
+from ppomdp.policy.arch import GRUEncoder, DualHeadMLPDecoder
+from ppomdp.utils import custom_split
+from ppomdp.smc.utils import belief_init, belief_update
+
 from baselines.common import (
     JointTrainState,
-    belief_init,
-    belief_update,
     sample_hidden_states,
     sample_random_actions,
 )
 from baselines.slac.arch import CriticNetwork, PolicyNetwork
 from baselines.slac.utils import policy_sample_and_log_prob
-from ppomdp.bijector import Tanh
-from ppomdp.core import BeliefState, Carry, PRNGKey
-from ppomdp.envs.core import POMDPEnv, POMDPState
-from ppomdp.policy.arch import GRUEncoder, DualHeadMLPDecoder
-from ppomdp.utils import custom_split
 
 
 def _pomdp_base(
@@ -57,8 +57,13 @@ def _pomdp_base(
 
     # Update belief.
     belief_keys = random.split(key, env_obj.num_envs)
-    next_belief_states = jax.vmap(belief_update, (0, None, 0, 0, 0))(
-        belief_keys, env_obj, belief_states, next_observations, actions
+    next_belief_states = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+        rng_key=belief_keys,
+        trans_model=env_obj.trans_model,
+        obs_model=env_obj.obs_model,
+        belief_states=belief_states,
+        observations=next_observations,
+        actions=actions,
     )
 
     return next_states, next_carry, next_observations, next_belief_states, actions
@@ -74,14 +79,18 @@ def pomdp_init(
 ) -> POMDPState:
 
     key, prior_key = random.split(rng_key, 2)
-    states = env_obj.prior_dist.sample(seed=prior_key, sample_shape=(env_obj.num_envs,))
+    states = env_obj.init_dist.sample(seed=prior_key, sample_shape=(env_obj.num_envs,))
 
     key, obs_keys = custom_split(key, env_obj.num_envs + 1)
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    belief_states = jax.vmap(belief_init, (0, None, 0, None))(
-        belief_keys, env_obj, observations, num_belief_particles
+    belief_states = jax.vmap(belief_init, (0, None, None, 0, None))(
+        rng_key=belief_keys,
+        belief_prior=env_obj.belief_prior,
+        obs_model=env_obj.obs_model,
+        observations=observations,
+        num_belief_particles=num_belief_particles,
     )
 
     carry = policy_network.reset(env_obj.num_envs)
@@ -463,24 +472,24 @@ def pomdp_rollout(
     """Simulate trajectories with the SLAC policy."""
     def body(pomdp_state, key):
         pomdp_state = pomdp_step(
-            key,
-            env_obj,
-            policy_state,
-            policy_network,
-            pomdp_state,
-            num_belief_particles,
-            random_actions,
+            rng_key=key,
+            env_obj=env_obj,
+            policy_state=policy_state,
+            policy_network=policy_network,
+            pomdp_state=pomdp_state,
+            num_belief_particles=num_belief_particles,
+            random_actions=random_actions,
         )
         return pomdp_state, pomdp_state
 
     init_key, scan_keys = custom_split(rng_key, env_obj.num_time_steps + 1)
     init_pomdp_state = pomdp_init(
-        init_key,
-        env_obj,
-        policy_state,
-        policy_network,
-        num_belief_particles,
-        random_actions,
+        rng_key=init_key,
+        env_obj=env_obj,
+        policy_state=policy_state,
+        policy_network=policy_network,
+        num_belief_particles=num_belief_particles,
+        random_actions=random_actions,
     )
     _, pomdp_states = jax.lax.scan(body, init_pomdp_state, scan_keys)
 

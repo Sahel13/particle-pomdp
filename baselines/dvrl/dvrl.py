@@ -3,25 +3,21 @@ from functools import partial
 
 import jax
 import optax
-from distrax import Block
+
+from jax import Array, random, numpy as jnp
 from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
-from jax import Array
-from jax import numpy as jnp
-from jax import random
+from distrax import Block
 
-from baselines.common import (
-    JointTrainState,
-    belief_init,
-    belief_update,
-    sample_random_actions,
-)
-from baselines.dvrl.arch import CriticNetwork, PolicyNetwork
-from baselines.dvrl.utils import policy_sample_and_log_prob
-from ppomdp.bijector import Tanh
 from ppomdp.core import BeliefState, PRNGKey
 from ppomdp.envs.core import POMDPEnv, POMDPState
+from ppomdp.bijector import Tanh
 from ppomdp.utils import custom_split
+from ppomdp.smc.utils import belief_init, belief_update
+
+from baselines.common import JointTrainState, sample_random_actions
+from baselines.dvrl.arch import CriticNetwork, PolicyNetwork
+from baselines.dvrl.utils import policy_sample_and_log_prob
 
 
 def _pomdp_base(
@@ -56,8 +52,13 @@ def _pomdp_base(
 
     # Update the belief states.
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    next_belief_states = jax.vmap(belief_update, (0, None, 0, 0, 0))(
-        belief_keys, env_obj, belief_states, next_observations, actions
+    next_belief_states = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+        belief_keys,
+        env_obj.trans_model,
+        env_obj.obs_model,
+        belief_states,
+        next_observations,
+        actions,
     )
 
     return next_states, next_observations, next_belief_states, actions
@@ -72,14 +73,18 @@ def pomdp_init(
 ) -> POMDPState:
     """Initialize the history state."""
     key, prior_key = random.split(rng_key)
-    states = env_obj.prior_dist.sample(seed=prior_key, sample_shape=(env_obj.num_envs,))
+    states = env_obj.init_dist.sample(seed=prior_key, sample_shape=(env_obj.num_envs,))
 
     key, obs_keys = custom_split(key, env_obj.num_envs + 1)
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    belief_states = jax.vmap(belief_init, (0, None, 0, None))(
-        belief_keys, env_obj, observations, num_belief_particles
+    belief_states = jax.vmap(belief_init, (0, None, None, 0, None))(
+        belief_keys,
+        env_obj.belief_prior,
+        env_obj.obs_model,
+        observations,
+        num_belief_particles,
     )
 
     key, step_key = random.split(key, 2)
@@ -139,9 +144,7 @@ def pomdp_step(
 
         rewards = jax.vmap(env_obj.reward_fn)(states, actions, time_idxs)
         total_rewards = _pomdp_state.total_rewards + rewards
-        done_flags = jnp.where(time_idxs == env_obj.num_time_steps, 1, 0).astype(
-            jnp.int32
-        )
+        done_flags = jnp.where(time_idxs == env_obj.num_time_steps, 1, 0).astype(jnp.int32)
 
         return POMDPState(
             states=states,
@@ -290,7 +293,7 @@ def create_train_state(
     num_belief_particles: int,
 ) -> tuple[JointTrainState, PolicyNetwork, CriticNetwork]:
 
-    policy_log_std = jnp.log(2.0 * jnp.ones(env_obj.action_dim))
+    policy_log_std = jnp.log(1.0 * jnp.ones(env_obj.action_dim))
     policy_network = PolicyNetwork(
         feature_fn=env_obj.feature_fn,
         encoding_dim=32,
@@ -355,22 +358,22 @@ def pomdp_rollout(
 
     def body(pomdp_state, key):
         pomdp_state = pomdp_step(
-            key,
-            env_obj,
-            policy_state,
-            pomdp_state,
-            num_belief_particles,
-            random_actions,
+            rng_key=key,
+            env_obj=env_obj,
+            policy_state=policy_state,
+            pomdp_state=pomdp_state,
+            num_belief_particles=num_belief_particles,
+            random_actions=random_actions,
         )
         return pomdp_state, pomdp_state
 
     init_key, scan_keys = custom_split(rng_key, env_obj.num_time_steps + 1)
     init_pomdp_state = pomdp_init(
-        init_key,
-        env_obj,
-        policy_state,
-        num_belief_particles,
-        random_actions,
+        rng_key=init_key,
+        env_obj=env_obj,
+        policy_state=policy_state,
+        num_belief_particles=num_belief_particles,
+        random_actions=random_actions,
     )
     _, pomdp_states = jax.lax.scan(body, init_pomdp_state, scan_keys)
 

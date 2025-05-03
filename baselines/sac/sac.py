@@ -11,13 +11,12 @@ from brax.training.replay_buffers import UniformSamplingQueue, ReplayBufferState
 from distrax import Block
 
 from ppomdp.core import PRNGKey
+from ppomdp.envs.core import MDPEnv, MDPState
 from ppomdp.bijector import Tanh
 
-from ppomdp.envs.core import MDPEnv, MDPState
+from baselines.common import JointTrainState, sample_random_actions
 from baselines.sac.arch import PolicyNetwork, CriticNetwork
 from baselines.sac.utils import policy_sample_and_log_prob
-
-from baselines.common import JointTrainState, sample_random_actions
 
 from copy import deepcopy
 
