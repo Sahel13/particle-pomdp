@@ -6,12 +6,12 @@ from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
 from baselines.common import get_pomdp
-from baselines.slac import (
-    SLAC,
+from baselines.slac.config import SLAC
+from baselines.slac.utils import policy_evaluation
+from baselines.slac.slac import (
     create_train_state,
     gradient_step,
     pomdp_rollout,
-    policy_evaluation,
 )
 
 import matplotlib.pyplot as plt

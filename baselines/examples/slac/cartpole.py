@@ -1,17 +1,17 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
 from baselines.common import get_pomdp
-from baselines.slac import (
-    SLAC,
+from baselines.slac.config import SLAC
+from baselines.slac.utils import policy_evaluation
+from baselines.slac.slac import (
     create_train_state,
     gradient_step,
     pomdp_rollout,
-    policy_evaluation,
 )
 
 import matplotlib.pyplot as plt
@@ -118,14 +118,14 @@ if __name__ == "__main__":
         return (state, carry, observation), (state, observation, action[0])
 
     key, state_key, obs_key = random.split(key, 3)
-    init_state = env_obj.prior_dist.sample(seed=state_key)
+    init_state = env_obj.init_dist.sample(seed=state_key)
     init_observation = env_obj.obs_model.sample(obs_key, init_state)
     init_carry = policy_network.reset(1)
 
     keys = random.split(key, env_obj.num_time_steps)
     _, (states, _, actions) = jax.lax.scan(
-        f=body, 
-        init=(init_state, init_carry, init_observation), 
+        f=body,
+        init=(init_state, init_carry, init_observation),
         xs=random.split(key, env_obj.num_time_steps)
     )
     states = jnp.concatenate([init_state[None, ...], states], axis=0)

@@ -1,17 +1,18 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from baselines.common import get_pomdp, belief_init, belief_update
+from ppomdp.smc.utils import belief_init, belief_update
+from baselines.common import get_pomdp
 from baselines.dvrl import (
     DVRL,
-    pomdp_init,
-    pomdp_step,
+    pomdp_rollout,
+    gradient_step,
+    policy_evaluation,
     create_train_state,
-    step_and_train
 )
 
 import matplotlib.pyplot as plt
@@ -27,42 +28,31 @@ if __name__ == "__main__":
 
     env_obj = get_pomdp("pendulum")
 
-    num_belief_particles = config.num_belief_particles
-    total_time_steps = config.total_time_steps
-    buffer_size = config.buffer_size
-    learning_starts = config.learning_starts
-    policy_lr = config.policy_lr
-    critic_lr = config.critic_lr
-    batch_size = config.batch_size
-    alpha = config.alpha
-    gamma = config.gamma
-    tau = config.tau
-
     key = random.key(0)
     key, sub_key = random.split(key)
     train_state, _, _ = create_train_state(
         rng_key=sub_key,
         env_obj=env_obj,
-        policy_lr=policy_lr,
-        critic_lr=critic_lr,
-        num_belief_particles=num_belief_particles,
+        policy_lr=config.policy_lr,
+        critic_lr=config.critic_lr,
+        num_belief_particles=config.num_belief_particles,
     )
 
     key, init_key = random.split(key)
-    pomdp_state = pomdp_init(
+    pomdp_states = pomdp_rollout(
         rng_key=init_key,
         env_obj=env_obj,
         policy_state=train_state.policy_state,
-        num_belief_particles=num_belief_particles,
-        random_actions=True,
+        num_belief_particles=config.num_belief_particles,
+        random_actions=True
     )
 
     # Set up the replay buffer from Brax.
-    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_state)
+    buffer_entry_prototype = jax.tree.map(lambda x: x[0], pomdp_states)
     buffer_obj = UniformSamplingQueue(
-        max_replay_size=buffer_size,
+        max_replay_size=config.buffer_size,
         dummy_data_sample=buffer_entry_prototype,
-        sample_batch_size=batch_size
+        sample_batch_size=config.batch_size
     )
 
     buffer_obj.insert_internal = jax.jit(buffer_obj.insert_internal)
@@ -71,82 +61,93 @@ if __name__ == "__main__":
     # Initialize the buffer state.
     key, buffer_key = random.split(key)
     buffer_state = buffer_obj.init(buffer_key)
-    buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
+    buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
     # Training loop.
-    for global_step in range(1, config.learning_starts):
+    for global_step in range(
+        env_obj.num_time_steps,
+        config.total_time_steps,
+        env_obj.num_time_steps
+    ):
+        train = global_step > config.learning_starts
+
         key, sub_key = random.split(key)
-        pomdp_state = pomdp_step(
+        pomdp_states = pomdp_rollout(
             rng_key=sub_key,
             env_obj=env_obj,
             policy_state=train_state.policy_state,
-            pomdp_state=pomdp_state,
-            num_belief_particles=num_belief_particles,
-            random_actions=True
+            num_belief_particles=config.num_belief_particles,
+            random_actions=not train,
         )
-        buffer_state = buffer_obj.insert(buffer_state, pomdp_state)
-        if jnp.all(pomdp_state.done_flags == 1):
-            print(
-                f"Step: {global_step:7d} | "
-                + f"Episodic reward: {pomdp_state.total_rewards.mean():6.2f}"
-            )
+        buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
-    # Ensure that training starts with a fresh episode.
-    pomdp_state = pomdp_state._replace(done_flags=jnp.ones(env_obj.num_envs, dtype=jnp.int32))
+        if train:
+            for _ in range(env_obj.num_time_steps):
+                buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
+                key, train_key = random.split(key)
+                train_state, *_ = gradient_step(
+                    rng_key=train_key,
+                    train_state=train_state,
+                    pomdp_state=pomdp_states_batch,
+                    alpha=config.alpha,
+                    gamma=config.gamma,
+                    tau=config.tau,
+                )
 
-    # Number of steps to take using the `lax.scan` loop (and how often to print training info).
-    steps_per_epoch = 10 * (env_obj.num_time_steps + 1)
-
-    for global_step in range(
-        learning_starts, total_time_steps, steps_per_epoch
-    ):
-        key, sub_key = random.split(key)
-        pomdp_state, buffer_state, train_state = \
-            step_and_train(
-                rng_key=sub_key,
+        if global_step % (20 * env_obj.num_time_steps) == 0:
+            key, eval_key = random.split(key)
+            avg_return, *_ = policy_evaluation(
+                rng_key=eval_key,
                 env_obj=env_obj,
-                train_state=train_state,
-                pomdp_state=pomdp_state,
-                buffer_obj=buffer_obj,
-                buffer_state=buffer_state,
-                num_belief_particles=num_belief_particles,
-                num_steps=steps_per_epoch,
-                alpha=alpha,
-                gamma=gamma,
-                tau=tau,
+                policy_state=train_state.policy_state,
+                num_belief_particles=config.num_belief_particles
             )
-        print(
-            f"Step: {global_step + steps_per_epoch:7d} | "
-            + f"Episodic reward: {pomdp_state.total_rewards.mean():6.2f} | "
-            + f"Policy log std: {train_state.policy_state.params['log_std'][0]:6.2f}"
-        )
+
+            print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
+
 
     # Evaluate the learned policy.
-    key, obs_key, belief_key = random.split(key, 3)
-    state = env_obj.prior_dist.mean()
-    observation = env_obj.obs_model.sample(obs_key, state)
-    belief_state = belief_init(belief_key, env_obj, observation, config.num_belief_particles)
-
     def body(carry, rng_key):
-        _state, _belief_state = carry
-        _action_key, _state_key, _obs_key, _pf_key = random.split(rng_key, 4)
-        _, _, _action = \
+        state, belief = carry
+        action_key, state_key, obs_key, pf_key = random.split(rng_key, 4)
+        _, _, action = \
             train_state.policy_state.apply_fn(
-                rng_key=_action_key,
-                particles=_belief_state.particles,
-                weights=_belief_state.weights,
+                rng_key=action_key,
+                particles=belief.particles,
+                weights=belief.weights,
                 params=train_state.policy_state.params,
+            )
+        state = env_obj.trans_model.sample(state_key, state, action)
+        observation = env_obj.obs_model.sample(obs_key, state)
+        belief = belief_update(
+            rng_key=pf_key,
+            trans_model=env_obj.trans_model,
+            obs_model=env_obj.obs_model,
+            belief_state=belief,
+            observation=observation,
+            action=action,
         )
-        _state = env_obj.trans_model.sample(_state_key, _state, _action)
-        _observation = env_obj.obs_model.sample(_obs_key, _state)
-        _belief_state = belief_update(_pf_key, env_obj, _belief_state, _observation, _action)
-        return (_state, _belief_state), (_state, _action)
+        return (state, belief), (state, action)
+
+    key, obs_key, belief_key = random.split(key, 3)
+    init_state = env_obj.init_dist.mean()
+    init_observation = env_obj.obs_model.sample(obs_key, init_state)
+
+    init_belief = belief_init(
+        rng_key=belief_key,
+        belief_prior=env_obj.belief_prior,
+        obs_model=env_obj.obs_model,
+        observation=init_observation,
+        num_belief_particles=config.num_belief_particles,
+    )
 
     keys = random.split(key, env_obj.num_time_steps)
     _, (states, actions) = jax.lax.scan(
-        body, (state, belief_state), keys
+        f=body,
+        init=(init_state, init_belief),
+        xs=keys,
     )
-    states = jnp.concatenate([state[None, ...], states], axis=0)
+    states = jnp.concatenate([init_state[None, ...], states], axis=0)
 
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
     fig.suptitle("Simulated trajectory")
