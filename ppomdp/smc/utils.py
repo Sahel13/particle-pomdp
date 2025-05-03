@@ -572,12 +572,12 @@ def effective_sample_size(log_weights: Array) -> Array:
 
 def belief_init(
     rng_key: PRNGKey,
-    prior_belief: Distribution,
+    belief_prior: Distribution,
     obs_model: ObservationModel,
     observation: Array,
     num_belief_particles: int
 ) -> BeliefState:
-    particles = prior_belief.sample(seed=rng_key, sample_shape=(num_belief_particles,))
+    particles = belief_prior.sample(seed=rng_key, sample_shape=(num_belief_particles,))
     log_weights = jax.vmap(obs_model.log_prob, (None, 0))(observation, particles)
     weights = jnp.exp(log_weights - jax.nn.logsumexp(log_weights))
     resampling_indices = jnp.zeros(num_belief_particles, dtype=jnp.int32)

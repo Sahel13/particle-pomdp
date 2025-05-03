@@ -12,10 +12,10 @@ from ppomdp.core import (
     PRNGKey,
     Parameters,
     HistoryParticles,
-    RecurrentPolicy, TransitionModel, ObservationModel,
+    RecurrentPolicy,
+    TransitionModel,
+    ObservationModel,
 )
-from ppomdp.envs.core import POMDPEnv
-from ppomdp.smc.utils import belief_init, belief_update
 
 
 @partial(jax.jit, static_argnames=("data_size", "batch_size", "skip_last"))
@@ -298,6 +298,8 @@ def policy_evaluation_with_beliefs(
             - A tensor of sampled actions for all time steps and trajectories.
             - A tensor of sampled beliefs for all time steps and trajectories.
     """
+
+    from ppomdp.smc.utils import belief_init, belief_update
 
     def body(val, key):
         states, actions, carry, observations, beliefs, time_idx = val
