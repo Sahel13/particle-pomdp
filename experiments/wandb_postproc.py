@@ -14,7 +14,7 @@ def parse_args():
     parser.add_argument('--project', type=str, required=True, help='Wandb project name')
     parser.add_argument('--group', type=str, help='Experiment group name (optional, will prompt if not provided)')
     parser.add_argument('--smooth', action='store_true', help='Apply running average smoothing')
-    parser.add_argument('--window', type=int, default=10, help='Window size for running average (default: 10)')
+    parser.add_argument('--window', type=int, default=5, help='Window size for running average (default: 5)')
     return parser.parse_args()
 
 def get_available_groups(api, team, project):
@@ -58,7 +58,7 @@ def apply_smoothing(df, window_size):
         seed_data = smoothed_df[smoothed_df['seed'] == seed]
 
         # Sort by step to ensure proper smoothing
-        seed_data = seed_data.sort_values('_step')
+        seed_data = seed_data.sort_values('step')
 
         # Apply rolling mean to expected_reward
         smoothed_values = seed_data['expected_reward'].rolling(window=window_size, min_periods=1).mean()
@@ -99,7 +99,7 @@ def main():
     print("Collecting data from runs...")
 
     # Define the keys we need from the history
-    keys_to_fetch = ['_step', 'expected_reward']
+    keys_to_fetch = ['step', 'average_return']
 
     # Initialize an empty DataFrame
     combined_data = pd.DataFrame()
@@ -108,7 +108,7 @@ def main():
     for run in tqdm(runs_list, desc="Processing runs"):
         # Use scan_history with keys parameter to fetch only the data we need
         print(f"Fetching history for run {run.id}...")
-        history = run.history(keys=keys_to_fetch)
+        history = run.scan_history(keys=keys_to_fetch)
         df = pd.DataFrame(history)
         df['seed'] = run.config.get('seed', run.id)
 
@@ -123,8 +123,8 @@ def main():
         combined_data = apply_smoothing(combined_data, args.window)
 
     # Calculate statistics using groupby (much more efficient)
-    stats_df = combined_data.groupby('_step')['expected_reward'].agg(['mean', 'std']).reset_index()
-    stats_df.columns = ['Step', 'Mean', 'Std']
+    stats_df = combined_data.groupby('step')['average_return'].agg(['mean', 'sem']).reset_index()
+    stats_df.columns = ['Step', 'Mean', 'Sem']
 
     # Sort by step
     stats_df = stats_df.sort_values('Step')

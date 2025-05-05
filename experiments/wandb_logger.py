@@ -14,7 +14,7 @@ class WandbLogger:
         logger_directory: str = "logs"
     ):
         """Initialize the Weights & Biases logger.
-        
+
         Args:
             project_name: Name of the Weights & Biases project
             experiment_name: Name of the experiment
@@ -30,26 +30,25 @@ class WandbLogger:
             "dir": logger_directory,
             "settings": wandb.Settings(start_method="thread"),
         }
-        
+
         if experiment_group:
             init_kwargs["group"] = experiment_group
-            
+
         if experiment_tags:
             init_kwargs["tags"] = experiment_tags
-            
+
         if experiment_config:
             init_kwargs["config"] = experiment_config
-            
+
         self.wandb_run = wandb.init(**init_kwargs)
 
-    def log_metrics(self, metrics: Dict[str, Any], step: int):
+    def log_metrics(self, metrics: Dict[str, Any]):
         """Log metrics to wandb.
-        
+
         Args:
             metrics: Dictionary of metric names and values
-            step: Optional step number for the metrics
         """
-        wandb.log(metrics, step=step)
+        wandb.log(metrics)
 
     def finish(self):
         """Finish the wandb run."""
