@@ -711,7 +711,7 @@ def backward_sampling_single(
     idx = jax.random.choice(
         key=sub_key,
         a=jnp.arange(num_history_particles, dtype=jnp.int32),
-        p=history_states.weights[-1]
+        p=history_states.weights[-1],
     )
     last_history_particles = jax.tree.map(lambda x: x[-1, idx], history_states.particles)
     last_belief_state = jax.tree.map(lambda x: x[-1, idx], belief_states)
@@ -724,13 +724,16 @@ def backward_sampling_single(
 
     vmap_compute_sequence_log_prob = jax.vmap(
         action_sequence_log_prob,
-        in_axes=(None, None, None, None, 0, 0, None)
+        in_axes=(None, None, None, None, 0, 0, 0, None)
     )
     vmap_transition_marginal_log_prob = jax.vmap(
         transition_marginal_log_prob,
-        in_axes=(None, None, 0, 0)
+        in_axes=(None, None, 0, None)
     )
-    vmap_log_potential = jax.vmap(log_potential, in_axes=(None, None, 0, None, None, None, None))
+    vmap_log_potential = jax.vmap(
+        log_potential,
+        in_axes=(None, None, 0, None, None, None, None)
+    )
 
     def body(carry, args):
         idx, actions, observations = carry
@@ -776,7 +779,7 @@ def backward_sampling_single(
         sampled_belief = jax.tree.map(lambda x: x[t, idx], belief_states)
 
         actions = actions.at[t, :].set(sampled_history.actions)
-        observations = observations.at[t, :].set(sampled_belief.observations)
+        observations = observations.at[t, :].set(sampled_history.observations)
         return (idx, actions, observations), (sampled_history, sampled_belief)
 
     _, (sampled_history_particles, sampled_belief_states) = jax.lax.scan(
@@ -817,8 +820,8 @@ def backward_sampling(
     reward_fn: RewardFn,
     slew_rate_penalty: float,
     tempering: float,
-    history_state: HistoryState,
-    belief_state: BeliefState,
+    history_states: HistoryState,
+    belief_states: BeliefState,
 ) -> tuple[HistoryParticles, BeliefState]:
     """Generate multiple smoothed trajectories using backward sampling.
 
@@ -843,9 +846,9 @@ def backward_sampling(
             Action smoothness penalty coefficient.
         tempering: float
             Temperature parameter for reward weighting.
-        history_state: HistoryState
+        history_states: HistoryState
             Forward filter history states.
-        belief_state: BeliefState
+        belief_states: BeliefState
             Forward filter belief states.
 
     Returns:
@@ -863,7 +866,7 @@ def backward_sampling(
             reward_fn,
             slew_rate_penalty,
             tempering,
-            history_state,
-            belief_state,
+            history_states,
+            belief_states,
         ), out_axes=1)(keys)
     return smoothed_history_particles, smoothed_belief_states
