@@ -12,7 +12,7 @@ from ppomdp.envs.core import POMDPEnv, POMDPState
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, DualHeadMLPDecoder
 from ppomdp.utils import custom_split
-from ppomdp.smc.utils import belief_init, belief_update
+from ppomdp.smc.utils import initialize_belief, update_belief
 
 from baselines.common import (
     JointTrainState,
@@ -57,13 +57,13 @@ def _pomdp_base(
 
     # Update belief.
     belief_keys = random.split(key, env_obj.num_envs)
-    next_belief_states = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
-        rng_key=belief_keys,
-        trans_model=env_obj.trans_model,
-        obs_model=env_obj.obs_model,
-        belief_states=belief_states,
-        observations=next_observations,
-        actions=actions,
+    next_belief_states = jax.vmap(update_belief, (0, None, None, 0, 0, 0))(
+        belief_keys,
+        env_obj.trans_model,
+        env_obj.obs_model,
+        belief_states,
+        next_observations,
+        actions,
     )
 
     return next_states, next_carry, next_observations, next_belief_states, actions
@@ -85,12 +85,12 @@ def pomdp_init(
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    belief_states = jax.vmap(belief_init, (0, None, None, 0, None))(
-        rng_key=belief_keys,
-        belief_prior=env_obj.belief_prior,
-        obs_model=env_obj.obs_model,
-        observations=observations,
-        num_belief_particles=num_belief_particles,
+    belief_states = jax.vmap(initialize_belief, (0, None, None, 0, None))(
+        belief_keys,
+        env_obj.belief_prior,
+        env_obj.obs_model,
+        observations,
+        num_belief_particles,
     )
 
     carry = policy_network.reset(env_obj.num_envs)
@@ -359,7 +359,7 @@ def critic_target_update(train_state: JointTrainState, tau: float) -> JointTrain
     return train_state._replace(critic_target_params=updated_params)
 
 
-@partial(jax.jit, static_argnames="policy_network")
+@partial(jax.jit, static_argnames=("policy_network", "alpha", "gamma", "tau"))
 def gradient_step(
     rng_key: PRNGKey,
     train_state: JointTrainState,

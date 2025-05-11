@@ -12,7 +12,7 @@ from ppomdp.core import BeliefState, PRNGKey
 from ppomdp.envs.core import POMDPEnv, POMDPState
 from ppomdp.bijector import Tanh
 from ppomdp.utils import custom_split
-from ppomdp.smc.utils import belief_init, belief_update
+from ppomdp.smc.utils import initialize_belief, update_belief
 
 from baselines.common import JointTrainState, sample_random_actions
 from baselines.dvrl.arch import CriticNetwork, PolicyNetwork
@@ -51,7 +51,7 @@ def _pomdp_base(
 
     # Update the belief states.
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    next_belief_states = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+    next_belief_states = jax.vmap(update_belief, (0, None, None, 0, 0, 0))(
         belief_keys,
         env_obj.trans_model,
         env_obj.obs_model,
@@ -78,7 +78,7 @@ def pomdp_init(
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    belief_states = jax.vmap(belief_init, (0, None, None, 0, None))(
+    belief_states = jax.vmap(initialize_belief, (0, None, None, 0, None))(
         belief_keys,
         env_obj.belief_prior,
         env_obj.obs_model,

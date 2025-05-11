@@ -5,7 +5,7 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from ppomdp.smc.utils import belief_init, belief_update
+from ppomdp.smc.utils import initialize_belief, update_belief
 from baselines.common import get_pomdp
 from baselines.dvrl import (
     DVRL,
@@ -82,7 +82,7 @@ if __name__ == "__main__":
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
         if train:
-            for _ in range(env_obj.num_time_steps):
+            for _ in range(config.num_batches):
                 buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
                 key, train_key = random.split(key)
                 train_state, *_ = gradient_step(
@@ -119,7 +119,7 @@ if __name__ == "__main__":
             )
         state = env_obj.trans_model.sample(state_key, state, action)
         observation = env_obj.obs_model.sample(obs_key, state)
-        belief = belief_update(
+        belief = update_belief(
             rng_key=pf_key,
             trans_model=env_obj.trans_model,
             obs_model=env_obj.obs_model,
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     init_state = env_obj.init_dist.mean()
     init_observation = env_obj.obs_model.sample(obs_key, init_state)
 
-    init_belief = belief_init(
+    init_belief = initialize_belief(
         rng_key=belief_key,
         belief_prior=env_obj.belief_prior,
         obs_model=env_obj.obs_model,

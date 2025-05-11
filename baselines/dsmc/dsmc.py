@@ -13,8 +13,8 @@ from ppomdp.envs.core import POMDPEnv, POMDPState
 from ppomdp.bijector import Tanh
 from ppomdp.utils import custom_split
 from ppomdp.smc.utils import (
-    belief_init,
-    belief_update,
+    initialize_belief,
+    update_belief,
     propagate_belief,
     resample_belief,
     systematic_resampling,
@@ -338,7 +338,7 @@ def _pomdp_base(
 
     # Update belief.
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    next_belief_states = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+    next_belief_states = jax.vmap(update_belief, (0, None, None, 0, 0, 0))(
         belief_keys,
         env_obj.trans_model,
         env_obj.obs_model,
@@ -368,7 +368,7 @@ def pomdp_init(
     observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, states)
 
     key, belief_keys = custom_split(key, env_obj.num_envs + 1)
-    belief_states = jax.vmap(belief_init, (0, None, None, 0, None))(
+    belief_states = jax.vmap(initialize_belief, (0, None, None, 0, None))(
         belief_keys,
         env_obj.belief_prior,
         env_obj.obs_model,
@@ -646,9 +646,7 @@ def create_train_state(
 
     critic_key, policy_key = random.split(rng_key)
     policy_params = policy_network.init(policy_key, dummy_particles)["params"]
-    critic_params = critic_network.init(
-        critic_key, dummy_states, dummy_actions, dummy_time
-    )
+    critic_params = critic_network.init(critic_key, dummy_states, dummy_actions, dummy_time)
     critic_target_params = jax.tree.map(lambda x: deepcopy(x), critic_params)
 
     policy_bijector = Block(Tanh(), ndims=1)

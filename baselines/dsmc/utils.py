@@ -10,7 +10,7 @@ from distrax import Chain, MultivariateNormalDiag, Transformed
 from ppomdp.core import Parameters, PRNGKey
 from ppomdp.envs.core import POMDPEnv
 from ppomdp.utils import custom_split
-from ppomdp.smc.utils import belief_init, belief_update
+from ppomdp.smc.utils import initialize_belief, update_belief
 
 from baselines.dsmc.arch import PolicyNetwork
 
@@ -77,7 +77,7 @@ def policy_evaluation(
 
         # Update beliefs
         key, belief_keys = custom_split(key, num_samples + 1)
-        next_beliefs = jax.vmap(belief_update, (0, None, None, 0, 0, 0))(
+        next_beliefs = jax.vmap(update_belief, (0, None, None, 0, 0, 0))(
             belief_keys, env_obj.trans_model, env_obj.obs_model, beliefs, next_observations, actions
         )
 
@@ -91,7 +91,7 @@ def policy_evaluation(
 
     # Initialize beliefs
     key, belief_keys = custom_split(key, num_samples + 1)
-    init_beliefs = jax.vmap(belief_init, in_axes=(0, None, None, 0, None))(
+    init_beliefs = jax.vmap(initialize_belief, in_axes=(0, None, None, 0, None))(
         belief_keys, env_obj.belief_prior, env_obj.obs_model, init_observations, num_belief_particles
     )
 

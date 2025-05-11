@@ -570,7 +570,7 @@ def effective_sample_size(log_weights: Array) -> Array:
     return jnp.exp(log_ess(log_weights))
 
 
-def belief_init(
+def initialize_belief(
     rng_key: PRNGKey,
     belief_prior: Distribution,
     obs_model: ObservationModel,
@@ -589,7 +589,7 @@ def belief_init(
     )
 
 
-def belief_update(
+def update_belief(
     rng_key: PRNGKey,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
