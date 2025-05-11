@@ -8,12 +8,12 @@ from jax import Array, numpy as jnp
 from distrax import (
     Block,
     ScalarAffine,
+    Deterministic,
     MultivariateNormalDiag
 )
 
 from ppomdp.core import PRNGKey, TransitionModel, ObservationModel
 from ppomdp.envs.core import POMDPEnv
-
 
 state_dim = 4
 action_dim = 1
@@ -111,7 +111,12 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return - state_cost - action_cost
 
 
-prior_dist = MultivariateNormalDiag(
+# init_dist = Deterministic(jnp.array([-200.0, 12.0, 100.0, -6.0]))
+init_dist = MultivariateNormalDiag(
+    loc=jnp.array([-200.0, 12.0, 100.0, -6.0]),
+    scale_diag=jnp.array([1e-8, 1.0, 1e-8, 1.0]),
+)
+belief_prior = MultivariateNormalDiag(
     loc=jnp.array([-200.0, 12.0, 100.0, -6.0]),
     scale_diag=jnp.array([1e-8, 1.0, 1e-8, 1.0]),
 )
@@ -131,7 +136,8 @@ TargetEnv = POMDPEnv(
     action_dim=action_dim,
     obs_dim=obs_dim,
     num_time_steps=num_time_steps,
-    init_dist=prior_dist,
+    init_dist=init_dist,
+    belief_prior=belief_prior,
     trans_model=trans_model,
     obs_model=obs_model,
     reward_fn=reward_fn,

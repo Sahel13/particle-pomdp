@@ -45,7 +45,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-4, 1e-4, 1e-1, 1e-1])
+    return jnp.array([1e-2, 1e-2, 1e-1, 1e-1])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -109,7 +109,11 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return -0.5 * state_cost - 0.5 * action_cost
 
 
-init_dist = Deterministic(jnp.array([2.0, 2.0, 0.0, 0.0]))
+# init_dist = Deterministic(jnp.array([2.0, 2.0, 0.0, 0.0]))
+init_dist = MultivariateNormalDiag(
+    loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
+    scale_diag=jnp.array([1.0, 1.0, 1e-4, 1e-4])
+)
 belief_prior = MultivariateNormalDiag(
     loc=jnp.array([2.0, 2.0, 0.0, 0.0]),
     scale_diag=jnp.array([1.0, 1.0, 1e-4, 1e-4])

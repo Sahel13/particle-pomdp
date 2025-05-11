@@ -22,7 +22,10 @@ num_time_steps = 100
 
 action_scale = 50.0
 action_shift = 0.0
-action_trans = Block(ScalarAffine(scale=action_scale, shift=action_shift), ndims=1)
+action_trans = Block(
+    ScalarAffine(scale=action_scale, shift=action_shift),
+    ndims=1
+)
 
 
 def ode(s: Array, a: Array) -> Array:
@@ -101,7 +104,11 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
     return -0.5 * state_cost - 0.5 * action_cost
 
 
-init_dist = Deterministic(jnp.zeros(state_dim))
+# init_dist = Deterministic(jnp.zeros(state_dim))
+init_dist = MultivariateNormalDiag(
+    loc=jnp.zeros(state_dim),
+    scale_diag=jnp.array([1e-4, 1e-2, 1e-4, 1e-2])
+)
 belief_prior = MultivariateNormalDiag(
     loc=jnp.zeros(state_dim),
     scale_diag=jnp.array([1e-4, 1e-2, 1e-4, 1e-2])
