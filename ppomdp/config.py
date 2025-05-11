@@ -9,7 +9,7 @@ class P3O(NamedTuple):
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
     backward_sampling: bool = True
-    backward_sampling_mult: int = 2
+    backward_sampling_mult: float = 2
 
     # damped version
     damping: Optional[float] = 0.0
@@ -37,7 +37,7 @@ class P3OExperiment(NamedTuple):
     slew_rate_penalty: float = 5e-2
     tempering: float = 0.3
     backward_sampling: bool = True
-    backward_sampling_mult: int = 2
+    backward_sampling_mult: float = 2
 
     # damped version
     damping: Optional[float] = 0.0

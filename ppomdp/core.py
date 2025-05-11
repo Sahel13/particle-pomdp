@@ -1,4 +1,5 @@
-from typing import Dict, NamedTuple, Protocol, Union, Any
+from typing import Dict, NamedTuple, Protocol, Union, Any, Callable
+from enum import Enum
 
 import chex
 from jax import Array
@@ -11,6 +12,7 @@ Carry = Union[LSTMCarry, GRUCarry]
 
 PRNGKey = chex.PRNGKey
 Parameters = Union[Dict[str, Any], FrozenDict[str, Any]]
+
 
 
 class HistoryParticles(NamedTuple):
@@ -345,3 +347,73 @@ class RecurrentObservation(NamedTuple):
     log_prob: LogProbRecurrentObservation
     sample_and_log_prob: SampleAndLogProbRecurrentObservation
     carry_and_log_prob: CarryAndLogProbRecurrentObservation
+
+
+class SampleAttentionPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        particles: Array,
+        weights: Array,
+        params: Parameters,
+    ) -> tuple[Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid \{\mathbf{x}_t^i, w_t^i\}_{i=1}^N)$."""
+
+
+class LogProbAttentionPolicy(Protocol):
+    def __call__(
+        self,
+        actions: Array,
+        particles: Array,
+        weights: Array,
+        params: Parameters
+    ) -> Array:
+        r"""Compute the log density of $\pi_\phi(a_t \mid \{\mathbf{x}_t^i, w_t^i\}_{i=1}^N)$."""
+
+
+class SampleAndLogProbAttentionPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        particles: Array,
+        weights: Array,
+        params: Parameters,
+    ) -> tuple[Array, Array, Array]:
+        r"""Sample from $\pi_\phi(a_t \mid \{\mathbf{x}_t^i, w_t^i\}_{i=1}^N)$ and compute its log density."""
+
+
+class EntropyAttentionPolicy(Protocol):
+    def __call__(
+        self,
+        params: Parameters,
+    ) -> Array:
+        r"""Compute the entropy of $\pi_\phi$."""
+
+
+class InitializeAttentionPolicy(Protocol):
+    def __call__(
+        self,
+        rng_key: PRNGKey,
+        particle_dim: int,
+        action_dim: int,
+        batch_size: int,
+        num_particles: int,
+    ) -> Parameters:
+        r"""Initialize the parameters of the attention policy."""
+
+
+class ResetAttentionPolicy(Protocol):
+    def __call__(self, batch_size: int) -> None:
+        r"""Reset the attention policy state (returns None since attention policies don't maintain state)."""
+
+
+class AttentionPolicy(NamedTuple):
+    r"""The stochastic attention policy $\pi_\phi$ that processes particle sets."""
+
+    dim: int
+    init: InitializeAttentionPolicy
+    reset: ResetAttentionPolicy
+    sample: SampleAttentionPolicy
+    log_prob: LogProbAttentionPolicy
+    sample_and_log_prob: SampleAndLogProbAttentionPolicy
+    entropy: EntropyAttentionPolicy

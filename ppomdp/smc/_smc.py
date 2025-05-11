@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable
+from typing import Callable, Union
 
 import jax
 from jax import Array, random, numpy as jnp
@@ -16,6 +16,8 @@ from ppomdp.core import (
     ObservationModel,
     RewardFn,
     RecurrentPolicy,
+    AttentionPolicy,
+    PolicyType
 )
 from ppomdp.utils import custom_split
 from ppomdp.smc.utils import (
@@ -39,7 +41,7 @@ def smc_init(
     num_history_particles: int,
     num_belief_particles: int,
     belief_prior: Distribution,
-    policy_prior: RecurrentPolicy,
+    policy_prior: Union[RecurrentPolicy, AttentionPolicy],
     obs_model: ObservationModel
 ) -> tuple[HistoryState, BeliefState, BeliefInfo]:
     r"""Initialize the history and belief states for the nested SMC algorithm.
@@ -116,7 +118,7 @@ def smc_init(
 
 def smc_step(
     rng_key: PRNGKey,
-    policy_prior: RecurrentPolicy,
+    policy_prior: Union[RecurrentPolicy, AttentionPolicy],
     policy_prior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,
@@ -135,7 +137,7 @@ def smc_step(
         rng_key: PRNGKey
         trans_model: TransitionModel
             The transition model for the state, $f(s_t \mid s_{t-1}, a_{t-1})$.
-        policy_prior: RecurrentPolicy
+        policy_prior: Union[RecurrentPolicy, AttentionPolicy]
             The stochastic policy, $\pi_\phi$.
         policy_prior_params: Parameters
             Parameters of recurrent policy $\phi$.
@@ -175,13 +177,22 @@ def smc_step(
 
     # 3. Sample new actions.
     key, action_key = random.split(key)
-    carry, actions, _ = policy_prior.sample(
-        action_key,
-        particles.carry,
-        particles.actions,
-        particles.observations,
-        policy_prior_params
-    )
+    if isinstance(policy_prior, RecurrentPolicy):
+        carry, actions, _ = policy_prior.sample(
+            rng_key=action_key,
+            carry=particles.carry,
+            actions=particles.actions,
+            observations=particles.observations,
+            params=policy_prior_params
+        )
+    else:  # isinstance(AttentionPolicy)
+        carry = None
+        actions, _ = policy_prior.sample(
+            rng_key=action_key,
+            particles=belief_state.particles,
+            weights=belief_state.weights,
+            params=policy_prior_params
+        )
 
     # 4. Propagate the belief particles.
     key, sub_keys = custom_split(key, num_particles + 1)
@@ -262,7 +273,7 @@ def smc(
     num_history_particles: int,
     num_belief_particles: int,
     belief_prior: Distribution,
-    policy_prior: RecurrentPolicy,
+    policy_prior: Union[RecurrentPolicy, AttentionPolicy],
     policy_prior_params: Parameters,
     trans_model: TransitionModel,
     obs_model: ObservationModel,

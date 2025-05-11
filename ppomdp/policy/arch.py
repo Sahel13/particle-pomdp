@@ -7,6 +7,56 @@ from flax import linen as nn
 from ppomdp.core import LSTMCarry, GRUCarry
 
 
+class AttentionEncoder(nn.Module):
+    """Attention-based encoder for processing particle sets.
+
+    This encoder uses self-attention to process sets of particles and their weights,
+    followed by a weighted pooling operation to produce a fixed-size representation.
+
+    Attributes:
+        hidden_dim: Dimension of the hidden layers
+        output_dim: Dimension of the output representation
+        num_heads: Number of attention heads
+    """
+    hidden_dim: int
+    output_dim: int
+    num_heads: int = 16
+
+    @nn.compact
+    def __call__(self, particles: Array, weights: Array) -> Array:
+        """Process a set of particles using attention.
+
+        Args:
+            particles: Array of shape (batch_size, num_particles, particle_dim)
+            weights: Array of shape (batch_size, num_particles)
+
+        Returns:
+            Array of shape (batch_size, output_dim)
+        """
+        # Normalize weights
+        weights = weights / jnp.sum(weights, axis=-1, keepdims=True)
+
+        # Embed particles
+        # x = nn.relu(nn.Dense(self.hidden_dim)(particles))
+
+        # Apply self-attention
+        x = nn.SelfAttention(
+            num_heads=self.num_heads,
+            qkv_features=self.hidden_dim,
+            out_features=self.hidden_dim,
+            broadcast_dropout = False,
+            deterministic = True,
+            use_bias = True,
+        )(particles)
+
+        # Weighted pooling
+        x = jnp.sum(x * weights[..., None], axis=1)
+
+        # Final transformation
+        x = nn.Dense(self.output_dim)(x)
+        return x
+
+
 class LSTMEncoder(nn.Module):
     """
     LSTM module for processing sequences with recurrent layers.
