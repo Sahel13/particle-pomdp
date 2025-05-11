@@ -11,16 +11,15 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
-from ppomdp.core import Reference
-from ppomdp.smc import smc, csmc, backward_tracing
+from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
 from ppomdp.bijector import Tanh
-from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
-from ppomdp.policy.gauss import (
-    create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_pathwise
+from ppomdp.policy.arch import AttentionEncoder, NeuralGaussDecoder
+from ppomdp.policy.attention import (
+    create_attention_policy,
+    train_attention_policy
 )
-from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_beliefs
-from ppomdp.smc.utils import multinomial_resampling
+from ppomdp.utils import batch_data, custom_split, policy_evaluation, policy_evaluation_with_beliefs
+from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
@@ -30,33 +29,31 @@ from ppomdp.envs.pomdps import LightDark2DEnv as env
 from ppomdp.envs.pomdps.lightdark2d import stddev_obs
 
 
-rng_key = random.PRNGKey(1337)
+rng_key = random.PRNGKey(0)
 
-num_history_particles = 128
+num_history_particles = 256
 num_belief_particles = 32
 num_target_samples = 256
 
-slew_rate_penalty = 5e-4
-tempering = 0.5
-num_moves = 1
+slew_rate_penalty = 0.05
+tempering = 0.25
 
 learning_rate = 3e-4
 batch_size = 256
-num_epochs = 100
+num_epochs = 500
 
 bijector = Block(Tanh(), ndims=1)
-encoder = GRUEncoder(
-    feature_fn=lambda x: x,
-    dense_sizes=(256, 256),
-    recurr_sizes=(128, 128),
-    use_layer_norm=True,
+encoder = AttentionEncoder(
+    hidden_dim=256,
+    output_dim=256,
+    num_heads=16,
 )
 decoder = NeuralGaussDecoder(
     decoder_sizes=(256, 256),
     output_dim=env.action_dim,
-    init_log_std=constant(jnp.log(1.0)),
+    init_log_std=constant(jnp.log(2.0)),
 )
-policy = create_recurrent_neural_gauss_policy(
+policy = create_attention_policy(
     encoder=encoder,
     decoder=decoder,
     bijector=bijector
@@ -65,9 +62,10 @@ policy = create_recurrent_neural_gauss_policy(
 key, sub_key = random.split(rng_key, 2)
 params = policy.init(
     rng_key=sub_key,
-    obs_dim=env.obs_dim,
+    particle_dim=env.state_dim,
     action_dim=env.action_dim,
-    batch_dim=num_history_particles,
+    batch_size=num_history_particles,
+    num_particles=num_belief_particles,
 )
 learner = TrainState.create(
     params=params,
@@ -75,137 +73,122 @@ learner = TrainState.create(
     tx=optax.adam(learning_rate),
 )
 
-# run init nested smc
-key, sub_key = random.split(key)
-history_states, belief_states, belief_infos, _ = \
-    smc(
-        rng_key=sub_key,
-        num_time_steps=env.num_time_steps,
-        num_particles=num_history_particles,
-        num_belief_particles=num_belief_particles,
-        belief_prior=env.belief_prior,
-        policy=policy,
-        policy_params=learner.params,
-        trans_model=env.trans_model,
-        obs_model=env.obs_model,
-        reward_fn=env.reward_fn,
-        slew_rate_penalty=slew_rate_penalty,
-        tempering=tempering,
-        history_resample_fn=multinomial_resampling,
-        belief_resample_fn=multinomial_resampling,
-    )
-
-# trace ancestors of history states
-key, sub_key = random.split(key)
-traced_history, traced_belief, _ = (
-    backward_tracing(sub_key, history_states, belief_states, belief_infos))
-
-# # backward sample history states
-# key, sub_key = random.split(key)
-# traced_history, traced_belief = mcmc_backward_sampling(
-#     rng_key=sub_key,
-#     num_samples=num_history_particles,
-#     policy=policy,
-#     policy_params=train_state.params,
-#     trans_model=env.trans_model,
-#     reward_fn=env.reward_fn,
-#     tempering=tempering,
-#     history_states=history_states,
-#     belief_states=belief_states,
-# )
-
-# sample a new reference
-key, sub_key = random.split(key)
-idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-reference = Reference(
-    history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-    belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
-)
+num_steps = 0
 
 for i in range(1, num_epochs + 1):
     start_time = time.time()
 
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    rewards, *_ = policy_evaluation(
+    rewards, *_ = policy_evaluation_with_beliefs(
         rng_key=sub_key,
         num_time_steps=env.num_time_steps,
         num_trajectory_samples=1024,
+        num_belief_particles=num_belief_particles,
         init_dist=env.init_dist,
+        belief_prior=env.belief_prior,
         policy=policy,
         policy_params=learner.params,
         trans_model=env.trans_model,
         obs_model=env.obs_model,
         reward_fn=env.reward_fn,
-        stochastic=True
+        stochastic=False
     )
-    avg_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
-    for _ in range(num_moves):
-        # run nested conditional smc
-        key, sub_key = random.split(key)
-        history_states, belief_states, belief_infos, log_marginal = \
-            csmc(
-                rng_key=sub_key,
-                num_time_steps=env.num_time_steps,
-                num_particles=num_history_particles,
-                num_belief_particles=num_belief_particles,
-                init_dist=env.prior_dist,
-                belief_prior=env.belief_prior,
-                policy=policy,
-                policy_params=learner.params,
-                trans_model=env.trans_model,
-                obs_model=env.obs_model,
-                reward_fn=env.reward_fn,
-                tempering=tempering,
-                slew_rate_penalty=slew_rate_penalty,
-                reference=reference,
-                history_resample_fn=multinomial_resampling,
-                belief_resample_fn=multinomial_resampling,
-            )
-
-        # trace ancestors of history states
-        key, sub_key = random.split(key)
-        traced_history, traced_belief, _ = \
-            backward_tracing(sub_key, history_states, belief_states, belief_infos)
-
-        # # backward sample history states
-        # key, sub_key = random.split(key)
-        # traced_history, traced_belief = mcmc_backward_sampling(
-        #     rng_key=sub_key,
-        #     num_samples=num_history_particles,
-        #     policy=policy,
-        #     policy_params=learner.params,
-        #     trans_model=env.trans_model,
-        #     reward_fn=env.reward_fn,
-        #     slew_rate_penalty=slew_rate_penalty,
-        #     tempering=tempering,
-        #     reference=reference,
-        #     history_states=history_states,
-        #     belief_states=belief_states,
-        # )
-
-        # sample a new reference
-        key, sub_key = random.split(key)
-        idx = jax.random.choice(sub_key, jnp.arange(num_history_particles))
-        reference = Reference(
-            history_particles=jax.tree.map(lambda x: x[:, idx], traced_history),
-            belief_state=jax.tree.map(lambda x: x[:, idx], traced_belief)
+    # run nested smc
+    key, sub_key = random.split(key)
+    history_states, belief_states, belief_infos, log_marginal = \
+        smc(
+            rng_key=sub_key,
+            num_time_steps=env.num_time_steps,
+            num_history_particles=num_history_particles,
+            num_belief_particles=num_belief_particles,
+            belief_prior=env.belief_prior,
+            policy_prior=policy,
+            policy_prior_params=learner.params,
+            trans_model=env.trans_model,
+            obs_model=env.obs_model,
+            reward_fn=env.reward_fn,
+            slew_rate_penalty=slew_rate_penalty,
+            tempering=tempering,
+            history_resample_fn=systematic_resampling,
+            belief_resample_fn=multinomial_resampling,
         )
 
+    num_steps += (env.num_time_steps + 1) * num_history_particles
+
+    # trace ancestors of history states
+    key, sub_key = random.split(key)
+    traced_history, traced_belief, _ = \
+        backward_tracing(sub_key, history_states, belief_states, belief_infos)
+
+    # # backward sample history states
+    # key, sub_key = random.split(key)
+    # traced_history, traced_belief = mcmc_backward_sampling(
+    #     rng_key=sub_key,
+    #     num_samples=num_target_samples,
+    #     policy_prior=policy,
+    #     policy_prior_params=learner.params,
+    #     trans_model=env.trans_model,
+    #     reward_fn=env.reward_fn,
+    #     slew_rate_penalty=slew_rate_penalty,
+    #     tempering=tempering,
+    #     history_states=history_states,
+    #     belief_states=belief_states,
+    # )
+
     # update policy parameters
+    # loss = 0.0
+    # key, sub_key = random.split(key)
+    # batch_indices = batch_data(sub_key, num_target_samples, batch_size)
+    # for batch_idx in batch_indices:
+    #     action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
+    #     observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
+    #
+    #     learner, batch_loss = train_recurrent_neural_gauss_policy_pathwise(
+    #         policy=policy,
+    #         learner=learner,
+    #         actions=action_batch,
+    #         observations=observation_batch,
+    #     )
+    #     loss += batch_loss
+
     loss = 0.0
     key, sub_key = random.split(key)
-    batch_indices = batch_data(sub_key, num_target_samples, batch_size)
-    for batch_idx in batch_indices:
-        action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
-        observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
 
-        learner, batch_loss = train_recurrent_neural_gauss_policy_pathwise(
+    num_time_steps_p1, _, _ = traced_history.actions.shape
+    data_size = (num_time_steps_p1 - 1) * num_history_particles
+
+
+    from ppomdp.smc.utils import resample_belief
+    def _resample_belief(key, belief):
+        key, sub_keys = custom_split(key, num_history_particles + 1)
+        return jax.vmap(resample_belief, in_axes=(0, 0, None))(
+            sub_keys, belief, systematic_resampling
+        )
+
+    key, sub_keys = custom_split(key, env.num_time_steps + 2)
+    traced_belief = jax.vmap(_resample_belief, in_axes=(0, 0))(
+        sub_keys, traced_belief
+    )
+
+    actions = traced_history.actions[1:].reshape((-1, traced_history.actions.shape[-1]))
+    particles = traced_belief.particles[:-1].reshape((-1, num_belief_particles, traced_belief.particles.shape[-1]))
+    weights = traced_belief.weights[:-1].reshape((-1, traced_belief.weights.shape[-1]))
+
+    batch_indices = batch_data(sub_key, data_size, batch_size)
+    for batch_idx in batch_indices:
+        action_batch = jax.tree.map(lambda x: x[batch_idx, ...], actions)
+        particles_batch = jax.tree.map(lambda x: x[batch_idx, ...], particles)
+        weights_batch = jax.tree.map(lambda x: x[batch_idx, ...], weights)
+
+        learner, batch_loss = train_attention_policy(
             policy=policy,
             learner=learner,
             actions=action_batch,
-            observations=observation_batch,
+            particles=particles_batch,
+            weights=weights_batch,
         )
         loss += batch_loss
 
@@ -215,7 +198,9 @@ for i in range(1, num_epochs + 1):
 
     print(
         f"Epoch: {i:3d}, "
-        f"Reward: {avg_reward:.3f}, "
+        f"Num steps: {num_steps:6d}, "
+        f"Log marginal: {log_marginal / tempering:.3f}, "
+        f"Reward: {avg_return:.3f}, "
         f"Entropy: {entropy:.3f}, "
         f"Time per epoch: {time_diff:.3f}s"
     )

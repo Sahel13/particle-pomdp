@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 from ppomdp.envs.pomdps import PendulumEnv as env
 
 
-rng_key = random.PRNGKey(1)
+rng_key = random.PRNGKey(0)
 
 num_history_particles = 128
 num_belief_particles = 32
