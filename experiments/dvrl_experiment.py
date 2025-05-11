@@ -54,6 +54,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
             "policy_lr": config.policy_lr,
             "critic_lr": config.critic_lr,
             "batch_size": config.batch_size,
+            "num_batches": config.num_batches,
             "gamma": config.gamma,
             "tau": config.tau,
         }
@@ -90,7 +91,9 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
     )
 
     if logger:
-        logger.log_metrics({"average_return": avg_return}, step=0)
+        logger.log_metrics({"average_return": avg_return, "step": 0})
+
+    print(f"Step: {0:6d} | Average return: {avg_return:6.3f}")
 
     # Set up the replay buffer
     key, init_key = random.split(key)
@@ -135,7 +138,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
         if train:
-            for _ in range(env_obj.num_time_steps):
+            for _ in range(config.num_batches):
                 buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
                 key, train_key = random.split(key)
                 train_state, *_ = gradient_step(
@@ -157,7 +160,7 @@ def run_single_seed(config: DVRLExperiment, seed: int) -> None:
             )
 
             if logger:
-                logger.log_metrics({"average_return": avg_return}, step=global_step)
+                logger.log_metrics({"average_return": avg_return, "step": global_step})
 
             print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 

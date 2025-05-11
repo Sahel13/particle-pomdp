@@ -90,7 +90,9 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
     )
 
     if logger:
-        logger.log_metrics({"average_return": avg_return}, step=0)
+        logger.log_metrics({"average_return": avg_return, "step": 0})
+
+    print(f"Step: {0:6d} | Average return: {avg_return:6.3f}")
 
     # Set up the replay buffer
     key, init_key = random.split(key)
@@ -120,18 +122,20 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
 
     # Training loop
     for global_step in range(
-        env_obj.num_time_steps, config.total_time_steps, env_obj.num_time_steps
+        env_obj.num_time_steps,
+        config.total_time_steps,
+        env_obj.num_time_steps
     ):
         train = global_step > config.learning_starts
 
         key, sub_key = random.split(key)
         pomdp_states = pomdp_rollout(
-            sub_key,
-            env_obj,
-            train_state.policy_state,
-            policy_network,
-            config.num_belief_particles,
-            not train,
+            rng_key=sub_key,
+            env_obj=env_obj,
+            policy_state=train_state.policy_state,
+            policy_network=policy_network,
+            num_belief_particles=config.num_belief_particles,
+            random_actions=not train,
         )
         buffer_state = buffer_obj.insert(buffer_state, pomdp_states)
 
@@ -139,23 +143,26 @@ def run_single_seed(config: SLACExperiment, seed: int) -> None:
             buffer_state, pomdp_states_batch = buffer_obj.sample(buffer_state)
             key, train_key = random.split(key)
             train_state, *_ = gradient_step(
-                train_key,
-                train_state,
-                policy_network,
-                pomdp_states_batch,
-                config.alpha,
-                config.gamma,
-                config.tau,
+                rng_key=train_key,
+                train_state=train_state,
+                policy_network=policy_network,
+                pomdp_states=pomdp_states_batch,
+                alpha=config.alpha,
+                gamma=config.gamma,
+                tau=config.tau,
             )
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
             key, eval_key = random.split(key)
             avg_return, *_ = policy_evaluation(
-                eval_key, env_obj, train_state.policy_state, policy_network
+                rng_key=eval_key,
+                env_obj=env_obj,
+                policy_state=train_state.policy_state,
+                policy_network=policy_network
             )
 
             if logger:
-                logger.log_metrics({"average_return": avg_return}, step=global_step)
+                logger.log_metrics({"average_return": avg_return, "step": global_step})
 
             print(f"Step: {global_step:6d} | Average return: {avg_return:6.2f}")
 

@@ -15,6 +15,7 @@ def parse_args():
     parser.add_argument('--group', type=str, help='Experiment group name (optional, will prompt if not provided)')
     parser.add_argument('--smooth', action='store_true', help='Apply running average smoothing')
     parser.add_argument('--window', type=int, default=5, help='Window size for running average (default: 5)')
+    parser.add_argument('--num_points', type=int, help='Number of points to plot (optional, will use all points if not provided)')
     return parser.parse_args()
 
 def get_available_groups(api, team, project):
@@ -49,7 +50,7 @@ def select_group(groups):
             print("Please enter a valid number")
 
 def apply_smoothing(df, window_size):
-    """Apply running average smoothing to the data."""
+    """Apply running average smoothing to the data for all available keys except 'seed' and 'step'."""
     # Create a copy to avoid modifying the original
     smoothed_df = df.copy()
 
@@ -60,13 +61,32 @@ def apply_smoothing(df, window_size):
         # Sort by step to ensure proper smoothing
         seed_data = seed_data.sort_values('step')
 
-        # Apply rolling mean to expected_reward
-        smoothed_values = seed_data['expected_reward'].rolling(window=window_size, min_periods=1).mean()
-
-        # Update the original dataframe
-        smoothed_df.loc[smoothed_df['seed'] == seed, 'expected_reward'] = smoothed_values
+        # Apply rolling mean to each column except 'seed' and 'step'
+        smoothed_values = seed_data['average_return'].rolling(window=window_size, min_periods=1).mean()
+        smoothed_df.loc[smoothed_df['seed'] == seed, 'average_return'] = smoothed_values
 
     return smoothed_df
+
+def apply_downsampling(df, num_points):
+    """Downsample the data to the specified number of points for each seed separately."""
+    downsampled_data = pd.DataFrame()
+
+    for seed in df['seed'].unique():
+        seed_data = df[df['seed'] == seed]
+        total_points = len(seed_data)
+        if num_points >= total_points:
+            downsampled_data = pd.concat([downsampled_data, seed_data], ignore_index=True)
+            continue
+
+        # Calculate the step size for even distribution
+        step = total_points / num_points
+        sampled_indices = [int(i * step) for i in range(num_points)]
+
+        # Downsample the data for each key
+        downsampled_seed_data = seed_data.iloc[sampled_indices]
+        downsampled_data = pd.concat([downsampled_data, downsampled_seed_data], ignore_index=True)
+
+    return downsampled_data
 
 def main():
     args = parse_args()
@@ -121,6 +141,11 @@ def main():
     if args.smooth:
         print(f"Applying running average smoothing with window size {args.window}")
         combined_data = apply_smoothing(combined_data, args.window)
+
+    # Downsample data if num_points is specified
+    if args.num_points:
+        print(f"Downsampling data to {args.num_points} points")
+        combined_data = apply_downsampling(combined_data, args.num_points)
 
     # Calculate statistics using groupby (much more efficient)
     stats_df = combined_data.groupby('step')['average_return'].agg(['mean', 'sem']).reset_index()

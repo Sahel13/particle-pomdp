@@ -55,7 +55,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     if config.use_logger:
         # Create experiment config dictionary
         p3o_config = {
-            "algorithm": "nsmc",
+            "algorithm": "p3o",
             "environment": config.env_id,
             "num_seeds": config.num_seeds,
             "cuda_device": config.cuda_device,
@@ -100,7 +100,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     batch_size = config.batch_size
     init_std = config.init_std
 
-    num_target_samples = num_history_particles * backward_sampling_mult \
+    num_target_samples = int(num_history_particles * backward_sampling_mult) \
         if backward_sampling else num_history_particles
 
     history_resample_fn = systematic_resampling
@@ -139,7 +139,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     learner = TrainState.create(
         params=params,
         apply_fn=lambda *_: None,
-        tx=optax.adam(learning_rate)
+        tx=optax.adamw(learning_rate)
     )
 
     num_steps = 0
@@ -156,15 +156,14 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
         trans_model=env_obj.trans_model,
         obs_model=env_obj.obs_model,
         reward_fn=env_obj.reward_fn,
+        stochastic=False
     )
     avg_return = jnp.mean(jnp.sum(rewards, axis=0))
-    print(f"Step: {num_steps:6d} | Average return: {avg_return:8.3f}")
 
     if logger:
-        logger.log_metrics({
-            "average_return": avg_return,
-            "policy_entropy": policy.entropy(learner.params),
-        }, step=num_steps)
+        logger.log_metrics({"average_return": avg_return, "step": num_steps})
+
+    print(f"Step: {num_steps:6d} | Average return: {avg_return:8.3f}")
 
     # Training loop
     while num_steps <= total_time_steps:
@@ -235,15 +234,12 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
             trans_model=env_obj.trans_model,
             obs_model=env_obj.obs_model,
             reward_fn=env_obj.reward_fn,
+            stochastic=False
         )
         avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
         if logger:
-            logger.log_metrics({
-                "average_return": avg_return,
-                "log_marginal": log_marginal,
-                "policy_entropy": policy.entropy(learner.params),
-            }, step=num_steps)
+            logger.log_metrics({"average_return": avg_return, "step": num_steps})
 
         print(
             f"Step: {num_steps:6d} | "
