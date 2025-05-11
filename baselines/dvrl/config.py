@@ -3,14 +3,15 @@ from typing import List, Optional, NamedTuple
 
 class DVRL(NamedTuple):
     num_belief_particles: int = 32
-    total_time_steps: int = 100000
-    buffer_size: int = 100000
+    total_time_steps: int = 1_000_000
+    buffer_size: int = 1_000_000
     learning_starts: int = 5000
-    policy_lr: float = 0.0001
+    policy_lr: float = 0.0003
     critic_lr: float = 0.001
     batch_size: int = 256
+    num_batches: int = 8
     alpha: float = 0.2
-    gamma: float = 0.95
+    gamma: float = 0.99
     tau: float = 0.005
 
 
@@ -23,15 +24,16 @@ class DVRLExperiment(NamedTuple):
 
     # Algorithm hyperparameters
     num_belief_particles: int = 32
-    total_time_steps: int = int(1e6)
-    buffer_size: int = int(1e6)
+    total_time_steps: int = 1_000_000
+    buffer_size: int = 1_000_000
     learning_starts: int = 5000
-    policy_lr: float = 3e-4
-    critic_lr: float = 1e-3
+    policy_lr: float = 0.0003
+    critic_lr: float = 0.001
     batch_size: int = 256
+    num_batches: int = 8
     alpha: float = 0.2
-    gamma: float = 0.95
-    tau: float = 5e-3
+    gamma: float = 0.99
+    tau: float = 0.005
 
     # Logger settings
     use_logger: bool = True
