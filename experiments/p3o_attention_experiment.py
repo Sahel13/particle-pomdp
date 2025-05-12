@@ -28,14 +28,14 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
-from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
+from ppomdp.smc import smc, backward_tracing
 from ppomdp.bijector import Tanh
-from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
-from ppomdp.policy.gauss import (
-    create_recurrent_neural_gauss_policy,
-    train_recurrent_neural_gauss_policy_pathwise
+from ppomdp.policy.arch import AttentionEncoder, NeuralGaussDecoder
+from ppomdp.policy.attention import (
+    create_attention_policy,
+    train_attention_policy
 )
-from ppomdp.utils import batch_data, policy_evaluation
+from ppomdp.utils import batch_data, prepare_trajectories, policy_evaluation
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 from ppomdp.config import P3OExperiment
 
@@ -100,8 +100,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     batch_size = config.batch_size
     init_std = config.init_std
 
-    num_target_samples = int(num_history_particles * backward_sampling_mult) \
-        if backward_sampling else num_history_particles
+    num_target_samples = num_history_particles
 
     history_resample_fn = systematic_resampling
     belief_resample_fn = multinomial_resampling \
@@ -111,11 +110,12 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     key = random.key(seed)
 
     # Create network and policy
-    encoder = GRUEncoder(
-        feature_fn=lambda x: x,
-        dense_sizes=encoder_dense_sizes,
-        recurr_sizes=encoder_recurr_sizes,
-        use_layer_norm=True,
+    encoder = AttentionEncoder(
+        feature_fn=env_obj.feature_fn,
+        hidden_size=128,
+        attention_size=128,
+        output_dim=128,
+        num_heads=8,
     )
     decoder = NeuralGaussDecoder(
         decoder_sizes=decoder_dense_sizes,
@@ -124,7 +124,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     )
     bijector = Block(Tanh(), ndims=1)
 
-    policy = create_recurrent_neural_gauss_policy(
+    policy = create_attention_policy(
         encoder=encoder,
         decoder=decoder,
         bijector=bijector
@@ -132,9 +132,10 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     key, sub_key = random.split(key, 2)
     params = policy.init(
         rng_key=sub_key,
-        obs_dim=env_obj.obs_dim,
+        particle_dim=env_obj.state_dim,
         action_dim=env_obj.action_dim,
-        batch_dim=num_history_particles,
+        batch_size=num_history_particles,
+        num_particles=num_belief_particles,
     )
     learner = TrainState.create(
         params=params,
@@ -150,7 +151,9 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
         rng_key=sub_key,
         num_time_steps=env_obj.num_time_steps,
         num_trajectory_samples=1024,
+        num_belief_particles=num_belief_particles,
         init_dist=env_obj.init_dist,
+        belief_prior=env_obj.belief_prior,
         policy=policy,
         policy_params=learner.params,
         trans_model=env_obj.trans_model,
@@ -187,39 +190,32 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
         )
         num_steps += num_history_particles * (env_obj.num_time_steps + 1)
 
-        if backward_sampling:
-            # backward sample history states
-            key, sub_key = random.split(key)
-            traced_history, _ = mcmc_backward_sampling(
-                rng_key=sub_key,
-                num_samples=num_target_samples,
-                policy_prior=policy,
-                policy_prior_params=learner.params,
-                trans_model=env_obj.trans_model,
-                reward_fn=env_obj.reward_fn,
-                slew_rate_penalty=slew_rate_penalty,
-                tempering=tempering,
-                history_states=history_states,
-                belief_states=belief_states,
-            )
-        else:
-            # genealogy tracking of history states
-            key, sub_key = random.split(key)
-            traced_history, _, _ = backward_tracing(
-                sub_key, history_states, belief_states, belief_infos
-            )
+        # genealogy tracking of history states
+        key, sub_key = random.split(key)
+        traced_history, traced_belief, _ = backward_tracing(
+            sub_key, history_states, belief_states, belief_infos
+        )
 
         # update policy parameters
         key, sub_key = random.split(key)
-        batch_indices = batch_data(sub_key, num_target_samples, batch_size)
+        actions, particles, weights = \
+            prepare_trajectories(sub_key, traced_history.actions, traced_belief)
+
+        data_size, _ = actions.shape
+        key, sub_key = random.split(key)
+        batch_indices = batch_data(sub_key, data_size, batch_size)
+
         for batch_idx in batch_indices:
-            action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
-            observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
-            learner, _ = train_recurrent_neural_gauss_policy_pathwise(
+            action_batch = jax.tree.map(lambda x: x[batch_idx, ...], actions)
+            particles_batch = jax.tree.map(lambda x: x[batch_idx, ...], particles)
+            weights_batch = jax.tree.map(lambda x: x[batch_idx, ...], weights)
+
+            learner, _ = train_attention_policy(
                 policy=policy,
                 learner=learner,
                 actions=action_batch,
-                observations=observation_batch,
+                particles=particles_batch,
+                weights=weights_batch,
             )
 
         # Evaluate the policy
@@ -228,7 +224,9 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
             rng_key=sub_key,
             num_time_steps=env_obj.num_time_steps,
             num_trajectory_samples=1024,
+            num_belief_particles=num_belief_particles,
             init_dist=env_obj.init_dist,
+            belief_prior=env_obj.belief_prior,
             policy=policy,
             policy_params=learner.params,
             trans_model=env_obj.trans_model,
