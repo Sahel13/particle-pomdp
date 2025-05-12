@@ -17,7 +17,6 @@ from ppomdp.core import (
     RewardFn,
     RecurrentPolicy,
     AttentionPolicy,
-    PolicyType
 )
 from ppomdp.utils import custom_split
 from ppomdp.smc.utils import (

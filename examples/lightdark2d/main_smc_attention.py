@@ -11,14 +11,14 @@ from flax.linen.initializers import constant
 from flax.training.train_state import TrainState
 from distrax import Block
 
-from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
+from ppomdp.smc import smc, backward_tracing
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import AttentionEncoder, NeuralGaussDecoder
 from ppomdp.policy.attention import (
     create_attention_policy,
     train_attention_policy
 )
-from ppomdp.utils import batch_data, custom_split, policy_evaluation, policy_evaluation_with_beliefs
+from ppomdp.utils import batch_data, prepare_trajectories, policy_evaluation
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
@@ -44,14 +44,16 @@ num_epochs = 500
 
 bijector = Block(Tanh(), ndims=1)
 encoder = AttentionEncoder(
-    hidden_dim=256,
-    output_dim=256,
-    num_heads=16,
+    feature_fn=env.feature_fn,
+    hidden_size=128,
+    attention_size=128,
+    output_dim=128,
+    num_heads=8,
 )
 decoder = NeuralGaussDecoder(
     decoder_sizes=(256, 256),
     output_dim=env.action_dim,
-    init_log_std=constant(jnp.log(2.0)),
+    init_log_std=constant(jnp.log(1.0)),
 )
 policy = create_attention_policy(
     encoder=encoder,
@@ -80,7 +82,7 @@ for i in range(1, num_epochs + 1):
 
     # evaluate current (deterministic) policy
     key, sub_key = random.split(key)
-    rewards, *_ = policy_evaluation_with_beliefs(
+    rewards, *_ = policy_evaluation(
         rng_key=sub_key,
         num_time_steps=env.num_time_steps,
         num_trajectory_samples=1024,
@@ -120,64 +122,23 @@ for i in range(1, num_epochs + 1):
 
     # trace ancestors of history states
     key, sub_key = random.split(key)
-    traced_history, traced_belief, _ = \
-        backward_tracing(sub_key, history_states, belief_states, belief_infos)
-
-    # # backward sample history states
-    # key, sub_key = random.split(key)
-    # traced_history, traced_belief = mcmc_backward_sampling(
-    #     rng_key=sub_key,
-    #     num_samples=num_target_samples,
-    #     policy_prior=policy,
-    #     policy_prior_params=learner.params,
-    #     trans_model=env.trans_model,
-    #     reward_fn=env.reward_fn,
-    #     slew_rate_penalty=slew_rate_penalty,
-    #     tempering=tempering,
-    #     history_states=history_states,
-    #     belief_states=belief_states,
-    # )
-
-    # update policy parameters
-    # loss = 0.0
-    # key, sub_key = random.split(key)
-    # batch_indices = batch_data(sub_key, num_target_samples, batch_size)
-    # for batch_idx in batch_indices:
-    #     action_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.actions)
-    #     observation_batch = jax.tree.map(lambda x: x[:, batch_idx], traced_history.observations)
-    #
-    #     learner, batch_loss = train_recurrent_neural_gauss_policy_pathwise(
-    #         policy=policy,
-    #         learner=learner,
-    #         actions=action_batch,
-    #         observations=observation_batch,
-    #     )
-    #     loss += batch_loss
-
-    loss = 0.0
-    key, sub_key = random.split(key)
-
-    num_time_steps_p1, _, _ = traced_history.actions.shape
-    data_size = (num_time_steps_p1 - 1) * num_history_particles
-
-
-    from ppomdp.smc.utils import resample_belief
-    def _resample_belief(key, belief):
-        key, sub_keys = custom_split(key, num_history_particles + 1)
-        return jax.vmap(resample_belief, in_axes=(0, 0, None))(
-            sub_keys, belief, systematic_resampling
-        )
-
-    key, sub_keys = custom_split(key, env.num_time_steps + 2)
-    traced_belief = jax.vmap(_resample_belief, in_axes=(0, 0))(
-        sub_keys, traced_belief
+    traced_history, traced_belief, _ = backward_tracing(
+        rng_key=sub_key,
+        history_states=history_states,
+        belief_states=belief_states,
+        belief_infos=belief_infos
     )
 
-    actions = traced_history.actions[1:].reshape((-1, traced_history.actions.shape[-1]))
-    particles = traced_belief.particles[:-1].reshape((-1, num_belief_particles, traced_belief.particles.shape[-1]))
-    weights = traced_belief.weights[:-1].reshape((-1, traced_belief.weights.shape[-1]))
+    # update policy parameters
+    key, sub_key = random.split(key)
+    actions, particles, weights = \
+        prepare_trajectories(sub_key, traced_history.actions, traced_belief)
 
+    data_size, _ = actions.shape
+    key, sub_key = random.split(key)
     batch_indices = batch_data(sub_key, data_size, batch_size)
+
+    loss = 0.0
     for batch_idx in batch_indices:
         action_batch = jax.tree.map(lambda x: x[batch_idx, ...], actions)
         particles_batch = jax.tree.map(lambda x: x[batch_idx, ...], particles)
@@ -207,7 +168,7 @@ for i in range(1, num_epochs + 1):
 
 
 key, sub_key = random.split(key)
-_, states, actions, beliefs = policy_evaluation_with_beliefs(
+_, states, actions, beliefs = policy_evaluation(
     rng_key=sub_key,
     num_time_steps=env.num_time_steps,
     num_trajectory_samples=1024,

@@ -18,7 +18,9 @@ class AttentionEncoder(nn.Module):
         output_dim: Dimension of the output representation
         num_heads: Number of attention heads
     """
-    hidden_dim: int
+    feature_fn: Callable
+    hidden_size: int
+    attention_size: int
     output_dim: int
     num_heads: int = 16
 
@@ -37,17 +39,19 @@ class AttentionEncoder(nn.Module):
         weights = weights / jnp.sum(weights, axis=-1, keepdims=True)
 
         # Embed particles
-        # x = nn.relu(nn.Dense(self.hidden_dim)(particles))
+        x = self.feature_fn(particles)
+        x = nn.gelu(nn.Dense(self.hidden_size)(x))
+        x = nn.gelu(nn.Dense(self.hidden_size)(x))
 
         # Apply self-attention
         x = nn.SelfAttention(
             num_heads=self.num_heads,
-            qkv_features=self.hidden_dim,
-            out_features=self.hidden_dim,
-            broadcast_dropout = False,
-            deterministic = True,
-            use_bias = True,
-        )(particles)
+            qkv_features=self.attention_size,
+            out_features=self.attention_size,
+            broadcast_dropout=False,
+            deterministic=True,
+            use_bias=True,
+        )(x)
 
         # Weighted pooling
         x = jnp.sum(x * weights[..., None], axis=1)

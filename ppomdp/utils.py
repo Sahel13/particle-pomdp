@@ -11,7 +11,7 @@ from distrax import Distribution
 from ppomdp.core import (
     PRNGKey,
     Parameters,
-    HistoryParticles,
+    BeliefState,
     RecurrentPolicy,
     AttentionPolicy,
     TransitionModel,
@@ -101,46 +101,27 @@ def custom_split(rng_key: PRNGKey, num: int):
 
 
 @jax.jit
-def flatten_trajectories(particles: HistoryParticles):
-    """
-    Flattens the trajectories stored in `particles` into a format suitable for
-    machine learning or further processing. Specifically, it takes the temporal
-    structure of the particles and reshapes each time-dependent component into
-    a 2D structure where the first dimension represents all time steps across
-    all particles.
+def prepare_trajectories(key: Array, actions: Array, beliefs: BeliefState):
+    num_time_steps, num_history_particles, _ = actions.shape
+    _, _, num_particles, _ = beliefs.particles.shape
 
-    Args:
-        particles: A `HistoryParticles` instance containing the trajectory data.
-            The `particles` must include a time component in their structure
-            (3-dimensional `observations` and `actions` attributes).
+    from ppomdp.smc.utils import resample_belief, systematic_resampling
+    def _resample_belief(key, belief):
+        key, sub_keys = custom_split(key, num_history_particles + 1)
+        return jax.vmap(resample_belief, in_axes=(0, 0, None))(
+            sub_keys, belief, systematic_resampling
+        )
 
-    Returns:
-        Tuple containing:
-            - actions: A 2D array where each row represents an action taken
-              at a time step across all particles.
-            - next_actions: A 2D array where each row represents the next
-              action taken after a specific time step across all particles.
-            - observations: A 2D array where each row represents the observation
-              at a time step across all particles.
-            - next_observations: A 2D array where each row represents the next
-              observation after a specific time step across all particles.
-            - carry: Tree-structured data with its components reshaped into 2D
-              arrays, representing additional associated particle data.
+    key, belief_keys = custom_split(key, num_time_steps + 1)
+    resampled_beliefs = jax.vmap(_resample_belief, in_axes=(0, 0))(
+        belief_keys, beliefs
+    )
 
-    Raises:
-        ValueError: If `particles.observations` does not have 3 dimensions,
-            indicating it is missing the required time component.
-    """
-
-    if particles.observations.ndim != 3:
-        raise ValueError("`particles` must include a time component.")
-
-    actions = particles.actions[:-1].reshape((-1, particles.actions.shape[-1]))
-    next_actions = particles.actions[1:].reshape((-1, particles.actions.shape[-1]))
-    observations = particles.observations[:-1].reshape((-1, particles.observations.shape[-1]))
-    next_observations = particles.observations[1:].reshape((-1, particles.observations.shape[-1]))
-    carry = jax.tree.map(lambda x: x[:-1].reshape((-1, x.shape[-1])), particles.carry)
-    return actions, next_actions, observations, next_observations, carry
+    particles, weights = resampled_beliefs.particles, resampled_beliefs.weights
+    actions = actions[1:].reshape((-1, actions.shape[-1]))
+    particles = particles[:-1].reshape((-1, num_particles, particles.shape[-1]))
+    weights = weights[:-1].reshape((-1, weights.shape[-1]))
+    return actions, particles, weights
 
 
 @partial(
@@ -157,7 +138,7 @@ def flatten_trajectories(particles: HistoryParticles):
         "reward_fn",
     )
 )
-def policy_evaluation_with_beliefs(
+def policy_evaluation(
     rng_key: PRNGKey,
     num_time_steps: int,
     num_trajectory_samples: int,
@@ -256,7 +237,7 @@ def policy_evaluation_with_beliefs(
         )
 
         return (states,  actions, carry, observations, beliefs, time_idx + 1), \
-            (states, actions, rewards)
+            (states, actions, beliefs, rewards)
 
     key, state_key = random.split(rng_key)
     init_states = init_dist.sample(seed=state_key, sample_shape=num_trajectory_samples)
@@ -272,7 +253,7 @@ def policy_evaluation_with_beliefs(
         belief_keys, belief_prior, obs_model, init_observations, num_belief_particles
     )
 
-    _, (states, actions, rewards) = jax.lax.scan(
+    _, (states, actions, beliefs, rewards) = jax.lax.scan(
         f=body,
         init=(init_states, init_actions, init_carry, init_observations, init_beliefs, 1),
         xs=random.split(key, num_time_steps),
@@ -282,7 +263,8 @@ def policy_evaluation_with_beliefs(
         return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
 
     states = concat_trees(init_states,  states)
-    return rewards, states, actions
+    beliefs = concat_trees(init_beliefs, beliefs)
+    return rewards, states, actions, beliefs
 
 
 def damping_schedule(
