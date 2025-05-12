@@ -40,8 +40,6 @@ class AttentionEncoder(nn.Module):
 
         # Embed particles
         x = self.feature_fn(particles)
-        x = nn.gelu(nn.Dense(self.hidden_size)(x))
-        x = nn.gelu(nn.Dense(self.hidden_size)(x))
 
         # Apply self-attention
         x = nn.SelfAttention(
@@ -52,6 +50,9 @@ class AttentionEncoder(nn.Module):
             deterministic=True,
             use_bias=True,
         )(x)
+
+        x = nn.gelu(nn.Dense(self.hidden_size)(x))
+        x = nn.gelu(nn.Dense(self.hidden_size)(x))
 
         # Weighted pooling
         x = jnp.sum(x * weights[..., None], axis=1)
