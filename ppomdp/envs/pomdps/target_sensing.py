@@ -1,14 +1,11 @@
 """The target interception problem from https://ieeexplore.ieee.org/document/1101052."""
 
-from functools import partial
-
 import jax
 from jax import Array, numpy as jnp
 
 from distrax import (
     Block,
     ScalarAffine,
-    Deterministic,
     MultivariateNormalDiag
 )
 
@@ -123,13 +120,6 @@ belief_prior = MultivariateNormalDiag(
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 
-
-@partial(jnp.vectorize, signature="(m)->(n)")
-def feature_fn(z: Array) -> Array:
-    sin_q, cos_q = jnp.sin(z[0]), jnp.cos(z[0])
-    return jnp.array([sin_q, cos_q])
-
-
 TargetEnv = POMDPEnv(
     num_envs=num_envs,
     state_dim=state_dim,
@@ -141,5 +131,5 @@ TargetEnv = POMDPEnv(
     trans_model=trans_model,
     obs_model=obs_model,
     reward_fn=reward_fn,
-    feature_fn=feature_fn,
+    feature_fn=lambda x: x,
 )
