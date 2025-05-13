@@ -72,7 +72,7 @@ S0_diag = (
 
 init_dist = Deterministic(loc=m0)
 belief_prior = MultivariateNormalDiag(loc=m0, scale_diag=jnp.sqrt(S0_diag))
-num_time_steps = estimate_simulation_duration(m0)
+num_time_steps = estimate_simulation_duration(m0).item()
 
 
 def ode(state: Array, action: Array) -> Array:
@@ -135,10 +135,10 @@ def mean_trans(state, action, dt=DT, n_rk=N_RK):
 
 def stddev_trans(s: Array) -> Array:
     nx = len(s)
-    M = jnp.eye(nx) * DEFAULT_SYSTEM_NOISE_SCALE
+    M = jnp.ones(nx) * DEFAULT_SYSTEM_NOISE_SCALE
 
     # Catcher's dynamics is less noisy
-    M = M.at[-6:, -6:].set(jnp.eye(6) * 1e-5)
+    M = M.at[-6:].set(1e-5)
 
     return jnp.sqrt(M)
 
@@ -177,10 +177,10 @@ def stddev_obs(state, N_min=DEFAULT_OBS_NOISE_MIN, N_max=DEFAULT_OBS_NOISE_MAX):
     variance = r_norm * (N_max * (1.0 - cos_omega) + N_min)
 
     # Create covariance matrix with zeros except for ball position observations
-    N = jnp.eye(7) * 1e-5
-    N = N.at[0, 0].set(variance)  # x_b variance
-    N = N.at[1, 1].set(variance)  # y_b variance
-    N = N.at[2, 2].set(variance)  # z_b variance
+    N = jnp.ones(7) * 1e-5
+    N = N.at[0].set(variance)  # x_b variance
+    N = N.at[1].set(variance)  # y_b variance
+    N = N.at[2].set(variance)  # z_b variance
 
     return jnp.sqrt(N)
 
@@ -217,7 +217,7 @@ state_dim = 12
 obs_dim = 7
 action_dim = 4
 
-LightDark2DEnv = POMDPEnv(
+BallCatchingEnv = POMDPEnv(
     num_envs=num_envs,
     state_dim=state_dim,
     action_dim=action_dim,

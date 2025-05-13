@@ -25,6 +25,8 @@ def get_pomdp(env_name: str) -> POMDPEnv:
         return pomdps.LightDark1DEnv
     elif env_name == "light-dark-2d":
         return pomdps.LightDark2DEnv
+    elif env_name == "ball-catching":
+        return pomdps.BallCatchingEnv
     else:
         raise NotImplementedError
 
