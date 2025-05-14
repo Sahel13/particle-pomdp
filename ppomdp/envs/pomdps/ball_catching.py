@@ -55,7 +55,7 @@ def estimate_simulation_duration(state):
 x_b0 = y_b0 = z_b0 = 0.0
 vx_b0, vy_b0, vz_b0 = 10.0, 4.0, 15.0
 
-x_c0, y_c0 = 22.0, 7.0
+x_c0, y_c0 = 15.0, 0.0
 vx_c0 = vy_c0 = 0.0
 
 phi0 = jnp.arctan2(y_b0 - y_c0, x_b0 - x_c0)  # direction towards the ball
@@ -81,7 +81,7 @@ def ode(state: Array, action: Array) -> Array:
     F_c, w_phi, w_psi, theta = action
 
     # Apply action limits.
-    F_c = 0.5 * (F_c + 1) * (F_C1 + F_C2 * jnp.cos(theta))
+    F_c *= (F_C1 + F_C2 * jnp.cos(theta))
 
     x_b_dot = vx_b
     y_b_dot = vy_b
@@ -128,6 +128,11 @@ def mean_trans(state, action, dt=DT, n_rk=N_RK):
 
     def body_fn(carry, _):
         next_carry = rk4_step(carry, action, dt_rk)
+
+        # Apply state limits.
+        next_carry = next_carry.at[-1].set(jnp.clip(next_carry[-1], 0.0, 0.8 * jnp.pi / 2))
+        next_carry = next_carry.at[-2].set(jnp.clip(next_carry[-2], 0.0, 2 * jnp.pi))
+
         return next_carry, None
 
     return lax.scan(body_fn, state, length=n_rk)[0]
@@ -196,16 +201,18 @@ def log_prob_obs(z: Array, s: Array) -> Array:
 
 
 def reward_fn(s: Array, a: Array, t: Array) -> Array:
-    w_cl = 1e3
+    w_cl = 1e1  # 1e3
     x_b, y_b, _, _, _, _, x_c, y_c, _, _, _, _ = s
 
     dx_bc = jnp.array([x_b - x_c, y_b - y_c])
     distance_cost = 0.5 * jnp.dot(dx_bc, dx_bc)
 
-    R = jnp.diag(jnp.array([1e1, 1e0, 1e0, 1e-1]))
+    # R = jnp.diag(jnp.array([1e1, 1e0, 1e0, 1e-1]))
+    R = jnp.diag(jnp.array([1e1, 1e0, 1e0, 1e-1])) * 1e-3
 
     cost = lax.select(t < num_time_steps, 0.0, w_cl * distance_cost)
-    cost += 0.5 * jnp.dot(a, jnp.dot(R, a)) * DT
+    # cost = w_cl * distance_cost
+    cost += 0.5 * jnp.dot(a, jnp.dot(R, a))
     return -cost
 
 
