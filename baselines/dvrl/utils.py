@@ -11,7 +11,6 @@ from distrax import Distribution
 from ppomdp.core import (
     PRNGKey,
     Parameters,
-    RecurrentPolicy,
     TransitionModel,
     ObservationModel,
 )

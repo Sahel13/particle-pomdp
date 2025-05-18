@@ -19,7 +19,7 @@ from ppomdp.policy.attention import (
     train_attention_policy
 )
 from ppomdp.utils import batch_data, prepare_trajectories, policy_evaluation
-from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
+from ppomdp.smc.utils import systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
@@ -115,7 +115,7 @@ for i in range(1, num_epochs + 1):
             slew_rate_penalty=slew_rate_penalty,
             tempering=tempering,
             history_resample_fn=systematic_resampling,
-            belief_resample_fn=multinomial_resampling,
+            belief_resample_fn=systematic_resampling,
         )
 
     num_steps += (env.num_time_steps + 1) * num_history_particles

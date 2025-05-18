@@ -14,9 +14,11 @@ class AttentionEncoder(nn.Module):
     followed by a weighted pooling operation to produce a fixed-size representation.
 
     Attributes:
-        hidden_dim: Dimension of the hidden layers
-        output_dim: Dimension of the output representation
-        num_heads: Number of attention heads
+        feature_fn: Function to extract features from input particles
+        hidden_size: Dimension of the hidden layers after attention
+        attention_size: Dimension of the attention mechanism
+        output_dim: Dimension of the final output representation
+        num_heads: Number of attention heads (default: 16)
     """
     feature_fn: Callable
     hidden_size: int
@@ -40,8 +42,6 @@ class AttentionEncoder(nn.Module):
 
         # Embed particles
         x = self.feature_fn(particles)
-        x = nn.gelu(nn.Dense(self.hidden_size)(x))
-        x = nn.gelu(nn.Dense(self.hidden_size)(x))
 
         # Apply self-attention
         x = nn.SelfAttention(
@@ -55,6 +55,9 @@ class AttentionEncoder(nn.Module):
 
         # Weighted pooling
         x = jnp.sum(x * weights[..., None], axis=1)
+
+        x = nn.relu(nn.Dense(self.hidden_size)(x))
+        x = nn.relu(nn.Dense(self.hidden_size)(x))
 
         # Final transformation
         x = nn.Dense(self.output_dim)(x)
