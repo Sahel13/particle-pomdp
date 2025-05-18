@@ -23,7 +23,10 @@ num_time_steps = 100
 action_scale = 50.0
 action_shift = 0.0
 action_trans = Block(
-    ScalarAffine(scale=action_scale, shift=action_shift),
+    ScalarAffine(
+        scale=action_scale,
+        shift=action_shift
+    ),
     ndims=1
 )
 
