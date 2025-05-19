@@ -1,17 +1,19 @@
-# particle-pomdp
+# Particle POMDP Policy Optimization (P3O)
 
 ## Installation
-Install [JAX](https://github.com/jax-ml/jax?tab=readme-ov-file#installation) for the appropriate hardware. Then run
+
+Install [JAX](https://github.com/jax-ml/jax?tab=readme-ov-file#installation) for the available hardware. Then run
 ```bash
-$ pip install -e ".[test]"
+$ pip install -e .
 ```
-for an editable install with test dependencies.
+for an editable install.
 
 ## Baselines
 
 We provide the following baselines for comparison:
-1. **Deep variational reinforcement learning for POMDPs (DVRL)** [1] - See `baselines/dvrl/README.md` for instructions.
-2. **Stochastic latent actor-critic (SLAC)** [2] - See `baselines/slac/README.md` for instructions.
+1. **Deep Variational Reinforcement Learning for POMDPs (DVRL)** [1] - See `baselines/dvrl`.
+2. **Stochastic Latent Actor-Critic (SLAC)** [2] - See `baselines/slac`.
+3. **DualSMC** [3] - See `baselines/dsmc`.
 
 ## Running Experiments
 
@@ -70,3 +72,6 @@ python experiments/dvrl_experiment.py \
    POMDPs. In International Conference on Machine Learning, 2018.
 2. Lee, Alex X., et al. Stochastic latent actor-critic: Deep reinforcement learning with a latent
    variable model. In Advances in Neural Information Processing Systems, 2020.
+3. Y. Wang, B. Liu, J. Wu, Y. Zhu, S. S. Du, L. Fei-Fei, and J. B. Tenenbaum. Dualsmc: Tunneling
+   differentiable filtering and planning under continuous POMDPs. In Proceedings of the Twenty-Ninth
+   International Joint Conference on Artificial Intelligence, 2020.
