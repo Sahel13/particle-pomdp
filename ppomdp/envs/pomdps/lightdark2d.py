@@ -45,7 +45,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-4, 1e-4, 1e-1, 1e-1])
+    return jnp.array([1e-2, 1e-2, 1e-1, 1e-1])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
