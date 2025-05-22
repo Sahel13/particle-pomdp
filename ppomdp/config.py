@@ -14,10 +14,7 @@ class P3O(NamedTuple):
     # damped version
     damping: Optional[float] = 0.0
 
-    # Policy hyperparameters
-    encoder_dense_sizes: tuple[int, ...] = (256, 256)
-    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
-    decoder_dense_sizes: tuple[int, ...] = (256, 256)
+    # learning hyperparameters
     learning_rate: float = 3e-4
     batch_size: int = 16
     init_std: float = 1.0
@@ -42,10 +39,7 @@ class P3OExperiment(NamedTuple):
     # damped version
     damping: Optional[float] = 0.0
 
-    # Policy hyperparameters
-    encoder_dense_sizes: tuple[int, ...] = (256, 256)
-    encoder_recurr_sizes: tuple[int, ...] = (128, 128)
-    decoder_dense_sizes: tuple[int, ...] = (256, 256)
+    # learning hyperparameters
     learning_rate: float = 3e-4
     batch_size: int = 16
     init_std: float = 1.0

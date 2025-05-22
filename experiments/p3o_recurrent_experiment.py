@@ -20,6 +20,8 @@ import tyro
 from tqdm import tqdm
 
 import jax
+jax.config.update("jax_enable_x64", True)
+
 import optax
 
 from jax import random
@@ -66,9 +68,6 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
             "tempering": config.tempering,
             "backward_sampling": config.backward_sampling,
             "backward_sampling_mult": config.backward_sampling_mult,
-            "encoder_dense_sizes": config.encoder_dense_sizes,
-            "encoder_recurr_sizes": config.encoder_recurr_sizes,
-            "decoder_dense_sizes": config.decoder_dense_sizes,
             "learning_rate": config.learning_rate,
             "batch_size": config.batch_size,
             "init_std": config.init_std,
@@ -93,9 +92,6 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     tempering = config.tempering
     backward_sampling = config.backward_sampling
     backward_sampling_mult = config.backward_sampling_mult
-    encoder_dense_sizes = config.encoder_dense_sizes
-    encoder_recurr_sizes = config.encoder_recurr_sizes
-    decoder_dense_sizes = config.decoder_dense_sizes
     learning_rate = config.learning_rate
     batch_size = config.batch_size
     init_std = config.init_std
@@ -113,12 +109,12 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     # Create network and policy
     encoder = GRUEncoder(
         feature_fn=lambda x: x,
-        dense_sizes=encoder_dense_sizes,
-        recurr_sizes=encoder_recurr_sizes,
+        dense_sizes=(256, 256),
+        recurr_sizes=(128, 128),
         use_layer_norm=True,
     )
     decoder = NeuralGaussDecoder(
-        decoder_sizes=decoder_dense_sizes,
+        decoder_sizes=(256, 256),
         output_dim=env_obj.action_dim,
         init_log_std=constant(jnp.log(init_std)),
     )
@@ -139,7 +135,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     learner = TrainState.create(
         params=params,
         apply_fn=lambda *_: None,
-        tx=optax.adamw(learning_rate)
+        tx=optax.adam(learning_rate)
     )
 
     num_steps = 0

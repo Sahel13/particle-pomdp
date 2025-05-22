@@ -20,6 +20,8 @@ import tyro
 from tqdm import tqdm
 
 import jax
+jax.config.update("jax_enable_x64", True)
+
 import optax
 
 from jax import random
@@ -36,7 +38,7 @@ from ppomdp.policy.attention import (
     train_attention_policy
 )
 from ppomdp.utils import batch_data, prepare_trajectories, policy_evaluation
-from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
+from ppomdp.smc.utils import systematic_resampling
 from ppomdp.config import P3OExperiment
 
 from wandb_logger import WandbLogger
@@ -64,11 +66,6 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
             "num_belief_particles": config.num_belief_particles,
             "slew_rate_penalty": config.slew_rate_penalty,
             "tempering": config.tempering,
-            "backward_sampling": config.backward_sampling,
-            "backward_sampling_mult": config.backward_sampling_mult,
-            "encoder_dense_sizes": config.encoder_dense_sizes,
-            "encoder_recurr_sizes": config.encoder_recurr_sizes,
-            "decoder_dense_sizes": config.decoder_dense_sizes,
             "learning_rate": config.learning_rate,
             "batch_size": config.batch_size,
             "init_std": config.init_std,
@@ -91,20 +88,13 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     num_belief_particles = config.num_belief_particles
     slew_rate_penalty = config.slew_rate_penalty
     tempering = config.tempering
-    backward_sampling = config.backward_sampling
-    backward_sampling_mult = config.backward_sampling_mult
-    encoder_dense_sizes = config.encoder_dense_sizes
-    encoder_recurr_sizes = config.encoder_recurr_sizes
-    decoder_dense_sizes = config.decoder_dense_sizes
     learning_rate = config.learning_rate
     batch_size = config.batch_size
     init_std = config.init_std
 
-    num_target_samples = num_history_particles
-
     history_resample_fn = systematic_resampling
-    belief_resample_fn = multinomial_resampling \
-        if backward_sampling else systematic_resampling
+    belief_resample_fn = systematic_resampling
+
 
     # Initialize JAX random key
     key = random.key(seed)
@@ -118,7 +108,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
         num_heads=8,
     )
     decoder = NeuralGaussDecoder(
-        decoder_sizes=decoder_dense_sizes,
+        decoder_sizes=(256, 256),
         output_dim=env_obj.action_dim,
         init_log_std=constant(jnp.log(init_std)),
     )
@@ -140,7 +130,7 @@ def run_single_seed(config: P3OExperiment, seed: int) -> None:
     learner = TrainState.create(
         params=params,
         apply_fn=lambda *_: None,
-        tx=optax.adamw(learning_rate)
+        tx=optax.adam(learning_rate)
     )
 
     num_steps = 0
