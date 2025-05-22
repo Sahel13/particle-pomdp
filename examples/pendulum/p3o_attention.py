@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -166,36 +166,36 @@ for i in range(1, num_epochs + 1):
     )
 
 
-# key, sub_key = random.split(key)
-# _, states, actions, beliefs = policy_evaluation_with_beliefs(
-#     rng_key=sub_key,
-#     num_time_steps=env.num_time_steps,
-#     num_trajectory_samples=1024,
-#     num_belief_particles=num_belief_particles,
-#     init_dist=env.init_dist,
-#     belief_prior=env.belief_prior,
-#     policy=policy,
-#     policy_params=learner.params,
-#     trans_model=env.trans_model,
-#     obs_model=env.obs_model,
-#     reward_fn=env.reward_fn,
-#     stochastic=False
-# )
+key, sub_key = random.split(key)
+_, states, actions, beliefs = policy_evaluation(
+    rng_key=sub_key,
+    num_time_steps=env.num_time_steps,
+    num_trajectory_samples=1024,
+    num_belief_particles=num_belief_particles,
+    init_dist=env.init_dist,
+    belief_prior=env.belief_prior,
+    policy=policy,
+    policy_params=learner.params,
+    trans_model=env.trans_model,
+    obs_model=env.obs_model,
+    reward_fn=env.reward_fn,
+    stochastic=False
+)
 
-# fig, axs = plt.subplots(3, 1, figsize=(10, 8))
-# fig.suptitle("Simulated trajectories")
+fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+fig.suptitle("Simulated trajectories")
 
-# axs[0].plot(states[..., 0])
-# axs[0].set_ylabel("Angle")
-# axs[0].grid(True)
+axs[0].plot(states[..., 0])
+axs[0].set_ylabel("Angle")
+axs[0].grid(True)
 
-# axs[1].plot(states[..., 1])
-# axs[1].set_ylabel("Angular Velocity")
-# axs[1].grid(True)
+axs[1].plot(states[..., 1])
+axs[1].set_ylabel("Angular Velocity")
+axs[1].grid(True)
 
-# axs[2].plot(actions[..., 0])
-# axs[2].set_ylabel("Actions")
-# axs[2].grid(True)
+axs[2].plot(actions[..., 0])
+axs[2].set_ylabel("Actions")
+axs[2].grid(True)
 
-# plt.tight_layout()
-# plt.show()
+plt.tight_layout()
+plt.show()
