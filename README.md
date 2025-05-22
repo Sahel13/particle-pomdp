@@ -42,7 +42,7 @@ $ python examples/lightdark2d/p3o_attention.py
 We provide the following baselines for comparison:
 1. **Deep variational reinforcement learning for POMDPs (DVRL)** [1]
 2. **Stochastic latent actor-critic (SLAC)** [2]
-3. **Dual Sequential Monte Carlo (DSMC)** [3]
+3. **Dual Sequential Monte Carlo (Dual-SMC or DSMC)** [3]
 
 More details on the baselines can be found under `experiements/README.md`
 ```
