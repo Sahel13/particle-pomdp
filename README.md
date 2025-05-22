@@ -38,13 +38,13 @@ Each environment can be ran with two policies:
 For example, for the light-dark environment run:
 
 ```bash
-$ python examples/lightdark2d/p3o_recurrent.py
+python examples/lightdark2d/p3o_recurrent.py
 ```
 
 or
 
 ```bash
-$ python examples/lightdark2d/p3o_attention.py
+python examples/lightdark2d/p3o_attention.py
 ```
 
 ## Baselines
