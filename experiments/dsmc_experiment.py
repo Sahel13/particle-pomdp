@@ -18,10 +18,11 @@ if len(sys.argv) > 1:
 
 import jax
 import tyro
+from tqdm import tqdm
+
+from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 from common import get_pomdp, get_unique_identifier
-from jax import random
-from tqdm import tqdm
 from wandb_logger import WandbLogger
 
 from baselines.dsmc import (
@@ -88,12 +89,19 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
     # Check policy performance before training
     key, eval_key = random.split(key)
-    avg_return, *_ = policy_evaluation(
+    rewards, *_ = policy_evaluation(
         rng_key=eval_key,
-        env_obj=env_obj,
+        num_time_steps=env_obj.num_time_steps,
+        num_trajectory_samples=1024,
+        num_belief_particles=config.num_belief_particles,
+        init_dist=env_obj.init_dist,
+        belief_prior=env_obj.belief_prior,
         policy_state=train_state.policy_state,
-        num_belief_particles=config.num_belief_particles
+        trans_model=env_obj.trans_model,
+        obs_model=env_obj.obs_model,
+        reward_fn=env_obj.reward_fn,
     )
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
     if logger:
         logger.log_metrics({"average_return": avg_return, "step": 0})
@@ -166,12 +174,19 @@ def run_single_seed(config: DSMCExperiment, seed: int) -> None:
 
         if global_step % (20 * env_obj.num_time_steps) == 0:
             key, eval_key = random.split(key)
-            avg_return, _, _ = policy_evaluation(
+            rewards, *_ = policy_evaluation(
                 rng_key=eval_key,
-                env_obj=env_obj,
-                policy_state=train_state.policy_state,
+                num_time_steps=env_obj.num_time_steps,
+                num_trajectory_samples=1024,
                 num_belief_particles=config.num_belief_particles,
+                init_dist=env_obj.init_dist,
+                belief_prior=env_obj.belief_prior,
+                policy_state=train_state.policy_state,
+                trans_model=env_obj.trans_model,
+                obs_model=env_obj.obs_model,
+                reward_fn=env_obj.reward_fn,
             )
+            avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
             if logger:
                 logger.log_metrics({"average_return": avg_return, "step": global_step})

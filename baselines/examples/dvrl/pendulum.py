@@ -5,7 +5,6 @@ import jax
 from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
-from ppomdp.smc.utils import initialize_belief, update_belief
 from baselines.common import get_pomdp
 from baselines.dvrl import (
     DVRL,

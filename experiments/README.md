@@ -42,7 +42,7 @@ python p3o_recurrent_experiment.py \
 python slac_experiment.py \
     --env_id light-dark-2d \
     --num_seeds 10 \
-    --cuda_device 2 \
+    --cuda_device 0 \
     --project_name particle-pomdp \
     --experiment_group slac-light \
     --experiment_tags slac light \
@@ -116,7 +116,7 @@ python dsmc_experiment.py \
 
 All algorithms share some common parameters:
 
-- `env_id`: The environment to run the experiment on (e.g., "lightdark", "cartpole")
+- `env_id`: The environment to run the experiment on (e.g., "light-dark-2d", "cartpole")
 - `num_seeds`: Number of random seeds to run the experiment with
 - `cuda_device`: GPU device ID to use (default: 0)
 - `use_logger`: Whether to use wandb for logging (true/false)
@@ -128,9 +128,10 @@ All algorithms share some common parameters:
 ## Environment Support
 
 The algorithms have been tested on the following environments:
-- LightDark: A 2D navigation task with partial observability
-- CartPole: Classic control task with partial observability
 - Pendulum: Continuous control task with partial observability
+- CartPole: Classic control task with partial observability
+- LightDark: A 2D navigation task with partial observability
+- Target: A 2D traingulation task with partial observability
 
 ## Logging
 

@@ -6,12 +6,12 @@ from jax import random, numpy as jnp
 from brax.training.replay_buffers import UniformSamplingQueue
 
 from baselines.common import get_pomdp
-from baselines.slac.config import SLAC
-from baselines.slac.utils import policy_evaluation
-from baselines.slac.slac import (
+from baselines.slac import (
+    SLAC,
     create_train_state,
     gradient_step,
     pomdp_rollout,
+    policy_evaluation
 )
 
 import matplotlib.pyplot as plt
@@ -94,41 +94,38 @@ if __name__ == "__main__":
 
         if global_step % 2000 == 0:
             key, sub_key = random.split(key)
-            avg_return, _, _ = policy_evaluation(
+            rewards, *_ = policy_evaluation(
                 rng_key=sub_key,
-                env_obj=env_obj,
+                num_time_steps=env_obj.num_time_steps,
+                num_trajectory_samples=1024,
+                num_belief_particles=config.num_belief_particles,
+                init_dist=env_obj.init_dist,
+                belief_prior=env_obj.belief_prior,
                 policy_state=train_state.policy_state,
-                policy_network=policy_network
+                policy_network=policy_network,
+                trans_model=env_obj.trans_model,
+                obs_model=env_obj.obs_model,
+                reward_fn=env_obj.reward_fn,
             )
+            avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
             print(f"Step: {global_step:6d} | Average Return: {avg_return:.2f}")
 
     # Evaluate the learned policy.
-    def body(val, rng_key):
-        state, carry, observation = val
-        action_key, state_key, obs_key = random.split(rng_key, 3)
-        carry, _, _, action = train_state.policy_state.apply_fn(
-            rng_key=action_key,
-            carry=carry,
-            observation=observation,
-            params=train_state.policy_state.params,
-        )
-        state = env_obj.trans_model.sample(state_key, state, action[0])
-        observation = env_obj.obs_model.sample(obs_key, state)
-        return (state, carry, observation), (state, observation, action[0])
-
-
-    key, state_key, obs_key = random.split(key, 3)
-    init_state = env_obj.init_dist.sample(seed=state_key)
-    init_observation = env_obj.obs_model.sample(obs_key, init_state)
-    init_carry = policy_network.reset(1)
-
-    _, (states, _, actions) = jax.lax.scan(
-        f=body,
-        init=(init_state, init_carry, init_observation),
-        xs=random.split(key, env_obj.num_time_steps)
+    key, eval_key = random.split(key)
+    rewards, states, actions, beliefs = policy_evaluation(
+        rng_key=eval_key,
+        num_time_steps=env_obj.num_time_steps,
+        num_trajectory_samples=1024,
+        num_belief_particles=config.num_belief_particles,
+        init_dist=env_obj.init_dist,
+        belief_prior=env_obj.belief_prior,
+        policy_state=train_state.policy_state,
+        trans_model=env_obj.trans_model,
+        obs_model=env_obj.obs_model,
+        reward_fn=env_obj.reward_fn,
     )
-    states = jnp.concatenate([init_state[None, ...], states], axis=0)
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
     fig.suptitle("Simulated trajectory")

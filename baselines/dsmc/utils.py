@@ -1,16 +1,21 @@
+from typing import NamedTuple, Callable
 from functools import partial
-from typing import NamedTuple
 
 import jax
 
 from jax import Array, random, numpy as jnp
 from flax.training.train_state import TrainState
 from distrax import Chain, MultivariateNormalDiag, Transformed
+from distrax import Distribution
 
-from ppomdp.core import Parameters, PRNGKey
-from ppomdp.envs.core import POMDPEnv
+from ppomdp.core import (
+    PRNGKey,
+    Parameters,
+    TransitionModel,
+    ObservationModel,
+)
+
 from ppomdp.utils import custom_split
-from ppomdp.smc.utils import initialize_belief, update_belief
 
 from baselines.dsmc.arch import PolicyNetwork
 
@@ -42,18 +47,30 @@ def policy_sample_and_log_prob(
 @partial(
     jax.jit,
     static_argnames=(
-        "env_obj",
+        "num_time_steps",
+        "num_trajectory_samples",
         "num_belief_particles",
-        "num_samples",
-    ),
+        "init_dist",
+        "belief_prior",
+        "trans_model",
+        "obs_model",
+        "reward_fn",
+    )
 )
 def policy_evaluation(
     rng_key: PRNGKey,
-    env_obj: POMDPEnv,
-    policy_state: TrainState,
+    num_time_steps: int,
+    num_trajectory_samples: int,
     num_belief_particles: int,
-    num_samples: int = 1024,
+    init_dist: Distribution,
+    belief_prior: Distribution,
+    policy_state: TrainState,
+    trans_model: TransitionModel,
+    obs_model: ObservationModel,
+    reward_fn: Callable,
 ):
+
+    from ppomdp.smc.utils import initialize_belief, update_belief
 
     def body(carry, key):
         states, beliefs, time_idx = carry
@@ -61,47 +78,52 @@ def policy_evaluation(
         # Sample actions using the policy
         key, action_key = random.split(key)
         _, _, actions = policy_state.apply_fn(
-            rng_key=action_key, particles=beliefs.particles, params=policy_state.params
+            rng_key=action_key,
+            particles=beliefs.particles,
+            params=policy_state.params
         )
 
         # Compute rewards
-        rewards = jax.vmap(env_obj.reward_fn, (0, 0, None))(states, actions, time_idx)
+        rewards = jax.vmap(reward_fn, (0, 0, None))(states, actions, time_idx)
 
         # Sample next states
-        key, state_keys = custom_split(key, num_samples + 1)
-        next_states = jax.vmap(env_obj.trans_model.sample)(state_keys, states, actions)
+        key, state_keys = custom_split(key, num_trajectory_samples + 1)
+        next_states = jax.vmap(trans_model.sample)(state_keys, states, actions)
 
         # Sample observations
-        key, obs_keys = custom_split(key, num_samples + 1)
-        next_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, next_states)
+        key, obs_keys = custom_split(key, num_trajectory_samples + 1)
+        next_observations = jax.vmap(obs_model.sample)(obs_keys, next_states)
 
         # Update beliefs
-        key, belief_keys = custom_split(key, num_samples + 1)
+        belief_keys = random.split(key, num_trajectory_samples)
         next_beliefs = jax.vmap(update_belief, (0, None, None, 0, 0, 0))(
-            belief_keys, env_obj.trans_model, env_obj.obs_model, beliefs, next_observations, actions
+            belief_keys, trans_model, obs_model, beliefs, next_observations, actions
         )
 
-        return (next_states, next_beliefs, time_idx + 1), (states, actions, rewards)
+        return (next_states, next_beliefs, time_idx + 1), \
+            (next_states, actions, next_beliefs, rewards)
 
     # Initialize
     key, state_key = random.split(rng_key)
-    init_states = env_obj.init_dist.sample(seed=state_key, sample_shape=num_samples)
-    key, obs_keys = custom_split(key, num_samples + 1)
-    init_observations = jax.vmap(env_obj.obs_model.sample)(obs_keys, init_states)
+    init_states = init_dist.sample(seed=state_key, sample_shape=num_trajectory_samples)
+    key, obs_keys = custom_split(key, num_trajectory_samples + 1)
+    init_observations = jax.vmap(obs_model.sample)(obs_keys, init_states)
 
     # Initialize beliefs
-    key, belief_keys = custom_split(key, num_samples + 1)
+    key, belief_keys = custom_split(key, num_trajectory_samples + 1)
     init_beliefs = jax.vmap(initialize_belief, in_axes=(0, None, None, 0, None))(
-        belief_keys, env_obj.belief_prior, env_obj.obs_model, init_observations, num_belief_particles
+        belief_keys, belief_prior, obs_model, init_observations, num_belief_particles
     )
 
-    _, (states, actions, rewards) = jax.lax.scan(
+    _, (states, actions, beliefs, rewards) = jax.lax.scan(
         f=body,
         init=(init_states, init_beliefs, 0),
-        xs=random.split(key, env_obj.num_time_steps + 1),
+        xs=random.split(key, num_time_steps + 1),
     )
 
-    states = jnp.concatenate([init_states[None, :, :], states], axis=0)
-    expected_reward = jnp.mean(jnp.sum(rewards, axis=0))
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
 
-    return expected_reward, states, actions
+    states = concat_trees(init_states,  states)
+    beliefs = concat_trees(init_beliefs, beliefs)
+    return rewards, states, actions, beliefs
