@@ -19,8 +19,8 @@ def get_pomdp(env_name: str) -> POMDPEnv:
         return pomdps.PendulumEnv
     elif env_name == "cartpole":
         return pomdps.CartPoleEnv
-    elif env_name == "target-sensing":
-        return pomdps.TargetEnv
+    elif env_name == "triangulation":
+        return pomdps.TriangulationEnv
     elif env_name == "light-dark-1d":
         return pomdps.LightDark1DEnv
     elif env_name == "light-dark-2d":
@@ -68,7 +68,7 @@ def plot_trajectory(env_name: str, states: Array, actions: Array):
 
         plt.tight_layout()
         plt.show()
-    elif env_name == "target-interception":
+    elif env_name == "triangulation":
         plt.figure()
         plt.plot(states[:, 0], states[:, 2], label="Trajectory")
         plt.plot([-200], [100], "o", color="black", markersize=10, label="Starting point")

@@ -1,9 +1,8 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 jax.config.update("jax_enable_x64", True)
-# jax.config.update("jax_disable_jit", True)
 
 import optax
 
@@ -13,33 +12,34 @@ from flax.training.train_state import TrainState
 from distrax import Block
 
 from ppomdp.smc import smc, backward_tracing, mcmc_backward_sampling
+
 from ppomdp.bijector import Tanh
 from ppomdp.policy.arch import GRUEncoder, NeuralGaussDecoder
 from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
     train_recurrent_neural_gauss_policy_pathwise,
 )
-from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_beliefs
+from ppomdp.utils import batch_data, policy_evaluation
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
 
-from ppomdp.envs.pomdps import PendulumEnv as env
+from ppomdp.envs.pomdps import TriangulationEnv as env
 
 
 rng_key = random.PRNGKey(0)
 
 num_history_particles = 128
 num_belief_particles = 32
-num_target_samples = 256
+num_target_samples = 512
 
 slew_rate_penalty = 0.05
-tempering = 0.5
+tempering = 0.1
 
-learning_rate = 3e-4
-batch_size = 16
-num_epochs = 50
+learning_rate = 1e-3
+batch_size = 128
+num_epochs = 250
 
 bijector = Block(Tanh(), ndims=1)
 encoder = GRUEncoder(
@@ -84,7 +84,9 @@ for i in range(1, num_epochs + 1):
         rng_key=sub_key,
         num_time_steps=env.num_time_steps,
         num_trajectory_samples=1024,
+        num_belief_particles=num_belief_particles,
         init_dist=env.init_dist,
+        belief_prior=env.belief_prior,
         policy=policy,
         policy_params=learner.params,
         trans_model=env.trans_model,
@@ -165,30 +167,8 @@ for i in range(1, num_epochs + 1):
         f"Time per epoch: {time_diff:.3f}s"
     )
 
-
-from ppomdp.smc.utils import weighted_mean
-
-states = weighted_mean(traced_belief.particles, traced_belief.weights)
-actions = traced_history.actions
-
-# Plot traced history observations and actions
-fig, axs = plt.subplots(3, 1, figsize=(10, 8))
-fig.suptitle("Traced History Trajectories")
-
-axs[0].plot(states[..., 0])
-axs[0].grid(True)
-
-axs[1].plot(states[..., 1])
-axs[1].grid(True)
-
-axs[2].plot(actions[..., 0])
-axs[2].grid(True)
-
-plt.tight_layout()
-plt.show()
-
 key, sub_key = random.split(key)
-_, states, actions, beliefs = policy_evaluation_with_beliefs(
+_, states, actions, beliefs = policy_evaluation(
     rng_key=sub_key,
     num_time_steps=env.num_time_steps,
     num_trajectory_samples=1024,
@@ -202,21 +182,3 @@ _, states, actions, beliefs = policy_evaluation_with_beliefs(
     reward_fn=env.reward_fn,
     stochastic=False
 )
-
-fig, axs = plt.subplots(3, 1, figsize=(10, 8))
-fig.suptitle("Simulated trajectories")
-
-axs[0].plot(states[..., 0])
-axs[0].set_ylabel("Angle")
-axs[0].grid(True)
-
-axs[1].plot(states[..., 1])
-axs[1].set_ylabel("Angular Velocity")
-axs[1].grid(True)
-
-axs[2].plot(actions[..., 0])
-axs[2].set_ylabel("Actions")
-axs[2].grid(True)
-
-plt.tight_layout()
-plt.show()

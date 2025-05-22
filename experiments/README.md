@@ -131,7 +131,7 @@ The algorithms have been tested on the following environments:
 - Pendulum: Continuous control task with partial observability
 - CartPole: Classic control task with partial observability
 - LightDark: A 2D navigation task with partial observability
-- Target: A 2D traingulation task with partial observability
+- Triangulation: A 2D traingulation task with partial observability
 
 ## Logging
 

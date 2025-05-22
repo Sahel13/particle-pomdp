@@ -1,4 +1,4 @@
-"""The target interception problem from https://ieeexplore.ieee.org/document/1101052."""
+"""The triangulation problem from https://ieeexplore.ieee.org/document/1101052."""
 
 from functools import partial
 
@@ -125,7 +125,7 @@ obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
 feature_fn = lambda x: x
 
 
-TargetEnv = POMDPEnv(
+TriangulationEnv = POMDPEnv(
     num_envs=num_envs,
     state_dim=state_dim,
     action_dim=action_dim,
