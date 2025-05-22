@@ -91,7 +91,8 @@ def policy_evaluation(
             belief_keys, trans_model, obs_model, beliefs, next_observations, actions
         )
 
-        return (next_states, next_beliefs, time_idx + 1), (next_states, actions, rewards)
+        return (next_states, next_beliefs, time_idx + 1), \
+            (next_states, actions, next_beliefs, rewards)
 
     # Initialize
     key, state_key = random.split(rng_key)
@@ -105,11 +106,15 @@ def policy_evaluation(
         belief_keys, belief_prior, obs_model, init_observations, num_belief_particles
     )
 
-    _, (states, actions, rewards) = jax.lax.scan(
+    _, (states, actions, beliefs, rewards) = jax.lax.scan(
         f=body,
         init=(init_states, init_beliefs, 0),
         xs=random.split(key, num_time_steps + 1),
     )
 
-    states = jnp.concatenate([init_states[None], states], axis=0)
-    return rewards, states, actions
+    def concat_trees(x, y):
+        return jax.tree.map(lambda x, y: jnp.concatenate([x[None, ...], y]), x, y)
+
+    states = concat_trees(init_states,  states)
+    beliefs = concat_trees(init_beliefs, beliefs)
+    return rewards, states, actions, beliefs
