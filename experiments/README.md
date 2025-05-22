@@ -15,26 +15,24 @@ Each algorithm can be run using Python with the appropriate configuration. Below
 
 ```bash
 # Run p3o on cartpole environment
-python p3o_experiment.py \
-    --env_id cartpole \
+python p3o_recurrent_experiment.py \
+    --env_id light-dark-2d \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_group p3o-cartpole \
-    --experiment_tags p3o cartpole \
-    --total_time_steps 1000000 \
-    --num_history_particles 128 \
+    --experiment_group p3o-light \
+    --experiment_tags p3o light \
+    --total_time_steps 500_000 \
+    --num_history_particles 256 \
     --num_belief_particles 32 \
-    --slew_rate_penalty 0.05 \
-    --tempering 0.5 \
+    --slew_rate_penalty 0.001 \
+    --tempering 0.2 \
     --backward_sampling \
     --backward_sampling_mult 2 \
-    --encoder_dense_sizes 256 256 \
-    --encoder_recurr_sizes 128 128 \
-    --decoder_dense_sizes 256 256 \
     --learning_rate 0.0003 \
-    --batch_size 16 \
-    --init_std 1.0
+    --batch_size 64 \
+    --init_std 1.0 \
+    --no-use_logger
 ```
 
 ### SLAC
@@ -42,22 +40,23 @@ python p3o_experiment.py \
 ```bash
 # Run SLAC on CartPole environment
 python slac_experiment.py \
-    --env_id cartpole \
+    --env_id light-dark-2d \
     --num_seeds 10 \
-    --cuda_device 0 \
+    --cuda_device 2 \
     --project_name particle-pomdp \
-    --experiment_group slac-cartpole \
-    --experiment_tags slac cartpole \
-    --total_time_steps 1000000 \
+    --experiment_group slac-light \
+    --experiment_tags slac light \
+    --total_time_steps 500_000 \
     --num_belief_particles 32 \
-    --buffer_size 1000000 \
+    --buffer_size 500_000 \
     --learning_starts 5000 \
     --policy_lr 0.0003 \
     --critic_lr 0.001 \
-    --batch_size 256 \
+    --batch_size 16 \
     --alpha 0.2 \
-    --gamma 0.95 \
-    --tau 0.005
+    --gamma 0.99 \
+    --tau 0.005 \
+    --no-use_logger
 ```
 
 ### DVRL
@@ -65,28 +64,24 @@ python slac_experiment.py \
 ```bash
 # Run DVRL on CartPole environment
 python dvrl_experiment.py \
-    --env_id cartpole \
+    --env_id light-dark-2d \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_group dvrl-cartpole \
-    --experiment_tags dvrl cartpole \
-    --total_time_steps 1000000 \
+    --experiment_group dvrl-light \
+    --experiment_tags dvrl light \
+    --total_time_steps 500_000 \
     --num_belief_particles 32 \
-    --buffer_size 1000000 \
+    --buffer_size 500_000 \
     --learning_starts 5000 \
     --policy_lr 0.0003 \
     --critic_lr 0.001 \
     --batch_size 256 \
+    --num_batches 8 \
     --alpha 0.2 \
-    --gamma 0.95 \
-    --tau 0.005
-
-# light-dark-2d
-python dvrl_experiment.py \
-    --env_id light-dark-2d \
-    --learning_starts 10000 \
-    --gamma 0.995
+    --gamma 0.99 \
+    --tau 0.005 \
+    --no-use_logger
 ```
 
 ### DSMC
@@ -95,24 +90,26 @@ python dvrl_experiment.py \
 
 # Run DSMC on CartPole environment
 python dsmc_experiment.py \
-    --env_id cartpole \
+    --env_id light-dark-2d \
     --num_seeds 10 \
     --cuda_device 0 \
     --project_name particle-pomdp \
-    --experiment_group dsmc-cartpole \
-    --experiment_tags dsmc cartpole \
-    --total_time_steps 1000000 \
-    --num_planner_steps 10 \
+    --experiment_group dsmc-light \
+    --experiment_tags dsmc light \
+    --total_time_steps 500_000 \
+    --num_planner_steps 5 \
     --num_planner_particles 32 \
     --num_belief_particles 32 \
-    --buffer_size 1000000 \
+    --buffer_size 500_000 \
     --learning_starts 5000 \
     --policy_lr 0.0003 \
     --critic_lr 0.001 \
     --batch_size 256 \
+    --num_batches 8 \
     --alpha 0.2 \
-    --gamma 0.95 \
-    --tau 0.005
+    --gamma 0.99 \
+    --tau 0.005 \
+    --no-use_logger
 ```
 
 ## Common Parameters
@@ -138,5 +135,4 @@ The algorithms have been tested on the following environments:
 ## Logging
 
 When `use_logger=true`, experiments are logged to Weights & Biases (wandb) with the following metrics:
-- Average reward
-- Policy entropy
+- Average return
