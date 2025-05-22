@@ -19,10 +19,10 @@ for an editable install.
 ## Examples
 
 We provide multiple environments to test P3O on:
-* `pendulum`
-* `cartpole`
-* `light-dark-2d`
-* `triangulation`
+* `pendulum`: a pendulum swing-up task, where only the angular position is observable
+* `cartpole`: a cartpole swing-up task, where only the angular and cartesian positions are observable
+* `light-dark-2d`: a 2D navigation task with location-dependent noise
+* `triangulation`: a 2D navigation task with heading-only observations
 
 Each evnrionment can be ran with two policies:
    * a policy with history inputs `recurrent`
