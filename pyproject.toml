@@ -20,6 +20,7 @@ dependencies = [
   "pandas",
   "wandb",
   "tyro",
+  "tqdm"
 ]
 
 [tool.setuptools]
