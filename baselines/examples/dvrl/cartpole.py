@@ -107,47 +107,21 @@ if __name__ == "__main__":
 
 
     # Evaluate the learned policy.
-    def body(carry, rng_key):
-        state, belief = carry
-        action_key, state_key, obs_key, pf_key = random.split(rng_key, 4)
-        _, _, action = \
-            train_state.policy_state.apply_fn(
-                rng_key=action_key,
-                particles=belief.particles,
-                weights=belief.weights,
-                params=train_state.policy_state.params,
-            )
-        state = env_obj.trans_model.sample(state_key, state, action)
-        observation = env_obj.obs_model.sample(obs_key, state)
-        belief = update_belief(
-            rng_key=pf_key,
-            trans_model=env_obj.trans_model,
-            obs_model=env_obj.obs_model,
-            belief_state=belief,
-            observation=observation,
-            action=action,
-        )
-        return (state, belief), (state, action)
-
-    key, obs_key, belief_key = random.split(key, 3)
-    init_state = env_obj.init_dist.mean()
-    init_observation = env_obj.obs_model.sample(obs_key, init_state)
-
-    init_belief = initialize_belief(
-        rng_key=belief_key,
-        belief_prior=env_obj.belief_prior,
-        obs_model=env_obj.obs_model,
-        observation=init_observation,
+    # Evaluate the learned policy.
+    key, eval_key = random.split(key)
+    rewards, states, actions, beliefs = policy_evaluation(
+        rng_key=eval_key,
+        num_time_steps=env_obj.num_time_steps,
+        num_trajectory_samples=1024,
         num_belief_particles=config.num_belief_particles,
+        init_dist=env_obj.init_dist,
+        belief_prior=env_obj.belief_prior,
+        policy_state=train_state.policy_state,
+        trans_model=env_obj.trans_model,
+        obs_model=env_obj.obs_model,
+        reward_fn=env_obj.reward_fn,
     )
-
-    keys = random.split(key, env_obj.num_time_steps)
-    _, (states, actions) = jax.lax.scan(
-        f=body,
-        init=(init_state, init_belief),
-        xs=keys,
-    )
-    states = jnp.concatenate([init_state[None, ...], states], axis=0)
+    avg_return = jnp.mean(jnp.sum(rewards, axis=0))
 
     fig, axs = plt.subplots(3, 1, figsize=(10, 10))
     fig.suptitle("Simulated trajectory")
