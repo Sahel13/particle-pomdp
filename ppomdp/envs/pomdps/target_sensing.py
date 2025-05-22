@@ -20,10 +20,10 @@ action_dim = 1
 obs_dim = 1
 
 num_envs = 1
-num_time_steps = 18
+num_time_steps = 30  # 25
 
 action_shift = 0.0
-action_scale = 9.0 / 180 * jnp.pi
+action_scale = 12.0 / 180 * jnp.pi
 action_trans = Block(
     ScalarAffine(
         scale=action_scale,
@@ -54,7 +54,7 @@ def mean_trans(s: Array, a: Array) -> Array:
 
 def stddev_trans(s: Array, a: Array) -> Array:
     a = action_trans.forward(a)
-    return jnp.array([1e-4, 1e-2, 1e-4, 1e-2])
+    return jnp.array([1e-2, 1e-1, 1e-2, 1e-1])
 
 
 def sample_trans(rng_key: PRNGKey, s: Array, a: Array) -> Array:
@@ -79,7 +79,7 @@ def mean_obs(s: Array) -> Array:
 
 
 def stddev_obs(s: Array) -> Array:
-    return jnp.ones((1,)) * jnp.pi / 180
+    return 10.0 * jnp.ones((1,)) * jnp.pi / 180
 
 
 def sample_obs(rng_key: PRNGKey, s: Array) -> Array:
@@ -104,7 +104,7 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
         jnp.array([0., 0., 0., 0.]),
         jnp.array([0.1, 0., 0.1, 0.]),
     )
-    r = jnp.array([1e-3])
+    r = jnp.array([1e-3, 1e-3])
 
     state_cost = jnp.einsum("k,kh,h->", s, jnp.diag(h), s)
     action_cost = jnp.einsum("k,kh,h->", a, jnp.diag(r), a)
@@ -114,20 +114,15 @@ def reward_fn(s: Array, a: Array, t: Array) -> Array:
 # init_dist = Deterministic(jnp.array([-200.0, 12.0, 100.0, -6.0]))
 init_dist = MultivariateNormalDiag(
     loc=jnp.array([-200.0, 12.0, 100.0, -6.0]),
-    scale_diag=jnp.array([1e-8, 1.0, 1e-8, 1.0]),
+    scale_diag=jnp.array([10.0, 1e-2, 10.0, 1e-2]),
 )
 belief_prior = MultivariateNormalDiag(
     loc=jnp.array([-200.0, 12.0, 100.0, -6.0]),
-    scale_diag=jnp.array([1e-8, 1.0, 1e-8, 1.0]),
+    scale_diag=jnp.array([10.0, 1e-2, 10.0, 1e-2]),
 )
 trans_model = TransitionModel(sample=sample_trans, log_prob=log_prob_trans)
 obs_model = ObservationModel(sample=sample_obs, log_prob=log_prob_obs)
-
-
-@partial(jnp.vectorize, signature="(m)->(n)")
-def feature_fn(z: Array) -> Array:
-    sin_q, cos_q = jnp.sin(z[0]), jnp.cos(z[0])
-    return jnp.array([sin_q, cos_q])
+feature_fn = lambda x: x
 
 
 TargetEnv = POMDPEnv(

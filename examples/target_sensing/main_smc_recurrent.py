@@ -1,8 +1,8 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
-# jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", True)
 
 import optax
 
@@ -28,18 +28,18 @@ import matplotlib.pyplot as plt
 from ppomdp.envs.pomdps import TargetEnv as env
 
 
-rng_key = random.PRNGKey(1337)
+rng_key = random.PRNGKey(0)
 
 num_history_particles = 128
 num_belief_particles = 32
-num_target_samples = 256
+num_target_samples = 512
 
 slew_rate_penalty = 0.05
 tempering = 0.1
 
 learning_rate = 1e-3
-batch_size = 16
-num_epochs = 500
+batch_size = 128
+num_epochs = 250
 
 bijector = Block(Tanh(), ndims=1)
 encoder = GRUEncoder(
@@ -84,7 +84,9 @@ for i in range(1, num_epochs + 1):
         rng_key=sub_key,
         num_time_steps=env.num_time_steps,
         num_trajectory_samples=1024,
+        num_belief_particles=num_belief_particles,
         init_dist=env.init_dist,
+        belief_prior=env.belief_prior,
         policy=policy,
         policy_params=learner.params,
         trans_model=env.trans_model,
@@ -166,11 +168,13 @@ for i in range(1, num_epochs + 1):
     )
 
 key, sub_key = random.split(key)
-_, states, actions = policy_evaluation(
+_, states, actions, beliefs = policy_evaluation(
     rng_key=sub_key,
     num_time_steps=env.num_time_steps,
     num_trajectory_samples=1024,
+    num_belief_particles=num_belief_particles,
     init_dist=env.init_dist,
+    belief_prior=env.belief_prior,
     policy=policy,
     policy_params=learner.params,
     trans_model=env.trans_model,
@@ -178,24 +182,3 @@ _, states, actions = policy_evaluation(
     reward_fn=env.reward_fn,
     stochastic=False
 )
-
-plt.figure()
-plt.title("Simulated trajectory")
-
-# Plot trajectories
-plt.plot(states[..., 0], states[..., 2], alpha=0.7)
-
-# Plot start and target points
-plt.scatter(-200, 100, color="black", s=100)
-plt.scatter(0, 0, color="orange", s=100)
-
-# Plot direct path line
-plt.plot([-200, 0], [100, 0], "r--")
-
-# Configure plot
-plt.xlabel("x")
-plt.ylabel("y")
-plt.gca().set_aspect("equal", adjustable="box")
-plt.grid(True)
-plt.tight_layout()
-plt.show()

@@ -185,6 +185,17 @@ _, states, actions, beliefs = policy_evaluation(
 from ppomdp.envs.pomdps.lightdark2d import stddev_obs
 from matplotlib.patches import Ellipse
 
+plt.style.use('classic')
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "axes.labelsize": 10,
+    "mathtext.fontset": "cm",
+    "svg.fonttype": "none"
+})
+
 G_BLUE   = '#1A73E8'
 
 # Helper function to plot covariance ellipse
@@ -244,18 +255,6 @@ ax_env.plot([x0, x1], [y0, y1], color='red', linestyle='--', linewidth=1.0, zord
 # Plot covariance ellipses at intervals
 for t in ts:
     plot_covar_ellipse(ax_env, belief_mean[t, :2], belief_covar[t, :2, :2], 'white')
-
-
-plt.style.use('classic')
-plt.rcParams.update({
-    "font.family": "serif",
-    "font.size": 10,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "axes.labelsize": 10,
-    "mathtext.fontset": "cm",
-    "svg.fonttype": "none"
-})
 
 ax_env.set_xlabel(r"$x$")
 ax_env.set_ylabel(r"$y$")

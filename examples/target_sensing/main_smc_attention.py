@@ -1,8 +1,8 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
-# jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", True)
 
 import optax
 
@@ -20,7 +20,7 @@ from ppomdp.policy.attention import (
     train_attention_policy
 )
 from ppomdp.utils import batch_data, prepare_trajectories, policy_evaluation
-from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
+from ppomdp.smc.utils import  systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
@@ -28,18 +28,17 @@ import matplotlib.pyplot as plt
 from ppomdp.envs.pomdps import TargetEnv as env
 
 
-rng_key = random.PRNGKey(1337)
+rng_key = random.PRNGKey(1)
 
 num_history_particles = 128
 num_belief_particles = 32
-num_target_samples = 256
 
 slew_rate_penalty = 0.05
 tempering = 0.1
 
 learning_rate = 1e-3
 batch_size = 256
-num_epochs = 500
+num_epochs = 250
 
 bijector = Block(Tanh(), ndims=1)
 encoder = AttentionEncoder(
@@ -115,7 +114,7 @@ for i in range(1, num_epochs + 1):
             slew_rate_penalty=slew_rate_penalty,
             tempering=tempering,
             history_resample_fn=systematic_resampling,
-            belief_resample_fn=multinomial_resampling,
+            belief_resample_fn=systematic_resampling,
         )
 
     num_steps += (env.num_time_steps + 1) * num_history_particles
@@ -181,23 +180,79 @@ _, states, actions, beliefs = policy_evaluation(
     stochastic=False
 )
 
-plt.figure()
-plt.title("Simulated trajectory")
 
-# Plot trajectories
-plt.plot(states[..., 0], states[..., 2], alpha=0.7)
+# --- Plot 2: Environment, Trajectories, and Covariance Ellipses ---
+from matplotlib import gridspec
 
-# Plot start and target points
-plt.scatter(-200, 100, color="black", s=100)
-plt.scatter(0, 0, color="orange", s=100)
+plt.style.use('classic')
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "axes.labelsize": 10,
+    "mathtext.fontset": "cm",
+    "svg.fonttype": "none"
+})
 
-# Plot direct path line
-plt.plot([-200, 0], [100, 0], "r--")
+G_BLUE   = '#1A73E8'
 
-# Configure plot
-plt.xlabel("x")
-plt.ylabel("y")
-plt.gca().set_aspect("equal", adjustable="box")
-plt.grid(True)
-plt.tight_layout()
+cm = 1 / 2.54
+fig = plt.figure(figsize=(15 * cm, 6 * cm))  # total: 8 + 4 = 12 cm width
+gs = gridspec.GridSpec(1, 2, width_ratios=[2, 1], wspace=0.4)
+ax_env = fig.add_subplot(gs[0])
+ax_eig = fig.add_subplot(gs[1])
+
+ts = jnp.arange(env.num_time_steps + 1)
+
+# Plot mean state and belief trajectories
+from ppomdp.smc.utils import weighted_mean, weighted_covar
+belief_mean_per_traj = weighted_mean(beliefs.particles, beliefs.weights)
+belief_covar_per_traj = weighted_covar(beliefs.particles, beliefs.weights)
+
+belief_mean = jnp.mean(belief_mean_per_traj, axis=1)
+belief_covar = jnp.mean(belief_covar_per_traj, axis=1)
+
+state_mean = jnp.mean(states, axis=1)
+state_center = states - state_mean[:, None, :]
+state_covar = jnp.einsum('tnk,tnh->tkh', state_center, state_center) / state_center.shape[1]
+
+x0, y0 = belief_mean[0, 0], belief_mean[0, 2]
+x1, y1 = belief_mean[-1, 0], belief_mean[-1, 2]
+
+ax_env.plot(belief_mean[:, 0], belief_mean[:, 2], color=G_BLUE, lw=1.5, zorder=3)
+ax_env.scatter(belief_mean[ts[1:-1], 0], belief_mean[ts[1:-1], 2], c=G_BLUE, s=10, zorder=4)
+ax_env.scatter(belief_mean[0, 0],  belief_mean[0, 2],  c='g', edgecolors='black', s=10, zorder=4)
+ax_env.scatter(belief_mean[-1, 0], belief_mean[-1, 2], c='r', edgecolors='black', s=10, zorder=4)
+ax_env.plot([x0, x1], [y0, y1], color='red', linestyle='--', linewidth=1.0, zorder=2)
+
+# ax_env.set_xlim(-225, 25)
+# ax_env.set_ylim(-200, 150)
+ax_env.set_xlabel(r"$x$")
+ax_env.set_ylabel(r"$y$")
+ax_env.tick_params(direction='out')
+ax_env.tick_params(
+    top=False, right=False,      # hide top and right ticks
+    bottom=True, left=True       # show bottom and left ticks
+)
+# ax_env.set_xticks([-200, -150, -100, -50, 0])     # set specific x-axis tick positions
+# ax_env.set_yticks([-150, -100, -50, 0, 50, 100])    # set specific y-axis tick positions
+ax_env.grid(True)
+
+# --- New subplot: Largest eigenvalue over time ---
+eig_max = []
+for t in ts:
+    cov_2d = belief_covar[t][[0, 2], :][:, [0, 2]]  # project to (0,2) dims
+    vals = jnp.linalg.eigvalsh(cov_2d)
+    eig_max.append(float(jnp.max(vals)))  # use float() to detach from JAX if needed
+
+ax_eig.plot(ts, eig_max, color='black', lw=1.5)
+ax_eig.set_xlabel("Time Step")
+ax_eig.set_ylabel("Eigenvalue")
+ax_eig.tick_params(direction='out', top=False, right=False)
+ax_eig.set_xticks([0, 10, 20, 30])
+ax_eig.set_yticks([20, 40, 60, 80])
+ax_eig.grid(True)
+
 plt.show()
+# plt.savefig("triangulation_trajectory.pdf", bbox_inches='tight')
