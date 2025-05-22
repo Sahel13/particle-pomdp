@@ -7,7 +7,7 @@ A sequential Monte Carlo algorithm for policy optimization in continuous POMDPs.
 Create a new conda environment with the yaml file provided:
 
 ```bash
-conda env create -f particle-pomdp.yaml
+conda env create -f particle-pomdp.yml
 ```
 
 This environment assumes an NVIDIA GPU is available and installs JAX accordingly. If you have different hardware consult [JAX](https://github.com/jax-ml/jax?tab=readme-ov-file#installation).
