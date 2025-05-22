@@ -1,4 +1,5 @@
 # Particle POMDP Policy Optimization (P3O)
+A sequential Monte Carlo approach for policy optimization in continuous POMPDs
 
 ## Installation
 
@@ -25,7 +26,7 @@ We provide multiple environments to test P3O on:
 
 Each evnrionment can be ran with two policies:
    * a policy with history inputs `recurrent`
-   * a policy with particle inputs `attention`
+   * a policy with belief particles inputs `attention`
 
 For example, for the light-dark environment run:
 ```bash
