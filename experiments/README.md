@@ -97,7 +97,7 @@ python dsmc_experiment.py \
     --experiment_group dsmc-light \
     --experiment_tags dsmc light \
     --total_time_steps 500_000 \
-    --num_planner_steps 5 \
+    --num_planner_steps 3 \
     --num_planner_particles 32 \
     --num_belief_particles 32 \
     --buffer_size 500_000 \
