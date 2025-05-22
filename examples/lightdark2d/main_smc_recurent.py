@@ -18,29 +18,27 @@ from ppomdp.policy.gauss import (
     create_recurrent_neural_gauss_policy,
     train_recurrent_neural_gauss_policy_pathwise
 )
-from ppomdp.utils import batch_data, policy_evaluation, policy_evaluation_with_beliefs
+from ppomdp.utils import batch_data, policy_evaluation
 from ppomdp.smc.utils import multinomial_resampling, systematic_resampling
 
 import time
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
 from ppomdp.envs.pomdps import LightDark2DEnv as env
-from ppomdp.envs.pomdps.lightdark2d import stddev_obs
 
 
-rng_key = random.PRNGKey(0)
+rng_key = random.PRNGKey(1337)
 
-num_history_particles = 128
+num_history_particles = 256
 num_belief_particles = 32
-num_target_samples = 256
+num_target_samples = 512
 
-slew_rate_penalty = 0.05
-tempering = 0.25
+slew_rate_penalty = 0.001
+tempering = 0.2
 
 learning_rate = 3e-4
 batch_size = 64
-num_epochs = 500
+num_epochs = 250
 
 bijector = Block(Tanh(), ndims=1)
 encoder = GRUEncoder(
@@ -84,7 +82,9 @@ for i in range(1, num_epochs + 1):
         rng_key=sub_key,
         num_time_steps=env.num_time_steps,
         num_trajectory_samples=1024,
+        num_belief_particles=num_belief_particles,
         init_dist=env.init_dist,
+        belief_prior=env.belief_prior,
         policy=policy,
         policy_params=learner.params,
         trans_model=env.trans_model,
@@ -167,7 +167,7 @@ for i in range(1, num_epochs + 1):
 
 
 key, sub_key = random.split(key)
-_, states, actions, beliefs = policy_evaluation_with_beliefs(
+_, states, actions, beliefs = policy_evaluation(
     rng_key=sub_key,
     num_time_steps=env.num_time_steps,
     num_trajectory_samples=1024,
@@ -182,28 +182,12 @@ _, states, actions, beliefs = policy_evaluation_with_beliefs(
     stochastic=False
 )
 
-# --- Plot 1: State and Action Trajectories ---
-fig, axs = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
-num_trajectories_to_plot = min(10, states.shape[1]) # Plot up to 10 trajectories
-plot_indices = random.choice(key, states.shape[1], shape=(num_trajectories_to_plot,), replace=False)
 
-axs[0].plot(states[:, plot_indices, 0])
-axs[0].set_ylabel('State-1')
+# --- Plot: Environment, Trajectories, and Covariance Ellipses ---
+from ppomdp.envs.pomdps.lightdark2d import stddev_obs
+from matplotlib.patches import Ellipse
 
-axs[1].plot(states[:, plot_indices, 1])
-axs[1].set_ylabel('State-2')
-
-axs[2].plot(actions[:, plot_indices, 0])
-axs[2].set_ylabel('Act-1')
-
-axs[3].plot(actions[:, plot_indices, 1])
-axs[3].set_ylabel('Act-2')
-axs[3].set_xlabel('Time Step')
-
-plt.tight_layout()
-plt.show()
-
-# --- Plot 2: Environment, Mean Trajectories, and Covariance Ellipses ---
+G_BLUE   = '#1A73E8'
 
 # Helper function to plot covariance ellipse
 def plot_covar_ellipse(ax, mean, covar, color):
@@ -211,13 +195,12 @@ def plot_covar_ellipse(ax, mean, covar, color):
     eigvals, eigvecs = jnp.linalg.eigh(covar)
     angle = jnp.degrees(jnp.arctan2(eigvecs[1, 0], eigvecs[0, 0]))
     width, height = jnp.sqrt(jnp.maximum(eigvals, 1e-9)) # Use std dev for ellipse size
-    ell = patches.Ellipse(mean, width, height, angle=angle, edgecolor=color, facecolor='none')
+    ell = Ellipse(mean, width, height, angle=angle, edgecolor=color, facecolor='none', linewidth=1.)
     ax.add_patch(ell)
-
 
 # Plot environment background (observation noise level)
 xgrid = jnp.linspace(-1.0, 6.0, 100)
-ygrid = jnp.linspace(-2.0, 2.5, 100)
+ygrid = jnp.linspace(-1.0, 2.5, 100)
 X, Y = jnp.meshgrid(xgrid, ygrid)
 
 light_level = jnp.zeros_like(X)
@@ -228,17 +211,16 @@ for r in range(X.shape[0]):
         light_level = light_level.at[r, c].set(_light_level)
 
 
-fig_env, ax_env = plt.subplots(1, 1, figsize=(8, 6))
+cm = 1 / 2.54
+fig_env, ax_env = plt.subplots(figsize=(8 * cm, 6 * cm))  # 8cm x 6cm
+
+ts = [0, 5, 6, 7, 8, 9, 10, 11, 12, 14, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
 
 im = ax_env.imshow(
     -light_level,
     extent=(xgrid.min(), xgrid.max(), ygrid.min(), ygrid.max()),
-    origin='lower', cmap='gray', aspect='auto'
+    origin='lower', cmap='gray', aspect='auto', vmax=7.
 )
-plt.colorbar(im, ax=ax_env, label='Observation Noise Magnitude (Negative)')
-ax_env.set_title('Light-Dark Environment with State and Belief Evolution')
-ax_env.set_xlabel('X Position')
-ax_env.set_ylabel('Y Position')
 
 # Plot mean state and belief trajectories
 from ppomdp.smc.utils import weighted_mean, weighted_covar
@@ -252,13 +234,39 @@ state_mean = jnp.mean(states, axis=1)
 state_center = states - state_mean[:, None, :]
 state_covar = jnp.einsum('tnk,tnh->tkh', state_center, state_center) / state_center.shape[1]
 
-# ax_env.plot(state_mean[:, 0], state_mean[:, 1], 'r-')
-ax_env.plot(belief_mean[:, 0], belief_mean[:, 1], 'r-')
+x0, y0 = belief_mean[0, 0], belief_mean[0, 1]
+x1, y1 = belief_mean[-1, 0], belief_mean[-1, 1]
+
+ax_env.plot(belief_mean[:, 0], belief_mean[:, 1], color=G_BLUE, lw=1.5, zorder=3)
+ax_env.scatter(belief_mean[ts[1:-1], 0], belief_mean[ts[1:-1], 1], c=G_BLUE, s=10, zorder=4)
+ax_env.scatter(belief_mean[0, 0],  belief_mean[0, 1],  c='g', edgecolors='white', s=10, zorder=4)
+ax_env.scatter(belief_mean[-1, 0], belief_mean[-1, 1], c='r', edgecolors='white', s=10, zorder=4)
+ax_env.plot([x0, x1], [y0, y1], color='red', linestyle='--', linewidth=1.0, zorder=2)
 
 # Plot covariance ellipses at intervals
-plot_ellipse_interval = max(1, env.num_time_steps // 10) # Adjust interval as needed
-for t in range(0, env.num_time_steps + 1, plot_ellipse_interval):
-    # plot_covar_ellipse(ax_env, state_mean[t, :2], state_covar[t, :2, :2], 'm')
-    plot_covar_ellipse(ax_env, belief_mean[t, :2], belief_covar[t, :2, :2], 'g')
+for t in ts:
+    plot_covar_ellipse(ax_env, belief_mean[t, :2], belief_covar[t, :2, :2], 'white')
 
+
+plt.style.use('classic')
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "axes.labelsize": 10,
+    "mathtext.fontset": "cm",
+    "svg.fonttype": "none"
+})
+
+ax_env.set_xlabel(r"$x$")
+ax_env.set_ylabel(r"$y$")
+ax_env.tick_params(direction='out')
+ax_env.tick_params(
+    top=False, right=False,      # hide top and right ticks
+    bottom=True, left=True       # show bottom and left ticks
+)
+ax_env.set_xticks([0, 1, 2, 3, 4 ,5])     # set specific x-axis tick positions
+ax_env.set_yticks([-0.5, 0, 0.5, 1, 1.5, 2])    # set specific y-axis tick positions
 plt.show()
+# plt.savefig("light_dark_trajectory.pdf", bbox_inches='tight')
