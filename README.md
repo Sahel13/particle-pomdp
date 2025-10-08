@@ -17,10 +17,30 @@ $ pip install -e .
 
 for an editable install.
 
-## Exmaples
-Run the light-dark environment to demonstrate optimal information gathering behavior
+## Examples
+
+We provide multiple environments to test P3O's optimal information gathering behavior:
+
+- `pendulum`: A pendulum swing-up task, where only the angular position is observable.
+- `cartpole`: A cart-pole swing-up task, where only the angular and Cartesian positions are observable.
+- `light-dark-2d`: A 2D navigation task with location-dependent noise.
+- `triangulation`: A 2D navigation task with heading-only observations.
+
+Each environment can be ran with two policies:
+
+- a policy with history inputs - `recurrent`
+- a policy with belief state inputs - `attention`
+
+For example, for the light-dark environment run:
+
 ```bash
-$ python examples/lightdark2d/p3o_recurrent.py
+python examples/lightdark2d/p3o_recurrent.py
+```
+
+or
+
+```bash
+python examples/lightdark2d/p3o_attention.py
 ```
 
 ## Baselines
