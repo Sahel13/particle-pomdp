@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ppomdp"
+version = "0.0.1"
+authors = [
+  {name = "Hany Abdulsamad", email = "hany@robot-learning.de"},
+  {name = "Sahel Iqbal", email = "sahel13miqbal@proton.me"},
+]
+dependencies = [
+  "jax",
+  "flax",
+  "chex",
+  "distrax",
+  "optax",
+  "brax",
+  "matplotlib",
+  "pandas",
+  "wandb",
+  "tyro",
+  "tqdm"
+]
+
+[tool.setuptools]
+packages = ["ppomdp", "baselines"]
+
+[project.optional-dependencies]
+test = ["pytest"]
