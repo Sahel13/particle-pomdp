@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ppomdp"
-version = "0.0.1"
+version = "1.0"
 authors = [
   {name = "Hany Abdulsamad", email = "hany@robot-learning.de"},
   {name = "Sahel Iqbal", email = "sahel13miqbal@proton.me"},
