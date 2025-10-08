@@ -17,6 +17,12 @@ $ pip install -e .
 
 for an editable install.
 
+## Exmaples
+Run the light-dark environment to demonstrate optimal information gathering behavior
+```bash
+$ python examples/lightdark2d/p3o_recurrent.py
+```
+
 ## Baselines
 
 We provide the following baselines for comparison:
