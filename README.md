@@ -2,6 +2,8 @@
 
 Implements the P3O algorithm from the NeurIPS 2025 paper [Sequential Monte
 Carlo for Policy Optimization in Continuous POMDPs](https://arxiv.org/abs/2505.16732).
+This code was written by [Sahel Iqbal](https://github.com/Sahel13) and [Hany
+Abdulsamad](https://github.com/hanyas).
 
 P30 is a policy optimization algorithm for partially observable Markov decision processes (POMDPs) with continuous state, action and observation spaces. See the scripts in `examples/` for demonstrations of how to train policies using P3O.
 
